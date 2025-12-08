@@ -3,9 +3,7 @@ import asyncio
 from typing import Tuple, Dict, Any
 
 from .models import AgentRequestBody
-
-TECHNICAL_AGENT_URL = "http://localhost:8000/analyze"
-FUNDAMENTAL_AGENT_URL = "http://localhost:8001/analyze"
+from .config import TECHNICAL_AGENT_URL, FUNDAMENTAL_AGENT_URL
 
 async def _call_agent(client: httpx.AsyncClient, url: str, request_body: Dict) -> Dict[str, Any]:
     """Helper function to make a single API call to an agent."""
