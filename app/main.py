@@ -4,7 +4,7 @@ import datetime
 
 from .models import AgentRequestBody, OrchestratorResponse, ReportDetail, ReportDetails, TechnicalAgentResponse, FundamentalAgentResponse
 from .agent_client import call_agents
-from .synthesis import get_final_verdict, get_reasons
+from .synthesis import get_weighted_verdict, get_reasons
 
 app = FastAPI()
 
@@ -37,7 +37,12 @@ async def analyze_ticker(request: AgentRequestBody):
     fund_action = fund_response.data.action
 
     # 5. Get final verdict and reasons from synthesis logic
-    final_verdict = get_final_verdict(tech_action, fund_action)
+    final_verdict = get_weighted_verdict(
+        tech_action,
+        tech_response.data.confidence_score,
+        fund_action,
+        fund_response.data.confidence_score,
+    )
     tech_reason, fund_reason = get_reasons(tech_action, fund_action)
 
     # 6. Construct the final report
