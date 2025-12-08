@@ -1,23 +1,4 @@
 from typing import Tuple
-from .models import TechnicalAgentResponse, FundamentalAgentResponse
-
-DECISION_MATRIX = {
-    "buy": {
-        "buy": "Strong Buy",
-        "hold": "Accumulate",
-        "sell": "Speculative Buy",
-    },
-    "hold": {
-        "buy": "Value Buy",
-        "hold": "Hold",
-        "sell": "Review Fundamentals",
-    },
-    "sell": {
-        "buy": "Contrarian Buy",
-        "hold": "Wait and See",
-        "sell": "Strong Sell",
-    },
-}
 
 REASON_MAPPING = {
     "technical": {
@@ -33,11 +14,40 @@ REASON_MAPPING = {
 }
 
 
-def get_final_verdict(technical_action: str, fundamental_action: str) -> str:
+def get_weighted_verdict(
+    technical_action: str,
+    technical_score: float,
+    fundamental_action: str,
+    fundamental_score: float,
+) -> str:
     """
-    Determines the final verdict based on the decision matrix.
+    Calculates a weighted verdict based on agent actions and their confidence scores.
     """
-    return DECISION_MATRIX.get(technical_action, {}).get(fundamental_action, "Indeterminate")
+    action_map = {"buy": 1, "hold": 0, "sell": -1}
+    tech_val = action_map.get(technical_action, 0)
+    fund_val = action_map.get(fundamental_action, 0)
+
+    # Weighted score calculation
+    # The score is normalized by the sum of confidence scores to get a value between -1 and 1
+    total_score = technical_score + fundamental_score
+    if total_score == 0:
+        return "Indeterminate" # Avoid division by zero
+
+    weighted_score = (
+        (tech_val * technical_score) + (fund_val * fundamental_score)
+    ) / total_score
+
+    # Determine final verdict based on the weighted score
+    if weighted_score > 0.7:
+        return "Strong Buy"
+    elif weighted_score > 0.3:
+        return "Buy"
+    elif weighted_score > -0.3:
+        return "Hold"
+    elif weighted_score > -0.7:
+        return "Sell"
+    else:
+        return "Strong Sell"
 
 def get_reasons(technical_action: str, fundamental_action: str) -> Tuple[str, str]:
     """
