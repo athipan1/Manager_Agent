@@ -1,6 +1,6 @@
 # Financial AI Agent Orchestrator
 
-[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/athipan1/Financial_AI_Agent_Orchestrator/blob/main/Test_AI_Agents_Integration.ipynb)
+[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/athipan1/Manager_Agent/blob/main/Test_AI_Agents_Integration.ipynb)
 
 This project implements a FastAPI-based orchestrator that acts as a central intelligence for a financial AI agent system. It receives a stock ticker, queries two specialized agents (Technical and Fundamental), and synthesizes their analyses into a single, actionable investment report.
 
