@@ -1,0 +1,23 @@
+services:
+  orchestrator:
+    build: .
+    ports:
+      - "8080:80" # Expose orchestrator on host port 8080
+    environment:
+      - TECHNICAL_AGENT_URL=http://technical-agent:8002/analyze
+      - FUNDAMENTAL_AGENT_URL=http://fundamental-agent:8001/analyze
+    depends_on:
+      - technical-agent
+      - fundamental-agent
+
+  technical-agent:
+    build:
+      context: ./Technical_Agent
+    ports:
+      - "8002:8002"
+
+  fundamental-agent:
+    build:
+      context: ./Fundamental_Agent
+    ports:
+      - "8001:8001"
