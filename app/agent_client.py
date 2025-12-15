@@ -22,7 +22,7 @@ async def call_agents(ticker: str) -> Tuple[Dict[str, Any], Dict[str, Any]]:
     """
     Calls both the Technical and Fundamental agents concurrently.
     """
-    request_body = AgentRequestBody(ticker=ticker).dict()
+    request_body = AgentRequestBody(ticker=ticker).model_dump()
 
     async with httpx.AsyncClient() as client:
         technical_task = _call_agent(client, TECHNICAL_AGENT_URL, request_body)
