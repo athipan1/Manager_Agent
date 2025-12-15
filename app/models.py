@@ -42,12 +42,13 @@ class ReportDetail(BaseModel):
     reason: str
 
 class ReportDetails(BaseModel):
-    technical: ReportDetail
-    fundamental: ReportDetail
+    technical: Optional[ReportDetail] = None
+    fundamental: Optional[ReportDetail] = None
 
 class OrchestratorResponse(BaseModel):
     report_id: str
     ticker: str
     timestamp: str
     final_verdict: str
+    status: str
     details: ReportDetails
