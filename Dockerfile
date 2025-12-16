@@ -1,16 +1,32 @@
-# Use an official Python runtime as a parent image
-FROM python:3.9-slim
+# 1. Base image
+FROM python:3.11-slim
 
-# Set the working directory in the container
+# 2. Set working directory
 WORKDIR /app
 
-# Copy the requirements file and install dependencies
+# 3. Install system dependencies (git จำเป็นมาก)
+RUN apt-get update \
+    && apt-get install -y git \
+    && rm -rf /var/lib/apt/lists/*
+
+# 4. Clone repositories (ครั้งเดียวตอน build)
+RUN git clone https://github.com/athipan1/Technical_Agent.git
+RUN git clone https://github.com/athipan1/Fundamental_Agent.git
+
+# 5. Install Python dependencies
+# (ถ้าแต่ละ repo มี requirements.txt)
+RUN pip install --no-cache-dir \
+    -r Technical_Agent/requirements.txt \
+    -r Fundamental_Agent/requirements.txt
+
+# 6. Copy orchestrator / app code (repo นี้)
+COPY ./app /app/app
 COPY ./requirements.txt /app/requirements.txt
+
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy the rest of the application's code
-COPY ./app /app/app
+# 7. Expose port
+EXPOSE 80
 
-# Command to run the application
-# Use --host 0.0.0.0 to make it accessible from outside the container
+# 8. Run FastAPI
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "80"]
