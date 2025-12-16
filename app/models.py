@@ -1,5 +1,5 @@
 from pydantic import BaseModel
-from typing import Optional, Literal
+from typing import Optional, Literal, Dict, Any
 
 # --- Request Models ---
 
@@ -34,6 +34,13 @@ class FundamentalAgentResponse(BaseModel):
     status: str
     data: FundamentalData
 
+class DatabaseAgentData(BaseModel):
+    historical_data: Dict[str, Any]
+
+class DatabaseAgentResponse(BaseModel):
+    ticker: str
+    data: DatabaseAgentData
+
 # --- Orchestrator Response Models ---
 
 class ReportDetail(BaseModel):
@@ -52,3 +59,4 @@ class OrchestratorResponse(BaseModel):
     final_verdict: str
     status: str
     details: ReportDetails
+    historical_data: Optional[Dict[str, Any]] = None
