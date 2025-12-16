@@ -1,5 +1,5 @@
 from pydantic import BaseModel
-from typing import Optional, Literal
+from typing import Optional, Literal, List
 
 # --- Request Models ---
 
@@ -52,3 +52,33 @@ class OrchestratorResponse(BaseModel):
     final_verdict: str
     status: str
     details: ReportDetails
+
+# --- Database Agent Models ---
+
+class AccountBalance(BaseModel):
+    cash_balance: float
+
+class Position(BaseModel):
+    symbol: str
+    quantity: int
+    average_cost: float
+
+class Order(BaseModel):
+    order_id: int
+    account_id: int
+    symbol: str
+    order_type: Literal["BUY", "SELL"]
+    quantity: int
+    price: float
+    status: Literal["pending", "executed", "cancelled", "failed"]
+    timestamp: str
+
+class CreateOrderResponse(BaseModel):
+    order_id: int
+    status: str
+
+class CreateOrderBody(BaseModel):
+    symbol: str
+    order_type: Literal["BUY", "SELL"]
+    quantity: int
+    price: float
