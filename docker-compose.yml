@@ -10,10 +10,13 @@ services:
     environment:
       TECHNICAL_AGENT_URL: http://technical-agent:8002/analyze
       FUNDAMENTAL_AGENT_URL: http://fundamental-agent:8001/analyze
+      DATABASE_AGENT_URL: http://database-agent:8003/analyze
     depends_on:
       technical-agent:
         condition: service_started
       fundamental-agent:
+        condition: service_started
+      database-agent:
         condition: service_started
     networks:
       - agent-network
@@ -35,6 +38,15 @@ services:
       - "8001:8001"
     environment:
       GOOGLE_API_KEY: dummy-key
+    networks:
+      - agent-network
+
+  database-agent:
+    build:
+      context: ./Database_Agent
+    container_name: database-agent
+    ports:
+      - "8003:8003"
     networks:
       - agent-network
 
