@@ -1,25 +1,43 @@
+version: "3.8"
+
 services:
   orchestrator:
-    build: .
+    build:
+      context: .
+    container_name: orchestrator
     ports:
-      - "8080:80" # Expose orchestrator on host port 8080
+      - "8080:80"
     environment:
-      - TECHNICAL_AGENT_URL=http://technical-agent:8002/analyze
-      - FUNDAMENTAL_AGENT_URL=http://fundamental-agent:8001/analyze
+      TECHNICAL_AGENT_URL: http://technical-agent:8002/analyze
+      FUNDAMENTAL_AGENT_URL: http://fundamental-agent:8001/analyze
     depends_on:
-      - technical-agent
-      - fundamental-agent
+      technical-agent:
+        condition: service_started
+      fundamental-agent:
+        condition: service_started
+    networks:
+      - agent-network
 
   technical-agent:
     build:
       context: ./Technical_Agent
+    container_name: technical-agent
     ports:
       - "8002:8002"
+    networks:
+      - agent-network
 
   fundamental-agent:
     build:
       context: ./Fundamental_Agent
+    container_name: fundamental-agent
     ports:
       - "8001:8001"
     environment:
-      - GOOGLE_API_KEY=dummy-key
+      GOOGLE_API_KEY: dummy-key
+    networks:
+      - agent-network
+
+networks:
+  agent-network:
+    driver: bridge
