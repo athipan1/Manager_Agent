@@ -1,24 +1,69 @@
-name: CI with Docker Compose
+name: CI with Docker Compose (Integration Test)
 
-on: [push]
+on:
+  push:
+  pull_request:
 
 jobs:
-  build:
+  integration-test:
     runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v3
 
-      - name: Set up Docker
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v2
 
-      - name: Run Docker Compose
+      - name: Build & Run Docker Compose
         run: |
-          docker compose up -d
+          docker compose up -d --build
           docker compose ps
-         
-        # ตรวจสอบ API service
-      - name: API Health Check
+
+      # รอให้ service ทุกตัวพร้อม
+      - name: Wait for services
         run: |
-          echo "Waiting for API to be ready..."
-          sleep 15
+          echo "⏳ Waiting for services to be ready..."
+          sleep 20
+
+      # =========================
+      # Health check: Technical Agent
+      # =========================
+      - name: Check Technical Agent API
+        run: |
+          curl -f http://localhost:8002/health || exit 1
+
+      # =========================
+      # Health check: Fundamental Agent
+      # =========================
+      - name: Check Fundamental Agent API
+        run: |
+          curl -f http://localhost:8001/health || exit 1
+
+      # =========================
+      # Health check: Orchestrator
+      # =========================
+      - name: Check Orchestrator Health
+        run: |
           curl -f http://localhost:8080/health || exit 1
+
+      # =========================
+      # Integration Test
+      # Orchestrator -> Agents
+      # =========================
+      - name: Test Orchestrator → Agent Communication
+        run: |
+          curl -X POST http://localhost:8080/analyze \
+            -H "Content-Type: application/json" \
+            -d '{
+              "symbol": "AAPL",
+              "mode": "test"
+            }' || exit 1
+
+      # =========================
+      # Debug logs if failure
+      # =========================
+      - name: Show Docker Logs (on failure)
+        if: failure()
+        run: |
+          docker compose logs
