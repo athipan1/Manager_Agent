@@ -1,9 +1,12 @@
-version: "3.8"
+# Docker Compose v2 ไม่จำเป็นต้องมี version
+# (ใส่ไว้ก็ไม่พัง แต่เอาออกจะ clean กว่า)
+# version: "3.8"
 
 services:
   orchestrator:
     build:
-      context: .
+      context: ./Orchestrator
+      dockerfile: Dockerfile
     container_name: orchestrator
     ports:
       - "8080:80"
@@ -12,18 +15,16 @@ services:
       FUNDAMENTAL_AGENT_URL: http://fundamental-agent:8001/analyze
       DATABASE_AGENT_URL: http://database-agent:8003
     depends_on:
-      technical-agent:
-        condition: service_started
-      fundamental-agent:
-        condition: service_started
-      database-agent:
-        condition: service_started
+      - technical-agent
+      - fundamental-agent
+      - database-agent
     networks:
       - agent-network
 
   technical-agent:
     build:
       context: ./Technical_Agent
+      dockerfile: Dockerfile
     container_name: technical-agent
     ports:
       - "8002:8002"
@@ -33,6 +34,7 @@ services:
   fundamental-agent:
     build:
       context: ./Fundamental_Agent
+      dockerfile: Dockerfile
     container_name: fundamental-agent
     ports:
       - "8001:8001"
@@ -44,6 +46,7 @@ services:
   database-agent:
     build:
       context: ./Database_Agent
+      dockerfile: Dockerfile
     container_name: database-agent
     ports:
       - "8003:8003"
