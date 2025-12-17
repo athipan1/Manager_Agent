@@ -12,18 +12,14 @@ services:
       FUNDAMENTAL_AGENT_URL: http://fundamental-agent:8001/analyze
       DATABASE_AGENT_URL: http://database-agent:8003
     depends_on:
-      technical-agent:
-        condition: service_started
-      fundamental-agent:
-        condition: service_started
-      database-agent:
-        condition: service_started
+      - technical-agent
+      - fundamental-agent
+      - database-agent
     networks:
       - agent-network
 
   technical-agent:
-    build:
-      context: ./Technical_Agent
+    image: your-dockerhub/technical-agent:latest
     container_name: technical-agent
     ports:
       - "8002:8002"
@@ -31,19 +27,15 @@ services:
       - agent-network
 
   fundamental-agent:
-    build:
-      context: ./Fundamental_Agent
+    image: your-dockerhub/fundamental-agent:latest
     container_name: fundamental-agent
     ports:
       - "8001:8001"
-    environment:
-      GOOGLE_API_KEY: dummy-key
     networks:
       - agent-network
 
   database-agent:
-    build:
-      context: ./Database_Agent
+    image: your-dockerhub/database-agent:latest
     container_name: database-agent
     ports:
       - "8003:8003"

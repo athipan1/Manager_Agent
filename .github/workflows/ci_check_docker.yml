@@ -1,0 +1,160 @@
+name: CI + CD (Integration Test & Auto Deploy)
+
+on:
+  push:
+    branches:
+      - main
+      - develop
+  pull_request:
+
+jobs:
+  # =====================================
+  # 1) Integration Test Job
+  # =====================================
+  integration-test:
+    runs-on: ubuntu-latest
+
+    steps:
+      # -------------------------------
+      # Checkout source
+      # -------------------------------
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      # -------------------------------
+      # Docker Buildx
+      # -------------------------------
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v2
+
+      # -------------------------------
+      # Build & Run services
+      # -------------------------------
+      - name: Build & Run Docker Compose
+        run: |
+          docker compose up -d --build
+          docker compose ps
+
+      # -------------------------------
+      # Wait for all services (Healthcheck loop)
+      # -------------------------------
+      - name: Wait for services (healthcheck loop)
+        run: |
+          echo "⏳ Waiting for services to be healthy..."
+
+          services=(
+            "http://localhost:8002/health"
+            "http://localhost:8001/health"
+            "http://localhost:8080/health"
+          )
+
+          for i in {1..30}; do
+            all_ready=true
+
+            for url in "${services[@]}"; do
+              if ! curl -sf "$url" > /dev/null; then
+                all_ready=false
+              fi
+            done
+
+            if [ "$all_ready" = true ]; then
+              echo "✅ All services are healthy!"
+              exit 0
+            fi
+
+            echo "⏳ Waiting... ($i/30)"
+            sleep 3
+          done
+
+          echo "❌ Services did not become healthy in time"
+          docker compose logs
+          exit 1
+
+      # -------------------------------
+      # Integration Test (Assert JSON contract)
+      # -------------------------------
+      - name: Integration Test (Assert JSON response)
+        run: |
+          echo "🚀 Calling Orchestrator /analyze API..."
+
+          response=$(curl -s -X POST http://localhost:8080/analyze \
+            -H "Content-Type: application/json" \
+            -d '{
+              "symbol": "AAPL",
+              "mode": "test"
+            }')
+
+          echo "Response:"
+          echo "$response"
+
+          echo "$response" | jq -e '
+            .symbol == "AAPL" and
+            .technical_analysis and
+            .fundamental_analysis and
+            .decision
+          ' > /dev/null || {
+            echo "❌ Response schema validation failed"
+            exit 1
+          }
+
+          echo "✅ Integration test passed"
+
+      # -------------------------------
+      # Show logs if failed
+      # -------------------------------
+      - name: Show Docker Logs (on failure)
+        if: failure()
+        run: |
+          docker compose logs
+
+  # =====================================
+  # 2) Deploy Job (Run only on main)
+  # =====================================
+  deploy:
+    needs: integration-test
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+
+    steps:
+      # -------------------------------
+      # Checkout source
+      # -------------------------------
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      # -------------------------------
+      # Login Docker Hub
+      # -------------------------------
+      - name: Login to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
+
+      # -------------------------------
+      # Build & Push Docker Images
+      # -------------------------------
+      - name: Build & Push Docker Images
+        run: |
+          docker compose build
+          docker compose push
+
+      # -------------------------------
+      # Deploy to Server via SSH
+      # -------------------------------
+      - name: Deploy to Production Server
+        uses: appleboy/ssh-action@v1.0.0
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SERVER_SSH_KEY }}
+          script: |
+            echo "🚀 Deploying to production..."
+
+            cd ai-agent-system
+
+            docker compose pull
+            docker compose up -d
+            docker system prune -f
+
+            echo "✅ Deployment completed"
