@@ -1,12 +1,9 @@
-# Docker Compose v2 ไม่จำเป็นต้องมี version
-# (ใส่ไว้ก็ไม่พัง แต่เอาออกจะ clean กว่า)
-# version: "3.8"
+version: "3.8"
 
 services:
   orchestrator:
     build:
-      context: ./Orchestrator
-      dockerfile: Dockerfile
+      context: .
     container_name: orchestrator
     ports:
       - "8080:80"
@@ -22,9 +19,7 @@ services:
       - agent-network
 
   technical-agent:
-    build:
-      context: ./Technical_Agent
-      dockerfile: Dockerfile
+    image: your-dockerhub/technical-agent:latest
     container_name: technical-agent
     ports:
       - "8002:8002"
@@ -32,21 +27,15 @@ services:
       - agent-network
 
   fundamental-agent:
-    build:
-      context: ./Fundamental_Agent
-      dockerfile: Dockerfile
+    image: your-dockerhub/fundamental-agent:latest
     container_name: fundamental-agent
     ports:
       - "8001:8001"
-    environment:
-      GOOGLE_API_KEY: dummy-key
     networks:
       - agent-network
 
   database-agent:
-    build:
-      context: ./Database_Agent
-      dockerfile: Dockerfile
+    image: your-dockerhub/database-agent:latest
     container_name: database-agent
     ports:
       - "8003:8003"
