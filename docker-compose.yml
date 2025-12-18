@@ -1,10 +1,7 @@
-
-
 services:
   orchestrator:
     build:
       context: .
-    container_name: orchestrator
     ports:
       - "8080:80"
     environment:
@@ -13,40 +10,52 @@ services:
       DATABASE_AGENT_URL: http://database-agent:8003
     depends_on:
       technical-agent:
-        condition: service_started
+        condition: service_healthy
       fundamental-agent:
-        condition: service_started
+        condition: service_healthy
       database-agent:
-        condition: service_started
+        condition: service_healthy
     networks:
       - agent-network
 
   technical-agent:
     build:
       context: ./Technical_Agent
-    container_name: technical-agent
-    ports:
-      - "8002:8002"
+    expose:
+      - "8002"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8002/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
     networks:
       - agent-network
 
   fundamental-agent:
     build:
       context: ./Fundamental_Agent
-    container_name: fundamental-agent
-    ports:
-      - "8001:8001"
+    expose:
+      - "8001"
     environment:
       GOOGLE_API_KEY: dummy-key
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8001/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
     networks:
       - agent-network
 
   database-agent:
     build:
       context: ./Database_Agent
-    container_name: database-agent
-    ports:
-      - "8003:8003"
+    expose:
+      - "8003"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8003/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
     networks:
       - agent-network
 
