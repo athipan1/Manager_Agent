@@ -1,8 +1,8 @@
 services:
   manager-agent:
     build:
-      context: .
-      dockerfile: app/Dockerfile
+      context: ./app
+      dockerfile: Dockerfile
     ports:
       - "8080:80"
     environment:
@@ -21,8 +21,8 @@ services:
 
   technical-agent:
     build:
-      context: .
-      dockerfile: Technical_Agent/Dockerfile
+      context: ./Technical_Agent
+      dockerfile: Dockerfile
     expose:
       - "8002"
     healthcheck:
@@ -35,8 +35,8 @@ services:
 
   fundamental-agent:
     build:
-      context: .
-      dockerfile: Fundamental_Agent/Dockerfile
+      context: ./Fundamental_Agent
+      dockerfile: Dockerfile
     expose:
       - "8001"
     environment:
@@ -51,8 +51,8 @@ services:
 
   database-agent:
     build:
-      context: .
-      dockerfile: Database_Agent/Dockerfile
+      context: ./Database_Agent
+      dockerfile: Dockerfile
     expose:
       - "8003"
     healthcheck:
