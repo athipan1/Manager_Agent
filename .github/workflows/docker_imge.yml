@@ -35,7 +35,7 @@ jobs:
         uses: docker/build-push-action@v5
         with:
           context: ./Technical_Agent
-          dockerfile: ./Technical_Agent/Dockerfile
+          dockerfile: Dockerfile
           push: true
           tags: painaidee/technical-agent:latest
 
@@ -43,6 +43,6 @@ jobs:
         uses: docker/build-push-action@v5
         with:
           context: ./Fundamental_Agent
-          dockerfile: ./Fundamental_Agent/Dockerfile
+          dockerfile: Dockerfile
           push: true
           tags: painaidee/fundamental-agent:latest
