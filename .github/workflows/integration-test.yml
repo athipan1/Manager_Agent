@@ -1,0 +1,45 @@
+name: Integration Test with Docker Compose
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  integration-test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v2
+
+      - name: Build & Run Docker Compose
+        run: |
+          docker compose up -d --build
+          docker compose ps
+
+      - name: Check Technical Agent Health
+        run: curl -f http://localhost:8002/health || exit 1
+
+      - name: Check Fundamental Agent Health
+        run: curl -f http://localhost:8001/health || exit 1
+
+      - name: Check Database Agent Health
+        run: curl -f http://localhost:8003/health || exit 1
+
+      - name: Check Manager Agent Health
+        run: curl -f http://localhost:8080/health || exit 1
+
+      - name: Run Integration Test
+        run: |
+          curl -X POST http://localhost:8080/analyze \
+            -H "Content-Type: application/json" \
+            -d '{"symbol": "AAPL", "mode": "test"}' || exit 1
+
+      - name: Show Docker Logs on Failure
+        if: failure()
+        run: docker compose logs

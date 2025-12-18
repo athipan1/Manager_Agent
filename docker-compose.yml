@@ -1,6 +1,8 @@
 services:
-  orchestrator:
-    image: painaidee/orchestrator:latest
+  manager-agent:
+    build:
+      context: .
+      dockerfile: app/Dockerfile
     ports:
       - "8080:80"
     environment:
@@ -18,7 +20,9 @@ services:
       - agent-network
 
   technical-agent:
-    image: painaidee/technical-agent:latest
+    build:
+      context: .
+      dockerfile: Technical_Agent/Dockerfile
     expose:
       - "8002"
     healthcheck:
@@ -30,7 +34,9 @@ services:
       - agent-network
 
   fundamental-agent:
-    image: painaidee/fundamental-agent:latest
+    build:
+      context: .
+      dockerfile: Fundamental_Agent/Dockerfile
     expose:
       - "8001"
     environment:
@@ -44,7 +50,9 @@ services:
       - agent-network
 
   database-agent:
-    image: painaidee/database-agent:latest
+    build:
+      context: .
+      dockerfile: Database_Agent/Dockerfile
     expose:
       - "8003"
     healthcheck:
