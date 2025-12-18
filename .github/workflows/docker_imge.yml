@@ -21,22 +21,22 @@ jobs:
         uses: docker/build-push-action@v5
         with:
           context: .
-          dockerfile: Dockerfile
+          file: ./Dockerfile
           push: true
           tags: painaidee/manager-agent:latest
 
       - name: Build & Push Technical Agent
         uses: docker/build-push-action@v5
         with:
-          context: ./Technical_Agent
-          dockerfile: ./Technical_Agent/Dockerfile
+          context: .
+          file: ./Dockerfile.technical
           push: true
           tags: painaidee/technical-agent:latest
 
       - name: Build & Push Fundamental Agent
         uses: docker/build-push-action@v5
         with:
-          context: ./Fundamental_Agent
-          dockerfile: ./Fundamental_Agent/Dockerfile
+          context: .
+          file: ./Dockerfile.fundamental
           push: true
           tags: painaidee/fundamental-agent:latest

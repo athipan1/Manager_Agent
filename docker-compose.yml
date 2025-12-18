@@ -21,8 +21,8 @@ services:
 
   technical-agent:
     build:
-      context: ./Technical_Agent
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: Dockerfile.technical
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8002/health"]
       interval: 10s
@@ -33,8 +33,8 @@ services:
 
   fundamental-agent:
     build:
-      context: ./Fundamental_Agent
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: Dockerfile.fundamental
     environment:
       GOOGLE_API_KEY: ${GOOGLE_API_KEY:-dummy-key}
     healthcheck:
