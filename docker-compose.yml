@@ -1,6 +1,8 @@
 services:
-  orchestrator:
-    image: painaidee/orchestrator:latest
+  manager-agent:
+    build:
+      context: .
+      dockerfile: Dockerfile
     ports:
       - "8080:80"
     environment:
@@ -18,9 +20,9 @@ services:
       - agent-network
 
   technical-agent:
-    image: painaidee/technical-agent:latest
-    expose:
-      - "8002"
+    build:
+      context: ./Technical_Agent
+      dockerfile: ./Technical_Agent/Dockerfile
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8002/health"]
       interval: 10s
@@ -30,9 +32,9 @@ services:
       - agent-network
 
   fundamental-agent:
-    image: painaidee/fundamental-agent:latest
-    expose:
-      - "8001"
+    build:
+      context: ./Fundamental_Agent
+      dockerfile: ./Fundamental_Agent/Dockerfile
     environment:
       GOOGLE_API_KEY: ${GOOGLE_API_KEY:-dummy-key}
     healthcheck:
@@ -57,4 +59,4 @@ services:
 
 networks:
   agent-network:
-    driver: bridge 
+    driver: bridge
