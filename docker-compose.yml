@@ -1,7 +1,6 @@
 services:
   orchestrator:
-    build:
-      context: .
+    image: painaidee/orchestrator:latest
     ports:
       - "8080:80"
     environment:
@@ -19,8 +18,7 @@ services:
       - agent-network
 
   technical-agent:
-    build:
-      context: ./Technical_Agent
+    image: painaidee/technical-agent:latest
     expose:
       - "8002"
     healthcheck:
@@ -32,12 +30,11 @@ services:
       - agent-network
 
   fundamental-agent:
-    build:
-      context: ./Fundamental_Agent
+    image: painaidee/fundamental-agent:latest
     expose:
       - "8001"
     environment:
-      GOOGLE_API_KEY: dummy-key
+      GOOGLE_API_KEY: ${GOOGLE_API_KEY:-dummy-key}
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8001/health"]
       interval: 10s
@@ -47,8 +44,7 @@ services:
       - agent-network
 
   database-agent:
-    build:
-      context: ./Database_Agent
+    image: painaidee/database-agent:latest
     expose:
       - "8003"
     healthcheck:
