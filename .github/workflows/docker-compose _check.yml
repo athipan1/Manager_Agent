@@ -43,7 +43,7 @@ jobs:
       # =========================
       # Health check: Orchestrator
       # =========================
-      - name: Check Orchestrator Health
+      - name: Check Manager Health
         run: |
           curl -f http://localhost:8080/health || exit 1
 
@@ -51,7 +51,7 @@ jobs:
       # Integration Test
       # Orchestrator -> Agents
       # =========================
-      - name: Test Orchestrator → Agent Communication
+      - name: Test Menager → Agent Communication
         run: |
           curl -X POST http://localhost:8080/analyze \
             -H "Content-Type: application/json" \
