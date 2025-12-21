@@ -10,6 +10,8 @@ from .agent_client import call_agents
 from .database_client import get_account_balance, get_positions, create_order, execute_order
 from .synthesis import get_weighted_verdict, get_reasons
 from .logger import report_logger
+from .risk_manager import calculate_position_size
+from .config import RISK_PERCENTAGE, STOP_LOSS_PERCENTAGE
 
 app = FastAPI()
 
@@ -67,27 +69,46 @@ async def analyze_ticker(request: AgentRequestBody):
     )
 
     # 6. Execute trade based on verdict
-    if final_verdict in ["buy", "sell"]:
-        # For simplicity, use price from technical analysis and a fixed quantity
-        price = tech_response.data.current_price if tech_response else 0
-        quantity = 10  # Example quantity
+    if final_verdict.lower() in ["buy", "strong buy", "sell", "strong sell"]:
+        price = tech_response.data.current_price if tech_response and tech_response.data else 0
 
-        if price > 0:
-            order_body = CreateOrderBody(symbol=ticker, order_type=final_verdict.upper(), quantity=quantity, price=price)
-            new_order_response = await create_order(order_body)
+        if price > 0 and balance:
+            quantity = 0
+            if final_verdict.lower() in ["buy", "strong buy"]:
+                stop_loss_price = price * (1 - STOP_LOSS_PERCENTAGE)
+                quantity = calculate_position_size(balance, RISK_PERCENTAGE, price, stop_loss_price)
+                report_logger.info(f"Risk assessment for BUY: Balance=${balance.cash_balance}, Risk={RISK_PERCENTAGE*100}%, Entry=${price:.2f}, SL=${stop_loss_price:.2f}. Calculated position size: {quantity} shares.")
 
-            if new_order_response and new_order_response.status == "pending":
-                order_id = new_order_response.order_id
-                report_logger.info(f"Created order {order_id} to {final_verdict} {quantity} {ticker} @ {price}")
-                executed_order = await execute_order(order_id)
-                if executed_order and executed_order.status == "executed":
-                    report_logger.info(f"Successfully executed order {executed_order.order_id}.")
+            elif final_verdict.lower() in ["sell", "strong sell"]:
+                # Check if a position exists to sell
+                existing_position = next((p for p in positions if p.symbol.lower() == ticker.lower()), None)
+                if existing_position:
+                    quantity = existing_position.quantity
+                    report_logger.info(f"Found existing position for {ticker}. Preparing to sell {quantity} shares.")
                 else:
-                    report_logger.error(f"Failed to execute order {order_id}.")
+                    quantity = 0
+                    report_logger.info(f"No existing position found for {ticker}. No sell order will be placed.")
+
+
+            if quantity > 0:
+                order_type = "BUY" if final_verdict.lower() in ["buy", "strong buy"] else "SELL"
+                order_body = CreateOrderBody(symbol=ticker, order_type=order_type, quantity=quantity, price=price)
+                new_order_response = await create_order(order_body)
+
+                if new_order_response and new_order_response.status == "pending":
+                    order_id = new_order_response.order_id
+                    report_logger.info(f"Created order {order_id} to {order_type} {quantity} {ticker} @ {price}")
+                    executed_order = await execute_order(order_id)
+                    if executed_order and executed_order.status == "executed":
+                        report_logger.info(f"Successfully executed order {executed_order.order_id}.")
+                    else:
+                        report_logger.error(f"Failed to execute order {order_id}.")
+                else:
+                    report_logger.error("Failed to create trade order.")
             else:
-                report_logger.error("Failed to create trade order.")
+                report_logger.info(f"No trade executed for {ticker} as calculated quantity is 0.")
         else:
-            report_logger.warning(f"Could not execute trade for {ticker} due to missing price information.")
+            report_logger.warning(f"Could not execute trade for {ticker} due to missing price or balance information.")
 
 
     # 7. Construct and log the final report
