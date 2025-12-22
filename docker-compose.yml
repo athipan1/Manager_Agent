@@ -45,16 +45,46 @@ services:
 
   database-agent:
     image: painaidee/database-agent:latest
-    expose:
-      - "8003"
+    ports:
+      - "8003:8003"
+    environment:
+      POSTGRES_DB: trading_db
+      POSTGRES_USER: trading_user
+      POSTGRES_PASSWORD: trading_password
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8003/health"]
       interval: 10s
       timeout: 3s
       retries: 5
+    depends_on:
+      postgres:
+        condition: service_healthy
     networks:
       - agent-network
 
+  postgres:
+    image: postgres:13
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_DB: trading_db
+      POSTGRES_USER: trading_user
+      POSTGRES_PASSWORD: trading_password
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U trading_user -d trading_db"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - agent-network
+
+volumes:
+  postgres-data:
+
 networks:
   agent-network:
-    driver: bridge 
+    driver: bridge
