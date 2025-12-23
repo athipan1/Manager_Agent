@@ -1,6 +1,7 @@
 from fastapi.testclient import TestClient
-from unittest.mock import patch, AsyncMock
+from unittest.mock import patch
 import pytest
+import datetime
 
 # Make the app module discoverable by pytest
 import sys
@@ -9,6 +10,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')
 
 from app.main import app
 from app.agent_client import call_agents
+from app.models import AccountBalance, CreateOrderResponse, Order
 
 client = TestClient(app)
 
@@ -22,6 +24,30 @@ SUCCESS_FUND_RESPONSE = {
     "data": {"action": "buy", "confidence_score": 0.9, "analysis_summary": "", "metrics": {}}
 }
 ERROR_RESPONSE = {"error": "Agent failed"}
+
+
+@pytest.fixture(autouse=True)
+def mock_db_client():
+    """Fixture to mock the DatabaseAgentClient for all tests in this module."""
+    with patch("app.main.DatabaseAgentClient") as mock:
+        instance = mock.return_value.__aenter__.return_value
+        instance.get_account_balance.return_value = AccountBalance(cash_balance=10000.0)
+        instance.get_positions.return_value = []
+        instance.create_order.return_value = CreateOrderResponse(
+            order_id=123, status="pending", symbol="GOOGL", quantity=10, price=2800.0
+        )
+        instance.execute_order.return_value = Order(
+            order_id=123,
+            account_id=1,
+            symbol="GOOGL",
+            order_type="BUY",
+            quantity=10,
+            price=2800.0,
+            status="executed",
+            timestamp=datetime.datetime.now(datetime.UTC).isoformat(),
+        )
+        yield mock
+
 
 # --- Test Cases ---
 
