@@ -102,4 +102,4 @@ def test_analyze_ticker_both_agents_fail(monkeypatch):
     response = client.post("/analyze", json={"ticker": "GOOGL"})
 
     assert response.status_code == 500
-    assert "Both Technical and Fundamental Agents failed to respond" in response.json()["detail"]
+    assert "Both Technical and Fundamental Agents failed to provide valid responses" in response.json()["detail"]

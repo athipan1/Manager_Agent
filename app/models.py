@@ -34,6 +34,17 @@ class FundamentalAgentResponse(BaseModel):
     status: str
     data: FundamentalData
 
+
+# --- Canonical Internal Model ---
+
+class CanonicalAgentResponse(BaseModel):
+    """A standardized internal representation of an agent's response."""
+    agent_type: str
+    action: Literal["buy", "sell", "hold"]
+    score: float
+    metadata: dict = {}
+
+
 # --- Orchestrator Response Models ---
 
 class ReportDetail(BaseModel):
