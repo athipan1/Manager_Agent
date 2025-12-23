@@ -4,9 +4,10 @@ import datetime
 
 from .models import (
     AgentRequestBody, OrchestratorResponse, ReportDetail, ReportDetails,
-    TechnicalAgentResponse, FundamentalAgentResponse, CreateOrderBody, CreateOrderResponse
+    CreateOrderBody
 )
 from .agent_client import call_agents
+from .adapters import adapt
 from .database_client import get_account_balance, get_positions, create_order, execute_order
 from .synthesis import get_weighted_verdict, get_reasons
 from .logger import report_logger
@@ -31,32 +32,23 @@ async def analyze_ticker(request: AgentRequestBody):
     # 2. Call analysis agents concurrently
     tech_response_raw, fund_response_raw = await call_agents(ticker)
 
-    # 3. Handle potential errors from agents
-    tech_error = isinstance(tech_response_raw, Exception) or "error" in tech_response_raw
-    fund_error = isinstance(fund_response_raw, Exception) or "error" in fund_response_raw
+    # 3. Adapt agent responses to canonical model
+    adapted_tech_response = adapt(tech_response_raw)
+    adapted_fund_response = adapt(fund_response_raw)
 
-    if tech_error and fund_error:
-        raise HTTPException(status_code=500, detail="Both Technical and Fundamental Agents failed to respond.")
+    if not adapted_tech_response and not adapted_fund_response:
+        raise HTTPException(status_code=500, detail="Both Technical and Fundamental Agents failed to provide valid responses.")
 
-    # 4. Validate and process successful responses
-    tech_response, fund_response = None, None
-    try:
-        if not tech_error:
-            tech_response = TechnicalAgentResponse(**tech_response_raw)
-        if not fund_error:
-            fund_response = FundamentalAgentResponse(**fund_response_raw)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to parse agent responses: {e}")
-
+    # 4. Construct report details from canonical responses
     tech_detail = None
-    if tech_response:
-        tech_reason, _ = get_reasons(tech_response.data.action, "hold")
-        tech_detail = ReportDetail(action=tech_response.data.action, score=tech_response.data.confidence_score, reason=tech_reason)
+    if adapted_tech_response:
+        tech_reason, _ = get_reasons(adapted_tech_response.action, "hold")
+        tech_detail = ReportDetail(action=adapted_tech_response.action, score=adapted_tech_response.score, reason=tech_reason)
 
     fund_detail = None
-    if fund_response:
-        _, fund_reason = get_reasons("hold", fund_response.data.action)
-        fund_detail = ReportDetail(action=fund_response.data.action, score=fund_response.data.confidence_score, reason=fund_reason)
+    if adapted_fund_response:
+        _, fund_reason = get_reasons("hold", adapted_fund_response.action)
+        fund_detail = ReportDetail(action=adapted_fund_response.action, score=adapted_fund_response.score, reason=fund_reason)
 
     status = "complete" if tech_detail and fund_detail else "partial"
 
@@ -73,8 +65,9 @@ async def analyze_ticker(request: AgentRequestBody):
         portfolio_value = balance.cash_balance if balance else 0
         current_position = next((p for p in positions if p.symbol == ticker), None)
         current_position_size = current_position.quantity if current_position else 0
-        entry_price = tech_response.data.current_price if tech_response else 0
-        technical_stop = tech_response.data.stop_loss if tech_response else None
+
+        entry_price = adapted_tech_response.metadata.get("current_price", 0) if adapted_tech_response else 0
+        technical_stop = adapted_tech_response.metadata.get("stop_loss") if adapted_tech_response else None
 
         trade_decision = assess_trade(
             portfolio_value=portfolio_value,
