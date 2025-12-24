@@ -2,6 +2,10 @@ import pytest
 import httpx
 from unittest.mock import patch, MagicMock
 
+# Patch os.makedirs BEFORE importing the module that calls it at the module level
+patcher = patch('os.makedirs')
+patcher.start()
+
 from app.autolearning_client import AutoLearningAgentClient, AutoLearningRequestBody, AgentSignal
 
 # --- Test Data ---
@@ -106,3 +110,8 @@ async def test_client_skips_if_url_is_not_configured(mock_config, sample_trade_d
     response = await client.trigger_learning_cycle(sample_trade_data)
 
     assert response is None
+
+# --- Teardown ---
+def teardown_module(module):
+    """Stop the patcher after all tests in the module have run."""
+    patcher.stop()
