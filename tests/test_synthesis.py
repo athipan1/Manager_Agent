@@ -1,42 +1,45 @@
 import pytest
 from app.synthesis import get_weighted_verdict
+from unittest.mock import patch
 
 # Test cases for the weighted verdict logic
 # Format: (tech_action, tech_score, fund_action, fund_score, expected_verdict)
 test_data = [
     # --- Basic Scenarios ---
-    ("buy", 0.8, "buy", 0.9, "Strong Buy"),  # Both strongly agree
-    ("sell", 0.8, "sell", 0.9, "Strong Sell"), # Both strongly agree
-    ("hold", 0.8, "hold", 0.9, "Hold"),       # Both agree on hold
-
-    # --- High Confidence Agreement ---
-    ("buy", 0.9, "buy", 0.5, "Strong Buy"),  # Tech is more confident
-    ("buy", 0.5, "buy", 0.9, "Strong Buy"),  # Fund is more confident
+    ("buy", 0.8, "buy", 0.9, "strong_buy"),  # Both strongly agree. Score: 1.0 -> strong_buy
+    ("sell", 0.8, "sell", 0.9, "strong_sell"), # Both strongly agree. Score: -1.0 -> strong_sell
+    ("hold", 0.8, "hold", 0.9, "hold"),       # Both agree on hold. Score: 0.0 -> hold
 
     # --- Conflicting Signals ---
-    # Tech says buy, Fund says sell
-    ("buy", 0.8, "sell", 0.5, "Hold"),         # Tech's buy is stronger, but not enough to overcome sell. Score: ~0.23 -> Hold
-    ("buy", 0.5, "sell", 0.8, "Hold"),         # Fund's sell is stronger, but not enough to overcome buy. Score: ~-0.23 -> Hold
-    ("buy", 0.7, "sell", 0.7, "Hold"),         # Equal confidence -> Hold
+    ("buy", 0.8, "sell", 0.5, "hold"),         # Equal weights -> Score: (1*0.5) + (-1*0.5) = 0.0 -> hold
+    ("buy", 0.5, "sell", 0.8, "hold"),         # Equal weights -> Score: (1*0.5) + (-1*0.5) = 0.0 -> hold
 
     # --- One Agent is Neutral ---
-    # Tech says buy, Fund says hold
-    ("buy", 0.8, "hold", 0.5, "Buy"),          # Tech's buy signal dominates. Score: ~0.61 -> Buy
-    ("buy", 0.4, "hold", 0.9, "Buy"),          # Fund's hold is strong, but tech's buy is enough to tip it. Score: ~0.307 -> Buy
-    # Tech says sell, Fund says hold
-    ("sell", 0.8, "hold", 0.5, "Sell"),        # Tech's sell signal dominates. Score: ~-0.61 -> Sell
-    ("sell", 0.4, "hold", 0.9, "Sell"),        # Fund's hold is strong, but tech's sell is enough to tip it. Score: ~-0.307 -> Sell
-
-    # --- Edge Cases ---
-    ("buy", 0.0, "sell", 0.0, "Indeterminate"), # Zero scores
-    ("buy", 0.1, "sell", 0.9, "Strong Sell"),   # Fund heavily outweighs tech
-    ("buy", 0.9, "sell", 0.1, "Strong Buy"),    # Tech heavily outweighs fund
+    ("buy", 0.8, "hold", 0.5, "buy"),          # Score: (1*0.5) + (0*0.5) = 0.5 -> buy
+    ("sell", 0.8, "hold", 0.5, "sell"),        # Score: (-1*0.5) + (0*0.5) = -0.5 -> sell
 ]
 
 @pytest.mark.parametrize("tech_action, tech_score, fund_action, fund_score, expected", test_data)
-def test_weighted_verdict_logic(tech_action, tech_score, fund_action, fund_score, expected):
+def test_weighted_verdict_logic_default_weights(tech_action, tech_score, fund_action, fund_score, expected):
     """
-    Tests the get_weighted_verdict function with various scenarios,
-    including agreements, conflicts, and different confidence levels.
+    Tests the get_weighted_verdict function with default 50/50 weights.
     """
     assert get_weighted_verdict(tech_action, tech_score, fund_action, fund_score) == expected
+
+def test_weighted_verdict_logic_dynamic_weights():
+    """
+    Tests the get_weighted_verdict function with dynamically adjusted weights.
+    """
+    # Mock the config_manager to return custom weights
+    with patch('app.synthesis.config_manager') as mock_config:
+        mock_config.get.return_value = {"technical": 0.8, "fundamental": 0.2}
+
+        # Scenario: Tech says buy, Fund says sell. Tech has a much higher weight.
+        # Expected score: (1 * 0.8) + (-1 * 0.2) = 0.6 -> buy
+        result = get_weighted_verdict("buy", 0.9, "sell", 0.9)
+        assert result == "buy"
+
+        # Scenario: Tech says sell, Fund says buy. Tech still dominates.
+        # Expected score: (-1 * 0.8) + (1 * 0.2) = -0.6 -> sell
+        result = get_weighted_verdict("sell", 0.9, "buy", 0.9)
+        assert result == "sell"
