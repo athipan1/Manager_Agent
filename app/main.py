@@ -7,7 +7,7 @@ from .models import (
     CreateOrderBody
 )
 from .agent_client import call_agents
-from .adapters import adapt
+from .adapters.service import normalize_response
 from .database_client import DatabaseAgentClient, DatabaseAgentUnavailable
 from .synthesis import get_weighted_verdict, get_reasons
 from .logger import report_logger
@@ -39,23 +39,32 @@ async def analyze_ticker(request: AgentRequestBody):
             # 2. Call analysis agents concurrently
             tech_response_raw, fund_response_raw = await call_agents(ticker)
 
-            # 3. Adapt agent responses to canonical model
-            adapted_tech_response = adapt(tech_response_raw)
-            adapted_fund_response = adapt(fund_response_raw)
+            # 3. Normalize agent responses to the canonical model
+            normalized_tech = normalize_response(tech_response_raw)
+            normalized_fund = normalize_response(fund_response_raw)
 
-            if not adapted_tech_response and not adapted_fund_response:
+            if not normalized_tech and not normalized_fund:
+                report_logger.error(f"Both agents failed to provide a valid, normalizable response, correlation_id={correlation_id}")
                 raise HTTPException(status_code=500, detail="Both Technical and Fundamental Agents failed to provide valid responses.")
 
             # 4. Construct report details from canonical responses
             tech_detail = None
-            if adapted_tech_response:
-                tech_reason, _ = get_reasons(adapted_tech_response.action, "hold")
-                tech_detail = ReportDetail(action=adapted_tech_response.action, score=adapted_tech_response.score, reason=tech_reason)
+            if normalized_tech:
+                tech_reason, _ = get_reasons(normalized_tech.data.action, "hold")
+                tech_detail = ReportDetail(
+                    action=normalized_tech.data.action,
+                    score=normalized_tech.data.confidence_score,
+                    reason=tech_reason
+                )
 
             fund_detail = None
-            if adapted_fund_response:
-                _, fund_reason = get_reasons("hold", adapted_fund_response.action)
-                fund_detail = ReportDetail(action=adapted_fund_response.action, score=adapted_fund_response.score, reason=fund_reason)
+            if normalized_fund:
+                _, fund_reason = get_reasons("hold", normalized_fund.data.action)
+                fund_detail = ReportDetail(
+                    action=normalized_fund.data.action,
+                    score=normalized_fund.data.confidence_score,
+                    reason=fund_reason
+                )
 
             status = "complete" if tech_detail and fund_detail else "partial"
 
@@ -73,8 +82,8 @@ async def analyze_ticker(request: AgentRequestBody):
                 current_position = next((p for p in positions if p.symbol == ticker), None)
                 current_position_size = current_position.quantity if current_position else 0
 
-                entry_price = adapted_tech_response.metadata.get("current_price", 0) if adapted_tech_response else 0
-                technical_stop = adapted_tech_response.metadata.get("stop_loss") if adapted_tech_response else None
+                entry_price = normalized_tech.data.current_price if (normalized_tech and hasattr(normalized_tech.data, 'current_price')) else 0
+                technical_stop = normalized_tech.data.indicators.get("stop_loss") if (normalized_tech and hasattr(normalized_tech.data, 'indicators')) else None
 
                 trade_decision = assess_trade(
                     portfolio_value=portfolio_value,

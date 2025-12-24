@@ -8,41 +8,31 @@ class AgentRequestBody(BaseModel):
     ticker: str
     period: Optional[str] = "1mo"
 
-# --- Agent Response Models ---
+# --- Canonical Internal Models ---
 
-class TechnicalData(BaseModel):
-    current_price: float
+class CanonicalAgentData(BaseModel):
+    """
+    The unified 'data' block for internal processing after normalization.
+    It contains the mandatory fields required for orchestration logic.
+    """
     action: Literal["buy", "sell", "hold"]
     confidence_score: float
-    indicators: dict
+    # It can hold any other agent-specific data in a flexible way.
+    class Config:
+        extra = "allow"
 
-class TechnicalAgentResponse(BaseModel):
-    agent_type: Literal["technical"]
-    ticker: str
-    status: str
-    data: TechnicalData
-
-class FundamentalData(BaseModel):
-    action: Literal["buy", "sell", "hold"]
-    confidence_score: float
-    analysis_summary: str
-    metrics: dict
-
-class FundamentalAgentResponse(BaseModel):
-    agent_type: Literal["fundamental"]
-    ticker: str
-    status: str
-    data: FundamentalData
-
-
-# --- Canonical Internal Model ---
 
 class CanonicalAgentResponse(BaseModel):
-    """A standardized internal representation of an agent's response."""
+    """
+    A standardized internal representation of an agent's response after it has been
+    parsed, validated, and normalized. This is the single, trusted schema
+    the orchestrator logic will work with.
+    """
     agent_type: str
-    action: Literal["buy", "sell", "hold"]
-    score: float
-    metadata: dict = {}
+    version: str
+    data: CanonicalAgentData
+    # Contains original, raw data or other useful debugging info.
+    raw_metadata: dict = {}
 
 
 # --- Orchestrator Response Models ---
