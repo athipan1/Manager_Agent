@@ -7,6 +7,9 @@ services:
       TECHNICAL_AGENT_URL: http://technical-agent:8002/analyze
       FUNDAMENTAL_AGENT_URL: http://fundamental-agent:8001/analyze
       DATABASE_AGENT_URL: http://database-agent:8003
+      AUTO_LEARNING_AGENT_URL: http://auto-learning-agent:8004
+    volumes:
+      - persistent_config_volume:/persistent_config
     depends_on:
       technical-agent:
         condition: service_healthy
@@ -57,4 +60,7 @@ services:
 
 networks:
   agent-network:
-    driver: bridge 
+    driver: bridge
+
+volumes:
+  persistent_config_volume:
