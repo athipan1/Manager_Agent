@@ -7,6 +7,7 @@ services:
       TECHNICAL_AGENT_URL: http://technical-agent:8002/analyze
       FUNDAMENTAL_AGENT_URL: http://fundamental-agent:8001/analyze
       DATABASE_AGENT_URL: http://database-agent:8003
+      OPTIMIZER_AGENT_URL: http://optimizer-agent:8000/optimize
     depends_on:
       technical-agent:
         condition: service_healthy
@@ -55,6 +56,20 @@ services:
     networks:
       - agent-network
 
+  optimizer-agent:
+    build: ./optimizer-agent
+    expose:
+      - "8000"
+    environment:
+      DATABASE_AGENT_URL: http://database-agent:8003
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    networks:
+      - agent-network
+
 networks:
   agent-network:
-    driver: bridge 
+    driver: bridge
