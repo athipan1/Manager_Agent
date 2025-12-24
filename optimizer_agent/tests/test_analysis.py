@@ -1,6 +1,6 @@
 import pytest
-from app.analysis import run_analysis
-from app.models import (
+from optimizer_agent.app.analysis import run_analysis
+from optimizer_agent.app.models import (
     TradeHistory,
     PortfolioMetrics,
     OptimizerRequest,
