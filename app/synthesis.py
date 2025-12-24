@@ -1,4 +1,5 @@
 from typing import Tuple
+from .config_manager import config_manager
 
 REASON_MAPPING = {
     "technical": {
@@ -16,38 +17,38 @@ REASON_MAPPING = {
 
 def get_weighted_verdict(
     technical_action: str,
-    technical_score: float,
+    technical_score: float, # Confidence score, not used in this version but kept for API compatibility
     fundamental_action: str,
-    fundamental_score: float,
+    fundamental_score: float, # Confidence score, not used in this version but kept for API compatibility
 ) -> str:
     """
-    Calculates a weighted verdict based on agent actions and their confidence scores.
+    Calculates a weighted verdict based on agent actions and their dynamically
+    configured weights.
     """
+    # Fetch dynamic weights from the config manager
+    agent_weights = config_manager.get("AGENT_WEIGHTS")
+    tech_weight = agent_weights.get("technical", 0.5)
+    fund_weight = agent_weights.get("fundamental", 0.5)
+
     action_map = {"buy": 1, "hold": 0, "sell": -1}
     tech_val = action_map.get(technical_action, 0)
     fund_val = action_map.get(fundamental_action, 0)
 
-    # Weighted score calculation
-    # The score is normalized by the sum of confidence scores to get a value between -1 and 1
-    total_score = technical_score + fundamental_score
-    if total_score == 0:
-        return "Indeterminate" # Avoid division by zero
+    # New weighted score calculation using dynamic weights
+    weighted_score = (tech_val * tech_weight) + (fund_val * fund_weight)
 
-    weighted_score = (
-        (tech_val * technical_score) + (fund_val * fundamental_score)
-    ) / total_score
-
-    # Determine final verdict based on the weighted score
-    if weighted_score > 0.7:
-        return "Strong Buy"
-    elif weighted_score > 0.3:
-        return "Buy"
-    elif weighted_score > -0.3:
-        return "Hold"
-    elif weighted_score > -0.7:
-        return "Sell"
+    # Determine final verdict based on the weighted score.
+    # Thresholds are adjusted for a direct weighted average score.
+    if weighted_score >= 0.8:
+        return "strong_buy"
+    elif weighted_score >= 0.2:
+        return "buy"
+    elif weighted_score > -0.2:
+        return "hold"
+    elif weighted_score > -0.8:
+        return "sell"
     else:
-        return "Strong Sell"
+        return "strong_sell"
 
 def get_reasons(technical_action: str, fundamental_action: str) -> Tuple[str, str]:
     """
