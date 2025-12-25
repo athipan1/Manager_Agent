@@ -14,9 +14,7 @@ from .synthesis import get_weighted_verdict, get_reasons
 from .logger import report_logger
 from .risk_manager import assess_trade
 from .config_manager import config_manager
-from .autolearning_client import (
-    AutoLearningAgentClient, AutoLearningRequestBody, AgentSignal
-)
+from .autolearning_client import AutoLearningAgentClient
 
 app = FastAPI()
 
@@ -138,39 +136,20 @@ async def analyze_ticker(request: AgentRequestBody):
             })
 
             # --- Auto-Learning Feedback Loop ---
-            async def run_learning_cycle():
-                """Prepares and sends data to the auto-learning agent."""
-                agent_signals: List[AgentSignal] = []
-                if normalized_tech and tech_detail:
-                    agent_signals.append(AgentSignal(
-                        agent_name="technical", signal=tech_detail.action, confidence=tech_detail.score
-                    ))
-                if normalized_fund and fund_detail:
-                    agent_signals.append(AgentSignal(
-                        agent_name="fundamental", signal=fund_detail.action, confidence=fund_detail.score
-                    ))
+            # The client now acts as an adapter, handling data gathering internally.
+            learning_client = AutoLearningAgentClient(db_client=db_client)
+            learning_response = await learning_client.trigger_learning_cycle(
+                account_id=account_id,
+                symbol=ticker,
+                correlation_id=correlation_id
+            )
 
-                # For now, PnL is mocked as 0. In a real system, this would come
-                # from the trade execution result.
-                pnl = 0.0
-
-                learning_payload = AutoLearningRequestBody(
-                    trade_id=correlation_id,
-                    symbol=ticker,
-                    decision=final_verdict,
-                    pnl_percentage=pnl,
-                    agent_signals=agent_signals
-                )
-
-                client = AutoLearningAgentClient()
-                learning_response = await client.trigger_learning_cycle(learning_payload)
-
-                if learning_response and learning_response.learning_state != "warmup":
-                    if learning_response.policy_deltas:
-                        config_manager.apply_deltas(learning_response.policy_deltas.model_dump(exclude_none=True))
-                        report_logger.info(f"Applied new policy deltas: {learning_response.policy_deltas.model_dump(exclude_none=True)}, correlation_id={correlation_id}")
-
-            await run_learning_cycle()
+            if learning_response and learning_response.learning_state != "warmup":
+                if learning_response.policy_deltas:
+                    deltas = learning_response.policy_deltas.model_dump(exclude_none=True)
+                    if deltas:  # Ensure there are actually deltas to apply
+                        config_manager.apply_deltas(deltas)
+                        report_logger.info(f"Applied new policy deltas: {deltas}, correlation_id={correlation_id}")
             # --- End of Feedback Loop ---
 
             return report

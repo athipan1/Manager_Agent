@@ -74,6 +74,25 @@ class Order(BaseModel):
     status: Literal["pending", "executed", "cancelled", "failed"]
     timestamp: str
 
+# --- Auto-Learning Data Models ---
+
+class Trade(BaseModel):
+    """Represents a single historical trade fetched from the Database Agent."""
+    timestamp: str
+    action: str
+    entry_price: float
+    exit_price: float
+    pnl_pct: float
+    agents: dict[str, str]
+
+
+class PortfolioMetrics(BaseModel):
+    """Represents the overall performance metrics of the portfolio."""
+    win_rate: float
+    average_return: float
+    max_drawdown: float
+    sharpe_ratio: float
+
 class CreateOrderResponse(BaseModel):
     order_id: int
     status: str
