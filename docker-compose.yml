@@ -58,6 +58,19 @@ services:
     networks:
       - agent-network
 
+  auto-learning-agent:
+    build:
+      context: ./auto-learning-agent
+    expose:
+      - "8004"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8004/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    networks:
+      - agent-network
+
 networks:
   agent-network:
     driver: bridge

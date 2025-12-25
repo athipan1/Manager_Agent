@@ -9,7 +9,15 @@ class DatabaseAgentUnavailable(Exception):
     pass
 
 
-from .models import AccountBalance, Position, Order, CreateOrderBody, CreateOrderResponse
+from .models import (
+    AccountBalance,
+    Position,
+    Order,
+    CreateOrderBody,
+    CreateOrderResponse,
+    Trade,
+    PortfolioMetrics,
+)
 from .config import (
     DATABASE_AGENT_URL,
     DB_CLIENT_TIMEOUT,
@@ -204,3 +212,21 @@ class DatabaseAgentClient:
             "POST", f"/orders/{order_id}/execute", correlation_id
         )
         return Order(**response.json())
+
+    async def get_trade_history(
+        self, account_id: int, correlation_id: str
+    ) -> List[Trade]:
+        """Retrieves the full trade history for a given account."""
+        response = await self._request(
+            "GET", f"/accounts/{account_id}/trade_history", correlation_id
+        )
+        return [Trade(**t) for t in response.json()]
+
+    async def get_portfolio_metrics(
+        self, account_id: int, correlation_id: str
+    ) -> PortfolioMetrics:
+        """Retrievels key performance metrics for the account's portfolio."""
+        response = await self._request(
+            "GET", f"/accounts/{account_id}/portfolio_metrics", correlation_id
+        )
+        return PortfolioMetrics(**response.json())
