@@ -14,7 +14,7 @@ from .synthesis import get_weighted_verdict, get_reasons
 from .logger import report_logger
 from .risk_manager import assess_trade
 from .config_manager import config_manager
-from .autolearning_client import AutoLearningAgentClient
+from .learning_client import LearningAgentClient
 
 app = FastAPI()
 
@@ -137,7 +137,7 @@ async def analyze_ticker(request: AgentRequestBody):
 
             # --- Auto-Learning Feedback Loop ---
             # The client now acts as an adapter, handling data gathering internally.
-            learning_client = AutoLearningAgentClient(db_client=db_client)
+            learning_client = LearningAgentClient(db_client=db_client)
             learning_response = await learning_client.trigger_learning_cycle(
                 account_id=account_id,
                 symbol=ticker,
