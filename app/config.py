@@ -24,6 +24,10 @@ AGENT_WEIGHTS = {
     "fundamental": float(os.getenv("FUNDAMENTAL_AGENT_WEIGHT", 0.5))
 }
 
+# Auto-Learning Parameters
+LEARNING_MODE = os.getenv("LEARNING_MODE", "conservative")
+WINDOW_SIZE = int(os.getenv("WINDOW_SIZE", 50))
+
 # Database Agent Client Parameters
 DB_CLIENT_TIMEOUT = int(os.getenv("DB_CLIENT_TIMEOUT", 10))
 DB_CLIENT_MAX_RETRIES = int(os.getenv("DB_CLIENT_MAX_RETRIES", 3))

@@ -230,3 +230,13 @@ class DatabaseAgentClient:
             "GET", f"/accounts/{account_id}/portfolio_metrics", correlation_id
         )
         return PortfolioMetrics(**response.json())
+
+    async def get_price_history(
+        self, symbol: str, correlation_id: str
+    ) -> List[Dict[str, Any]]:
+        """
+        Retrieves the price history for a given symbol.
+        NOTE: The Database Agent is expected to have a /prices/{symbol} endpoint.
+        """
+        response = await self._request("GET", f"/prices/{symbol}", correlation_id)
+        return response.json()
