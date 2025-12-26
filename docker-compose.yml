@@ -7,7 +7,7 @@ services:
       TECHNICAL_AGENT_URL: http://technical-agent:8002/analyze
       FUNDAMENTAL_AGENT_URL: http://fundamental-agent:8001/analyze
       DATABASE_AGENT_URL: http://database-agent:8003
-      AUTO_LEARNING_AGENT_URL: http://auto-learning-agent:8004
+      AUTO_LEARNING_AGENT_URL: http://learning-agent:8004
     volumes:
       - persistent_config_volume:/persistent_config
     depends_on:
@@ -16,6 +16,8 @@ services:
       fundamental-agent:
         condition: service_healthy
       database-agent:
+        condition: service_healthy
+      learning-agent:
         condition: service_healthy
     networks:
       - agent-network
@@ -58,13 +60,13 @@ services:
     networks:
       - agent-network
 
-  auto-learning-agent:
+  learning-agent:
     build:
-      context: ./auto-learning-agent
+      context: ./Learning_Agent
     expose:
       - "8004"
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8004/health"]
+      test: ["CMD", "curl", "-f", "http://localhost:8004/docs"]
       interval: 10s
       timeout: 3s
       retries: 5
