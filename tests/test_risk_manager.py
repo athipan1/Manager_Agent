@@ -53,8 +53,8 @@ class TestRiskManager(unittest.TestCase):
         self.assertFalse(decision["approved"])
         self.assertIn("must be below entry price", decision["reason"])
 
-    def test_reject_buy_exceeds_max_position_value(self):
-        """Test rejection when the calculated position value is too high."""
+    def test_scale_down_buy_exceeds_max_position_value(self):
+        """Test scaling down when the calculated position value is too high."""
         decision = assess_trade(
             portfolio_value=10000, # Smaller portfolio
             risk_per_trade=0.01, # 100 risk
@@ -65,10 +65,11 @@ class TestRiskManager(unittest.TestCase):
             action="buy",
             entry_price=150.00,
         )
-        # Position size = 100 / 1.5 = 66. Value = 66*150 = 9900.
-        # This is > 1000 max allowed.
-        self.assertFalse(decision["approved"])
-        self.assertIn("exceeds max allowed", decision["reason"])
+        # Ideal size = 100 / 1.5 = 66. Value = 9900.
+        # Max value is 1000. New size = floor(1000 / 150) = 6.
+        self.assertTrue(decision["approved"])
+        self.assertEqual(decision["position_size"], 6)
+        self.assertIn("scaled down", decision["reason"])
 
     def test_reject_buy_zero_position_size(self):
         """Test rejection when risk parameters result in a zero position size."""

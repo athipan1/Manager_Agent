@@ -1,5 +1,5 @@
 from math import floor
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 
 def assess_trade(
     portfolio_value: float,
@@ -10,7 +10,7 @@ def assess_trade(
     symbol: str,
     action: str,
     entry_price: float,
-    technical_stop_loss: float = None,
+    technical_stop_loss: Optional[float] = None,
     current_position_size: int = 0,
 ) -> Dict[str, Any]:
     """
@@ -26,7 +26,7 @@ def assess_trade(
                 "action": "sell",
                 "position_size": current_position_size,
                 "stop_loss": None,
-                "risk_amount": None,
+                "risk_amount": 0.0,
             }
         else:
             return {
@@ -36,7 +36,7 @@ def assess_trade(
                 "action": "sell",
                 "position_size": 0,
                 "stop_loss": None,
-                "risk_amount": None,
+                "risk_amount": 0.0,
             }
 
     # --- BUY LOGIC ---
@@ -67,6 +67,7 @@ def assess_trade(
             "position_size": 0,
             "stop_loss": final_stop_loss,
             "risk_amount": 0,
+            "entry_price": entry_price,
         }
 
     # 2. Calculate Position Size
@@ -82,6 +83,7 @@ def assess_trade(
             "position_size": 0,
             "stop_loss": final_stop_loss,
             "risk_amount": risk_amount_per_trade,
+            "entry_price": entry_price,
         }
 
     position_size = floor(risk_amount_per_trade / risk_per_share)
@@ -95,30 +97,28 @@ def assess_trade(
             "position_size": 0,
             "stop_loss": final_stop_loss,
             "risk_amount": risk_amount_per_trade,
+            "entry_price": entry_price,
         }
 
-    # 3. Check Max Position Value
+    # 3. Check and Adjust for Max Position Value
     position_value = position_size * entry_price
     max_allowed_value = portfolio_value * max_position_pct
+    reason = "Trade approved by Risk Manager."
 
     if position_value > max_allowed_value:
-        return {
-            "approved": False,
-            "reason": f"Position value ({position_value}) exceeds max allowed ({max_allowed_value}).",
-            "symbol": symbol,
-            "action": "buy",
-            "position_size": position_size,
-            "stop_loss": final_stop_loss,
-            "risk_amount": risk_amount_per_trade,
-        }
+        original_size = position_size
+        position_size = floor(max_allowed_value / entry_price)
+        risk_amount_per_trade = position_size * risk_per_share
+        reason = f"Position size scaled down from {original_size} to {position_size} to respect max_position_pct."
 
     # 4. Approval
     return {
         "approved": True,
-        "reason": "Trade approved by Risk Manager.",
+        "reason": reason,
         "symbol": symbol,
         "action": "buy",
         "position_size": position_size,
         "stop_loss": final_stop_loss,
         "risk_amount": risk_amount_per_trade,
+        "entry_price": entry_price,
     }
