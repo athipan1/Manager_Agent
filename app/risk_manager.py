@@ -114,7 +114,7 @@ def assess_trade(
     # 4. Approval
     return {
         "approved": True,
-        "reason": "Trade approved by Risk Manager.",
+        "reason": reason,
         "symbol": symbol,
         "action": "buy",
         "position_size": position_size,
