@@ -8,6 +8,12 @@ class AgentRequestBody(BaseModel):
     ticker: str
     period: Optional[str] = "1mo"
 
+
+class MultiAgentRequestBody(BaseModel):
+    """Request body for the multi-asset analysis endpoint."""
+    tickers: List[str]
+    period: Optional[str] = "1mo"
+
 # --- Canonical Internal Models ---
 
 class CanonicalAgentData(BaseModel):
@@ -54,6 +60,31 @@ class OrchestratorResponse(BaseModel):
     status: str
     details: ReportDetails
 
+
+class AssetAnalysisResult(BaseModel):
+    """Represents the analysis result and trade decision for a single asset."""
+    ticker: str
+    final_verdict: str
+    status: str
+    details: ReportDetails
+    execution_status: str
+    execution_details: Optional[dict] = None
+
+
+class ExecutionSummary(BaseModel):
+    """Summarizes the overall execution status."""
+    total_trades_approved: int
+    total_trades_executed: int
+    total_trades_failed: int
+
+
+class MultiOrchestratorResponse(BaseModel):
+    """Response model for the multi-asset analysis endpoint."""
+    multi_report_id: str
+    timestamp: str
+    execution_summary: ExecutionSummary
+    results: List[AssetAnalysisResult]
+
 # --- Database Agent Models ---
 
 class AccountBalance(BaseModel):
@@ -63,6 +94,7 @@ class Position(BaseModel):
     symbol: str
     quantity: int
     average_cost: float
+    current_market_price: Optional[float] = None
 
 class Order(BaseModel):
     order_id: int
