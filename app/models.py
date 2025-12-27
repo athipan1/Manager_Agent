@@ -90,6 +90,8 @@ class MultiOrchestratorResponse(BaseModel):
 class AccountBalance(BaseModel):
     cash_balance: float
 
+from typing import Optional
+
 class Position(BaseModel):
     symbol: str
     quantity: int
