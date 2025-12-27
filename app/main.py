@@ -281,13 +281,13 @@ async def analyze_tickers_endpoint(request: MultiAgentRequestBody):
                 analysis_results=valid_results,
                 portfolio_value=portfolio_value,
                 existing_positions=positions,
-                per_request_risk_budget=config_manager.get('PER_REQUEST_RISK_BUDGET'),
-                max_total_exposure=config_manager.get('MAX_TOTAL_EXPOSURE'),
-                risk_per_trade=config_manager.get('RISK_PER_TRADE'),
-                fixed_stop_loss_pct=config_manager.get('STOP_LOSS_PERCENTAGE'),
-                enable_technical_stop=config_manager.get('ENABLE_TECHNICAL_STOP'),
-                max_position_pct=config_manager.get('MAX_POSITION_PERCENTAGE'),
-                min_position_value=config_manager.get('MIN_POSITION_VALUE'),
+                per_request_risk_budget=config_manager.get('PER_REQUEST_RISK_BUDGET', 0.1),
+                max_total_exposure=config_manager.get('MAX_TOTAL_EXPOSURE', 0.8),
+                risk_per_trade=config_manager.get('RISK_PER_TRADE', 0.01),
+                fixed_stop_loss_pct=config_manager.get('STOP_LOSS_PERCENTAGE', 0.1),
+                enable_technical_stop=config_manager.get('ENABLE_TECHNICAL_STOP', True),
+                max_position_pct=config_manager.get('MAX_POSITION_PERCENTAGE', 0.2),
+                min_position_value=config_manager.get('MIN_POSITION_VALUE', 500),
             )
 
             # --- Step 3: Independent Trade Execution ---
@@ -309,11 +309,17 @@ async def analyze_tickers_endpoint(request: MultiAgentRequestBody):
 
                 if decision.get('approved'):
                     outcome = ticker_to_execution.get(ticker)
-                    execution_status = outcome['status']
-                    execution_details = outcome
+                    execution_status = outcome.get('status', 'failed') if outcome else 'failed'
+                    execution_details = outcome.copy() if outcome else {}
+                    if decision.get('reason'): # Check for reason from assessment
+                        # If execution also failed with a reason, combine them
+                        if 'reason' in execution_details:
+                            execution_details['reason'] = f"Assessment: {decision['reason']}. Execution: {execution_details['reason']}"
+                        else:
+                            execution_details['reason'] = decision['reason']
                 else:
                     execution_status = "rejected"
-                    execution_details = {"reason": decision.get('reason')}
+                    execution_details = {"reason": decision.get('reason', 'Reason not provided.')}
 
                 asset_responses.append(AssetAnalysisResult(
                     ticker=ticker,

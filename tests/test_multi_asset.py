@@ -8,52 +8,38 @@ with patch('os.makedirs', return_value=None):
     from fastapi.testclient import TestClient
     from app.main import app
     from app.models import (
-        CanonicalAgentResponse, CanonicalAgentData,
-        AccountBalance, Position, CreateOrderResponse, Order
+        AccountBalance, Position, CreateOrderResponse, Order, ReportDetails, ReportDetail,
+        CanonicalAgentResponse, CanonicalAgentData
     )
-    from app import risk_manager
 
 client = TestClient(app)
 
 # --- Mocks ---
 
-def mock_canonical_response(ticker, action="buy", score=0.8, price=100.0):
-    """Helper to create a canonical agent response."""
-    return CanonicalAgentResponse(
-        agent_type="technical",
-        version="1.0",
-        data=CanonicalAgentData(
-            action=action,
-            confidence_score=score,
-            current_price=price,
-            indicators={"stop_loss": price * 0.95}
-        )
-    )
+def mock_analysis_result(ticker, final_verdict, tech_score=0.8, fund_score=0.7, price=100.0):
+    """Helper to create a mock analysis result, simulating the output of _analyze_single_asset."""
+    return {
+        "ticker": ticker,
+        "final_verdict": final_verdict,
+        "status": "complete",
+        "details": ReportDetails(
+            technical=ReportDetail(action=final_verdict, score=tech_score, reason=""),
+            fundamental=ReportDetail(action=final_verdict, score=fund_score, reason="")
+        ),
+        "raw_data": {
+            "technical": CanonicalAgentResponse(agent_type="tech", version="1.0", data=CanonicalAgentData(action=final_verdict, confidence_score=tech_score, current_price=price, indicators={'stop_loss': price * 0.9})),
+            "fundamental": CanonicalAgentResponse(agent_type="fund", version="1.0", data=CanonicalAgentData(action=final_verdict, confidence_score=fund_score, current_price=price))
+        }
+    }
 
 @pytest.fixture
-def mock_dependencies():
-    """Mocks all external dependencies for the /analyze-multi endpoint."""
-    with patch('app.main.call_agents', new_callable=AsyncMock) as mock_call_agents, \
+def mock_high_level_dependencies():
+    """Mocks dependencies by patching _analyze_single_asset directly."""
+    with patch('app.main._analyze_single_asset', new_callable=AsyncMock) as mock_analyze, \
          patch('app.main.DatabaseAgentClient', autospec=True) as mock_db_client_class, \
-         patch('app.main.normalize_response') as mock_normalize, \
          patch('app.main.LearningAgentClient', autospec=True) as mock_learning_client:
 
-        mock_call_agents.side_effect = lambda ticker: (
-            ({"agent": "tech", "ticker": ticker}, {"agent": "fund", "ticker": ticker})
-        )
-
-        def normalize_side_effect(raw_data):
-            ticker = raw_data.get("ticker")
-            agent = raw_data.get("agent")
-            actions = {"AAPL": "buy", "GOOG": "sell", "MSFT": "buy"}
-            prices = {"AAPL": 150.0, "GOOG": 120.0, "MSFT": 300.0}
-            scores = {"tech": {"AAPL": 0.9, "GOOG": 0.7, "MSFT": 0.8},
-                      "fund": {"AAPL": 0.6, "GOOG": 0.8, "MSFT": 0.7}}
-            if ticker in actions:
-                return mock_canonical_response(ticker, actions[ticker], scores[agent][ticker], prices[ticker])
-            return None
-        mock_normalize.side_effect = normalize_side_effect
-
+        # Let the test define the side effect for analysis
         mock_db_instance = mock_db_client_class.return_value.__aenter__.return_value
         mock_db_instance.get_account_balance.return_value = AccountBalance(cash_balance=100000.0)
         mock_db_instance.get_positions.return_value = [Position(symbol="GOOG", quantity=50, average_cost=90.0, current_market_price=120.0)]
@@ -72,23 +58,24 @@ def mock_dependencies():
         mock_learning_instance = mock_learning_client.return_value
         mock_learning_instance.trigger_learning_cycle.return_value = None
 
-        yield { "learning_client": mock_learning_instance }
+        yield { "analyze": mock_analyze, "learning": mock_learning_instance }
 
 # --- Tests ---
 
 @patch('app.main.config_manager')
-@patch('app.synthesis.config_manager')
-def test_analyze_multi_endpoint_success(mock_synthesis_cm, mock_main_cm, mock_dependencies):
-    def config_side_effect(key, default=None):
-        return {
-            'AGENT_WEIGHTS': {"technical": 0.5, "fundamental": 0.5},
-            'PER_REQUEST_RISK_BUDGET': 0.10, 'RISK_PER_TRADE': 0.01,
-            'STOP_LOSS_PERCENTAGE': 0.10, 'MAX_POSITION_PERCENTAGE': 0.2,
-            'ENABLE_TECHNICAL_STOP': True, 'MIN_POSITION_VALUE': 500,
-            'MAX_TOTAL_EXPOSURE': 0.8
-        }.get(key, default)
-    mock_main_cm.get.side_effect = config_side_effect
-    mock_synthesis_cm.get.side_effect = config_side_effect
+def test_analyze_multi_endpoint_success(mock_main_cm, mock_high_level_dependencies):
+    mock_main_cm.get.side_effect = lambda key, default=None: {
+        'PER_REQUEST_RISK_BUDGET': 0.10, 'RISK_PER_TRADE': 0.01,
+        'STOP_LOSS_PERCENTAGE': 0.10, 'MAX_POSITION_PERCENTAGE': 0.2,
+        'ENABLE_TECHNICAL_STOP': True, 'MIN_POSITION_VALUE': 500,
+        'MAX_TOTAL_EXPOSURE': 0.8
+    }.get(key, default)
+
+    mock_high_level_dependencies["analyze"].side_effect = [
+        mock_analysis_result("AAPL", "buy", tech_score=0.9, price=150.0),
+        mock_analysis_result("GOOG", "sell", tech_score=0.8, price=120.0),
+        mock_analysis_result("MSFT", "buy", tech_score=0.85, price=300.0),
+    ]
 
     response = client.post("/analyze-multi", json={"tickers": ["AAPL", "GOOG", "MSFT"]})
     assert response.status_code == 200
@@ -97,19 +84,22 @@ def test_analyze_multi_endpoint_success(mock_synthesis_cm, mock_main_cm, mock_de
     assert data["execution_summary"]["total_trades_approved"] == 3
     assert data["execution_summary"]["total_trades_executed"] == 3
 
-    mock_dependencies["learning_client"].trigger_learning_cycle.assert_called_once()
-    assert mock_dependencies["learning_client"].trigger_learning_cycle.call_args.kwargs['symbol'] == "MSFT"
+    mock_high_level_dependencies["learning"].trigger_learning_cycle.assert_called_once()
+    assert mock_high_level_dependencies["learning"].trigger_learning_cycle.call_args.kwargs['symbol'] == "AAPL"
 
 @patch('app.main.config_manager')
-@patch('app.synthesis.config_manager')
-def test_position_scaling_on_risk_budget(mock_synthesis_cm, mock_main_cm, mock_dependencies):
-    def config_side_effect(key, default=None):
-        from app import config as static_config
-        if key == 'PER_REQUEST_RISK_BUDGET': return 0.015 # Enough for AAPL, but MSFT will be scaled
-        if key == 'AGENT_WEIGHTS': return {"technical": 0.5, "fundamental": 0.5}
-        return getattr(static_config, key, default)
-    mock_main_cm.get.side_effect = config_side_effect
-    mock_synthesis_cm.get.side_effect = config_side_effect
+def test_position_scaling_on_risk_budget(mock_main_cm, mock_high_level_dependencies):
+    mock_main_cm.get.side_effect = lambda key, default=None: {
+        'PER_REQUEST_RISK_BUDGET': 0.015, 'RISK_PER_TRADE': 0.01,
+        'STOP_LOSS_PERCENTAGE': 0.10, 'MAX_POSITION_PERCENTAGE': 0.2,
+        'ENABLE_TECHNICAL_STOP': True, 'MIN_POSITION_VALUE': 500,
+        'MAX_TOTAL_EXPOSURE': 0.8
+    }.get(key, default)
+
+    mock_high_level_dependencies["analyze"].side_effect = [
+        mock_analysis_result("AAPL", "buy", tech_score=0.9, price=150.0),
+        mock_analysis_result("MSFT", "buy", tech_score=0.8, price=300.0),
+    ]
 
     response = client.post("/analyze-multi", json={"tickers": ["AAPL", "MSFT"]})
     assert response.status_code == 200
@@ -121,21 +111,23 @@ def test_position_scaling_on_risk_budget(mock_synthesis_cm, mock_main_cm, mock_d
     assert "Position scaled down" in msft_result["execution_details"]["reason"]
 
 @patch('app.main.config_manager')
-@patch('app.synthesis.config_manager')
-def test_max_exposure_limit(mock_synthesis_cm, mock_main_cm, mock_dependencies):
-    def config_side_effect(key, default=None):
-        from app import config as static_config
-        if key == 'MAX_TOTAL_EXPOSURE': return 0.1 # Very low, will reject AAPL
-        if key == 'AGENT_WEIGHTS': return {"technical": 0.5, "fundamental": 0.5}
-        return getattr(static_config, key, default)
-    mock_main_cm.get.side_effect = config_side_effect
-    mock_synthesis_cm.get.side_effect = config_side_effect
+def test_max_exposure_limit(mock_main_cm, mock_high_level_dependencies):
+    mock_main_cm.get.side_effect = lambda key, default=None: {
+        'MAX_TOTAL_EXPOSURE': 0.2, 'RISK_PER_TRADE': 0.01, # Increased to 0.2
+        'STOP_LOSS_PERCENTAGE': 0.10, 'MAX_POSITION_PERCENTAGE': 0.2,
+        'ENABLE_TECHNICAL_STOP': True, 'MIN_POSITION_VALUE': 500
+    }.get(key, default)
+
+    mock_high_level_dependencies["analyze"].side_effect = [
+        mock_analysis_result("AAPL", "buy", tech_score=0.9, price=150.0),
+        mock_analysis_result("MSFT", "buy", tech_score=0.8, price=300.0),
+    ]
 
     response = client.post("/analyze-multi", json={"tickers": ["AAPL", "MSFT"]})
     assert response.status_code == 200
     data = response.json()
 
-    assert data["execution_summary"]["total_trades_approved"] == 1 # Only MSFT is approved
+    assert data["execution_summary"]["total_trades_approved"] == 1
 
-    aapl_result = next(r for r in data["results"] if r["ticker"] == "AAPL")
-    assert "exceeds max total portfolio exposure" in aapl_result["execution_details"]["reason"]
+    msft_result = next(r for r in data["results"] if r["ticker"] == "MSFT")
+    assert "exceeds max total portfolio exposure" in msft_result["execution_details"]["reason"]

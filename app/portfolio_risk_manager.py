@@ -55,6 +55,16 @@ def assess_portfolio_trades(
     # --- 3. Process Buy Orders with Budgeting ---
     remaining_budget = portfolio_value * per_request_risk_budget
 
+    # Adjust exposure based on approved sells
+    current_exposure = sum(p.quantity * (p.current_market_price or p.average_cost) for p in existing_positions)
+    approved_sells = [d for d in trade_decisions if d.get('approved') and d['action'] == 'sell']
+
+    for sell in approved_sells:
+        position_to_sell = next((p for p in existing_positions if p.symbol == sell['symbol']), None)
+        if position_to_sell:
+            current_exposure -= sell['position_size'] * (position_to_sell.current_market_price or position_to_sell.average_cost)
+
+    approved_buys_value = 0
     for result in buy_verdicts:
         ticker = result['ticker']
         current_position = next((p for p in existing_positions if p.symbol == ticker), None)
@@ -69,11 +79,11 @@ def assess_portfolio_trades(
             symbol=ticker,
             action='buy',
             entry_price=(
-                result['raw_data']['technical'].data.current_price if result['raw_data']['technical']
-                else result['raw_data']['fundamental'].data.current_price if result['raw_data']['fundamental']
+                result['raw_data']['technical'].data.current_price if result.get('raw_data', {}).get('technical')
+                else result['raw_data']['fundamental'].data.current_price if result.get('raw_data', {}).get('fundamental')
                 else 0
             ),
-            technical_stop_loss=result['raw_data']['technical'].data.indicators.get('stop_loss') if result['raw_data']['technical'] else None,
+            technical_stop_loss=result['raw_data']['technical'].data.indicators.get('stop_loss') if result.get('raw_data', {}).get('technical') else None,
             current_position_size=current_position.quantity if current_position else 0,
         )
 
@@ -102,15 +112,7 @@ def assess_portfolio_trades(
             initial_decision['reason'] = f"Position scaled down to fit risk budget."
 
         # --- Max Total Exposure Check ---
-        current_exposure = sum(p.quantity * (p.current_market_price or p.average_cost) for p in existing_positions)
         new_trade_value = initial_decision['position_size'] * initial_decision['entry_price']
-
-        # Recalculate total exposure including approved trades so far
-        approved_buys_value = sum(
-            d['position_size'] * d['entry_price']
-            for d in trade_decisions
-            if d.get('approved') and d['action'] == 'buy'
-        )
 
         total_potential_exposure = current_exposure + approved_buys_value + new_trade_value
 
@@ -122,6 +124,7 @@ def assess_portfolio_trades(
 
         # --- 5. Approve and Update Budget ---
         trade_decisions.append(initial_decision)
+        approved_buys_value += new_trade_value
         remaining_budget -= initial_decision['risk_amount'] # Use the final, potentially scaled, risk amount
 
     return trade_decisions
