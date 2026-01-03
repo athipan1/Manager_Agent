@@ -61,14 +61,23 @@ class OrchestratorResponse(BaseModel):
     details: ReportDetails
 
 
-class AssetAnalysisResult(BaseModel):
-    """Represents the analysis result and trade decision for a single asset."""
+class AnalysisResult(BaseModel):
+    """The outcome of the analysis phase for a single asset."""
     ticker: str
     final_verdict: str
     status: str
     details: ReportDetails
-    execution_status: str
-    execution_details: Optional[dict] = None
+
+class ExecutionResult(BaseModel):
+    """The outcome of the execution phase for a single asset."""
+    status: str
+    reason: Optional[str] = None
+    details: Optional[dict] = None
+
+class AssetResult(BaseModel):
+    """Combines the analysis and execution results for a single asset."""
+    analysis: AnalysisResult
+    execution: ExecutionResult
 
 
 class ExecutionSummary(BaseModel):
@@ -83,7 +92,7 @@ class MultiOrchestratorResponse(BaseModel):
     multi_report_id: str
     timestamp: str
     execution_summary: ExecutionSummary
-    results: List[AssetAnalysisResult]
+    results: List[AssetResult]
 
 # --- Database Agent Models ---
 

@@ -33,6 +33,7 @@ class LearningRequest(BaseModel):
     trade_history: List[Trade]
     price_history: Dict[str, List[Dict[str, Any]]]
     current_policy: CurrentPolicy
+    execution_result: Optional[dict] = None
 
 # --- Pydantic Models for Incoming API Contract (from Learning Agent) ---
 
@@ -87,6 +88,7 @@ class LearningAgentClient:
         account_id: int,
         symbol: str,
         correlation_id: str,
+        execution_result: Optional[Dict[str, Any]] = None,
     ) -> Optional[LearningResponseBody]:
         """
         Gathers all necessary data, calls the learning agent, and translates
@@ -129,13 +131,16 @@ class LearningAgentClient:
                 trade_history=trade_history,
                 price_history=price_history,
                 current_policy=current_policy,
+                execution_result=execution_result,
             )
 
             # 4. Make the API call
             url = f"{self.base_url}/learn"
+            headers = {"X-Correlation-ID": correlation_id}
             async with httpx.AsyncClient() as client:
                 response = await client.post(
                     url,
+                    headers=headers,
                     json=request_payload.model_dump(),
                     timeout=self.timeout,
                 )

@@ -6,10 +6,11 @@ from typing import List
 from .models import (
     AgentRequestBody, OrchestratorResponse, ReportDetail, ReportDetails,
     CreateOrderBody, MultiAgentRequestBody, MultiOrchestratorResponse,
-    AssetAnalysisResult, ExecutionSummary
+    AssetResult, ExecutionSummary, AnalysisResult, ExecutionResult
 )
 from .agent_client import call_agents
 from .adapters.service import normalize_response
+from .adapters.database import normalize_database_response
 from .database_client import DatabaseAgentClient, DatabaseAgentUnavailable
 from .synthesis import get_weighted_verdict, get_reasons
 from .logger import report_logger
@@ -35,20 +36,23 @@ async def _execute_trade(db_client: DatabaseAgentClient, trade_decision: dict, a
 
     try:
         order_body = CreateOrderBody(symbol=ticker, order_type=final_verdict.upper(), quantity=quantity, price=entry_price)
-        new_order_response = await db_client.create_order(account_id, order_body, correlation_id)
+        new_order_response_raw = await db_client.create_order(account_id, order_body, correlation_id)
+        normalized_creation = normalize_database_response(new_order_response_raw)
 
-        if not new_order_response or new_order_response.status != "pending":
-            raise Exception("Failed to create trade order.")
+        if not new_order_response_raw or normalized_creation.data.status != "pending":
+            return {"status": "failed", "reason": "Failed to create trade order."}
 
-        order_id = new_order_response.order_id
+        order_id = normalized_creation.data.order_id
         report_logger.info(f"Created order {order_id} to {final_verdict} {quantity} {ticker} @ {entry_price}, correlation_id={correlation_id}")
 
-        executed_order = await db_client.execute_order(order_id, correlation_id)
-        if not executed_order or executed_order.status != "executed":
-            raise Exception("Failed to execute order.")
+        executed_order_raw = await db_client.execute_order(order_id, correlation_id)
+        normalized_execution = normalize_database_response(executed_order_raw)
 
-        report_logger.info(f"Successfully executed order {executed_order.order_id}, correlation_id={correlation_id}")
-        return {"status": "executed", "order_id": executed_order.order_id, "details": executed_order.model_dump()}
+        if not executed_order_raw or normalized_execution.data.status != "executed":
+            return {"status": "failed", "reason": f"Order {order_id} failed to execute. Status: {normalized_execution.data.status if executed_order_raw else 'N/A'}"}
+
+        report_logger.info(f"Successfully executed order {normalized_execution.data.order_id}, correlation_id={correlation_id}")
+        return {"status": "executed", "order_id": normalized_execution.data.order_id, "details": normalized_execution.data.model_dump()}
 
     except Exception as e:
         report_logger.error(f"Trade execution failed for {ticker}: {e}, correlation_id={correlation_id}")
@@ -172,6 +176,7 @@ async def analyze_ticker(request: AgentRequestBody):
             )
 
             # 6. Execute trade based on verdict
+            execution_result = None
             if final_verdict in ["buy", "sell"]:
                 portfolio_value = balance.cash_balance if balance else 0
                 current_position = next((p for p in positions if p.symbol == ticker), None)
@@ -196,22 +201,10 @@ async def analyze_ticker(request: AgentRequestBody):
                 report_logger.info(f"Risk Manager Decision: {trade_decision}")
 
                 if trade_decision.get("approved"):
-                    quantity = trade_decision["position_size"]
-                    order_body = CreateOrderBody(symbol=ticker, order_type=final_verdict.upper(), quantity=quantity, price=entry_price)
-                    new_order_response = await db_client.create_order(account_id, order_body, correlation_id)
-
-                    if new_order_response and new_order_response.status == "pending":
-                        order_id = new_order_response.order_id
-                        report_logger.info(f"Created order {order_id} to {final_verdict} {quantity} {ticker} @ {entry_price}, correlation_id={correlation_id}")
-                        executed_order = await db_client.execute_order(order_id, correlation_id)
-                        if executed_order and executed_order.status == "executed":
-                            report_logger.info(f"Successfully executed order {executed_order.order_id}, correlation_id={correlation_id}")
-                        else:
-                            report_logger.error(f"Failed to execute order {order_id}, correlation_id={correlation_id}")
-                    else:
-                        report_logger.error(f"Failed to create trade order, correlation_id={correlation_id}")
+                    execution_result = await _execute_trade(db_client, trade_decision, account_id, correlation_id)
                 else:
                     report_logger.warning(f"Trade for {ticker} rejected by Risk Manager: {trade_decision.get('reason')}, correlation_id={correlation_id}")
+                    execution_result = {"status": "rejected", "reason": trade_decision.get('reason')}
 
             # 7. Construct and log the final report
             report = OrchestratorResponse(
@@ -234,7 +227,8 @@ async def analyze_ticker(request: AgentRequestBody):
             learning_response = await learning_client.trigger_learning_cycle(
                 account_id=account_id,
                 symbol=ticker,
-                correlation_id=correlation_id
+                correlation_id=correlation_id,
+                execution_result=execution_result,
             )
 
             if learning_response and learning_response.learning_state != "warmup":
@@ -302,32 +296,49 @@ async def analyze_tickers_endpoint(request: MultiAgentRequestBody):
             asset_responses = []
             for result in valid_results:
                 ticker = result['ticker']
-                decision = ticker_to_decision.get(ticker, {'approved': False, 'reason': 'Not analyzed or verdict was hold.'})
 
-                execution_status = "not_attempted"
-                execution_details = None
-
-                if decision.get('approved'):
-                    outcome = ticker_to_execution.get(ticker)
-                    execution_status = outcome.get('status', 'failed') if outcome else 'failed'
-                    execution_details = outcome.copy() if outcome else {}
-                    if decision.get('reason'): # Check for reason from assessment
-                        # If execution also failed with a reason, combine them
-                        if 'reason' in execution_details:
-                            execution_details['reason'] = f"Assessment: {decision['reason']}. Execution: {execution_details['reason']}"
-                        else:
-                            execution_details['reason'] = decision['reason']
-                else:
-                    execution_status = "rejected"
-                    execution_details = {"reason": decision.get('reason', 'Reason not provided.')}
-
-                asset_responses.append(AssetAnalysisResult(
+                # 1. Create AnalysisResult
+                analysis_result = AnalysisResult(
                     ticker=ticker,
                     final_verdict=result["final_verdict"],
                     status=result["status"],
                     details=result["details"],
-                    execution_status=execution_status,
-                    execution_details=execution_details
+                )
+
+                # 2. Determine ExecutionResult
+                decision = ticker_to_decision.get(ticker, {'approved': False, 'reason': 'Not analyzed or verdict was hold.'})
+
+                exec_status = "not_attempted"
+                exec_reason = None
+                exec_details = None
+
+                if decision.get('approved'):
+                    outcome = ticker_to_execution.get(ticker)
+                    exec_status = outcome.get('status', 'failed') if outcome else 'failed'
+                    exec_details = outcome.get('details')
+
+                    assessment_reason = decision.get('reason')
+                    execution_reason_from_outcome = outcome.get('reason') if outcome else None
+
+                    if assessment_reason and execution_reason_from_outcome:
+                        exec_reason = f"Assessment: {assessment_reason}. Execution: {execution_reason_from_outcome}"
+                    else:
+                        exec_reason = assessment_reason or execution_reason_from_outcome
+
+                else:  # Not approved by risk manager
+                    exec_status = "rejected"
+                    exec_reason = decision.get('reason', 'Reason not provided.')
+
+                execution_result = ExecutionResult(
+                    status=exec_status,
+                    reason=exec_reason,
+                    details=exec_details
+                )
+
+                # 3. Combine into AssetResult
+                asset_responses.append(AssetResult(
+                    analysis=analysis_result,
+                    execution=execution_result,
                 ))
 
             total_executed = sum(1 for outcome in execution_outcomes if outcome['status'] == 'executed')
@@ -335,14 +346,19 @@ async def analyze_tickers_endpoint(request: MultiAgentRequestBody):
 
             # --- Auto-Learning Feedback Loop ---
             if approved_trades:
-                most_impactful_trade = max(approved_trades, key=lambda t: t.get('risk_amount', 0))
-                learning_ticker = most_impactful_trade['symbol']
+                # Find the most impactful trade (for selecting the symbol)
+                most_impactful_trade_decision = max(approved_trades, key=lambda t: t.get('risk_amount', 0))
+                learning_ticker = most_impactful_trade_decision['symbol']
+
+                # Find the corresponding execution outcome for that trade
+                most_impactful_execution_outcome = ticker_to_execution.get(learning_ticker)
 
                 learning_client = LearningAgentClient(db_client=db_client)
                 learning_response = await learning_client.trigger_learning_cycle(
                     account_id=account_id,
                     symbol=learning_ticker,
-                    correlation_id=correlation_id
+                    correlation_id=correlation_id,
+                    execution_result=most_impactful_execution_outcome
                 )
                 if learning_response and learning_response.policy_deltas:
                     deltas = learning_response.policy_deltas.model_dump(exclude_none=True)
