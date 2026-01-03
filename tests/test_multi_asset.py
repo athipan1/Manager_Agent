@@ -107,8 +107,8 @@ def test_position_scaling_on_risk_budget(mock_main_cm, mock_high_level_dependenc
 
     assert data["execution_summary"]["total_trades_approved"] == 2
 
-    msft_result = next(r for r in data["results"] if r["ticker"] == "MSFT")
-    assert "Position scaled down" in msft_result["execution_details"]["reason"]
+    msft_result = next(r for r in data["results"] if r['analysis']['ticker'] == "MSFT")
+    assert "Position scaled down" in msft_result["execution"]["reason"]
 
 @patch('app.main.config_manager')
 def test_max_exposure_limit(mock_main_cm, mock_high_level_dependencies):
@@ -129,5 +129,5 @@ def test_max_exposure_limit(mock_main_cm, mock_high_level_dependencies):
 
     assert data["execution_summary"]["total_trades_approved"] == 1
 
-    msft_result = next(r for r in data["results"] if r["ticker"] == "MSFT")
-    assert "exceeds max total portfolio exposure" in msft_result["execution_details"]["reason"]
+    msft_result = next(r for r in data["results"] if r['analysis']['ticker'] == "MSFT")
+    assert "exceeds max total portfolio exposure" in msft_result["execution"]["reason"]
