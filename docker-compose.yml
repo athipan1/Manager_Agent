@@ -21,6 +21,7 @@ services:
         condition: service_healthy
     networks:
       - agent-network
+    restart: unless-stopped # แนะนำ: ให้ restart อัตโนมัติถ้าเกิดข้อผิดพลาด
 
   technical-agent:
     image: painaidee/technical-agent:latest
@@ -33,6 +34,7 @@ services:
       retries: 5
     networks:
       - agent-network
+    restart: unless-stopped
 
   fundamental-agent:
     image: painaidee/fundamental-agent:latest
@@ -47,6 +49,7 @@ services:
       retries: 5
     networks:
       - agent-network
+    restart: unless-stopped
 
   database-agent:
     image: painaidee/database-agent:latest
@@ -59,10 +62,13 @@ services:
       retries: 5
     networks:
       - agent-network
+    restart: unless-stopped
 
   learning-agent:
-    build:
-      context: ./Learning_Agent
+    # --- จุดที่แก้ไข ---
+    # ลบส่วน build ออก และใส่ image แทน
+    # ผมสมมติชื่อ image ตาม pattern ของคุณ โปรดตรวจสอบชื่อจริงบน Docker Hub อีกครั้ง
+    image: painaidee/learning-agent:latest 
     expose:
       - "8004"
     healthcheck:
@@ -72,6 +78,7 @@ services:
       retries: 5
     networks:
       - agent-network
+    restart: unless-stopped
 
 networks:
   agent-network:
