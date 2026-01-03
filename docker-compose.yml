@@ -4,6 +4,7 @@ services:
     ports:
       - "8080:80"
     environment:
+      PYTHONPATH: /app
       TECHNICAL_AGENT_URL: http://technical-agent:8002/analyze
       FUNDAMENTAL_AGENT_URL: http://fundamental-agent:8001/analyze
       DATABASE_AGENT_URL: http://database-agent:8003
@@ -27,6 +28,8 @@ services:
     image: painaidee/technical-agent:latest
     expose:
       - "8002"
+    environment:
+      PYTHONPATH: /app
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8002/health"]
       interval: 10s
@@ -41,6 +44,7 @@ services:
     expose:
       - "8001"
     environment:
+      PYTHONPATH: /app
       GOOGLE_API_KEY: ${GOOGLE_API_KEY:-dummy-key}
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8001/health"]
@@ -55,6 +59,8 @@ services:
     image: painaidee/database-agent:latest
     expose:
       - "8003"
+    environment:
+      PYTHONPATH: /app
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8003/health"]
       interval: 10s
@@ -71,6 +77,8 @@ services:
     image: painaidee/learning-agent:latest 
     expose:
       - "8004"
+    environment:
+      PYTHONPATH: /app
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8004/docs"]
       interval: 10s
