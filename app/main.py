@@ -273,7 +273,7 @@ async def analyze_tickers_endpoint(request: MultiAgentRequestBody):
             # --- Step 2: Portfolio Risk Assessment ---
             trade_decisions = assess_portfolio_trades(
                 analysis_results=valid_results,
-                portfolio_value=portfolio_value,
+                cash_balance=cash_balance,
                 existing_positions=positions,
                 per_request_risk_budget=config_manager.get('PER_REQUEST_RISK_BUDGET', 0.1),
                 max_total_exposure=config_manager.get('MAX_TOTAL_EXPOSURE', 0.8),

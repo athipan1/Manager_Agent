@@ -1,4 +1,4 @@
-from pydantic import BaseModel, Field, validator
+from pydantic import BaseModel, Field, field_validator, ConfigDict
 from typing import Literal, Optional
 import datetime
 
@@ -8,8 +8,7 @@ class StandardAgentData(BaseModel):
     confidence_score: float = Field(..., ge=0, le=1)
     reason: Optional[str] = None
     # Allow arbitrary extra fields for agent-specific data
-    class Config:
-        extra = "allow"
+    model_config = ConfigDict(extra="allow")
 
 class StandardAgentResponse(BaseModel):
     """
@@ -22,7 +21,7 @@ class StandardAgentResponse(BaseModel):
     timestamp: datetime.datetime
     data: StandardAgentData
 
-    @validator('version')
+    @field_validator('version')
     def version_must_be_semantic(cls, v):
         # A simple check for semantic versioning format (e.g., "1.0", "2.1.3")
         parts = v.split('.')

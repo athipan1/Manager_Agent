@@ -1,4 +1,4 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 from typing import Optional, Literal, List
 
 # --- Request Models ---
@@ -24,8 +24,7 @@ class CanonicalAgentData(BaseModel):
     action: Literal["buy", "sell", "hold"]
     confidence_score: float
     # It can hold any other agent-specific data in a flexible way.
-    class Config:
-        extra = "allow"
+    model_config = ConfigDict(extra="allow")
 
 
 class CanonicalAgentResponse(BaseModel):
