@@ -65,7 +65,7 @@ def mock_high_level_dependencies():
 @patch('app.main.config_manager')
 def test_analyze_multi_endpoint_success(mock_main_cm, mock_high_level_dependencies):
     mock_main_cm.get.side_effect = lambda key, default=None: {
-        'PER_REQUEST_RISK_BUDGET': 0.10, 'RISK_PER_TRADE': 0.01,
+        'PER_REQUEST_RISK_BUDGET': 0.25, 'RISK_PER_TRADE': 0.01,
         'STOP_LOSS_PERCENTAGE': 0.10, 'MAX_POSITION_PERCENTAGE': 0.2,
         'ENABLE_TECHNICAL_STOP': True, 'MIN_POSITION_VALUE': 500,
         'MAX_TOTAL_EXPOSURE': 0.8

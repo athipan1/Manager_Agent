@@ -13,18 +13,14 @@ def _log_assessment_result(result: Dict[str, Any]):
     """Logs the result of a trade assessment to JSON and CSV files."""
     os.makedirs(LOG_DIR, exist_ok=True)
 
-    # Add a timestamp to the result
     log_entry = result.copy()
     log_entry["timestamp"] = datetime.now(timezone.utc).isoformat()
 
-    # Log to JSON file
     with open(JSON_LOG_FILE, "a") as f:
         f.write(json.dumps(log_entry) + "\n")
 
-    # Log to CSV file
     file_exists = os.path.isfile(CSV_LOG_FILE)
     with open(CSV_LOG_FILE, "a", newline="") as f:
-        # Define the headers based on a comprehensive superset of possible keys
         fieldnames = [
             "timestamp", "approved", "reason", "symbol", "action",
             "position_size", "stop_loss", "take_profit", "risk_reward_ratio",
@@ -51,7 +47,6 @@ def _prepare_and_log_result(**kwargs):
         "risk_reward_ratio": kwargs.get("risk_reward_ratio"),
         "risk_amount": kwargs.get("risk_amount"),
     }
-    # Filter out None values for cleaner logs and returns
     final_result = {k: v for k, v in result.items() if v is not None}
     _log_assessment_result(final_result)
     return final_result
@@ -77,151 +72,80 @@ def assess_trade(
     """
     Assesses a trade based on a strict set of risk management rules.
     """
-    # --- Input Validation ---
-    action_lower = action.lower() # Standardize early for logging
-    if portfolio_value <= 0:
-        return _prepare_and_log_result(
-            reason="Input validation failed: portfolio_value must be greater than 0.",
-            symbol=symbol, action=action, position_size=0
-        )
-    if not 0 < risk_per_trade < 1:
-        return _prepare_and_log_result(
-            reason="Input validation failed: risk_per_trade must be between 0 and 1.",
-            symbol=symbol, action=action, position_size=0
-        )
-    if not 0 < max_position_pct <= 1:
-        return _prepare_and_log_result(
-            reason="Input validation failed: max_position_pct must be between 0 and 1.",
-            symbol=symbol, action=action, position_size=0
-        )
-    if entry_price <= 0:
-        return _prepare_and_log_result(
-            reason="Input validation failed: entry_price must be greater than 0.",
-            symbol=symbol, action=action, position_size=0, entry_price=entry_price
-        )
+    action_lower = action.lower()
 
-    # --- SELL LOGIC ---
+    if portfolio_value <= 0:
+        return _prepare_and_log_result(reason="Input validation failed: portfolio_value must be greater than 0.", symbol=symbol, action=action, position_size=0)
+    if not 0 < risk_per_trade < 1:
+        return _prepare_and_log_result(reason="Input validation failed: risk_per_trade must be between 0 and 1.", symbol=symbol, action=action, position_size=0)
+    if not 0 < max_position_pct <= 1:
+        return _prepare_and_log_result(reason="Input validation failed: max_position_pct must be between 0 and 1.", symbol=symbol, action=action, position_size=0)
+    if entry_price <= 0 and action_lower in ["buy", "short"]:
+        return _prepare_and_log_result(reason="Input validation failed: entry_price must be greater than 0 for buy/short actions.", symbol=symbol, action=action, position_size=0)
+
     if action_lower == "sell":
         if current_position_size > 0:
-            return _prepare_and_log_result(
-                approved=True, reason="Approval to sell existing position.", symbol=symbol,
-                action=action_lower, position_size=current_position_size, risk_amount=0.0
-            )
+            return _prepare_and_log_result(approved=True, reason="Approval to sell existing position.", symbol=symbol, action=action_lower, position_size=current_position_size, risk_amount=0.0)
         else:
-            return _prepare_and_log_result(
-                reason="Sell rejected. No existing position to sell.", symbol=symbol,
-                action=action_lower, position_size=0, risk_amount=0.0
-            )
+            return _prepare_and_log_result(reason="Sell rejected. No existing position to sell.", symbol=symbol, action=action_lower, position_size=0, risk_amount=0.0)
 
-    # --- COVER LOGIC ---
     if action_lower == "cover":
         if current_position_size < 0:
-            return _prepare_and_log_result(
-                approved=True, reason="Approval to cover existing short position.", symbol=symbol,
-                action=action_lower, position_size=abs(current_position_size), risk_amount=0.0
-            )
+            return _prepare_and_log_result(approved=True, reason="Approval to cover existing short position.", symbol=symbol, action=action_lower, position_size=abs(current_position_size), risk_amount=0.0)
         else:
-            return _prepare_and_log_result(
-                reason="Cover rejected. No existing short position to cover.", symbol=symbol,
-                action=action_lower, position_size=0, risk_amount=0.0
-            )
+            return _prepare_and_log_result(reason="Cover rejected. No existing short position to cover.", symbol=symbol, action=action_lower, position_size=0, risk_amount=0.0)
 
-    # --- ACTION VALIDATION ---
     allowed_actions = ["buy", "sell", "short", "cover"]
     if action_lower not in allowed_actions:
-        return _prepare_and_log_result(
-            reason=f"Invalid action '{action}'. Allowed actions are: {', '.join(allowed_actions)}.",
-            symbol=symbol, action=action, position_size=0
-        )
+        return _prepare_and_log_result(reason=f"Invalid action '{action}'. Allowed actions are: {', '.join(allowed_actions)}.", symbol=symbol, action=action, position_size=0)
 
-    # --- POSITION OPENING LOGIC (BUY/SHORT) ---
     if action_lower not in ["buy", "short"]:
-        # This path should ideally not be reached, but serves as a safeguard.
-        return _prepare_and_log_result(
-            reason=f"Action '{action}' is for closing positions, but no open position was found.",
-            symbol=symbol, action=action_lower, position_size=0
-        )
+        return _prepare_and_log_result(reason=f"Action '{action}' is for closing positions, but no open position was found.", symbol=symbol, action=action_lower, position_size=0)
 
-    # 1. Determine Stop Loss
     final_stop_loss = 0.0
     if action_lower == "buy":
-        # For a BUY, the tightest (most conservative) stop is the HIGHEST value.
         stop_loss_candidates = [entry_price * (1 - fixed_stop_loss_pct)]
         if enable_technical_stop and technical_stop_loss is not None:
             stop_loss_candidates.append(technical_stop_loss)
         if atr_value is not None and atr_value > 0:
             stop_loss_candidates.append(entry_price - (atr_value * atr_multiplier))
-
-        final_stop_loss = max(stop_loss_candidates)
-
+        final_stop_loss = max(c for c in stop_loss_candidates if c is not None)
         if final_stop_loss >= entry_price:
-            return _prepare_and_log_result(
-                reason=f"Stop loss ({final_stop_loss}) must be below entry price ({entry_price}) for a BUY action.",
-                symbol=symbol, action=action_lower, position_size=0, stop_loss=final_stop_loss,
-                risk_amount=0, entry_price=entry_price
-            )
+            return _prepare_and_log_result(reason=f"Stop loss ({final_stop_loss}) must be below entry price ({entry_price}) for a BUY action.", symbol=symbol, action=action_lower, position_size=0, stop_loss=final_stop_loss, risk_amount=0, entry_price=entry_price)
+
     elif action_lower == "short":
-        # For a SHORT, the tightest (most conservative) stop is the LOWEST value.
         stop_loss_candidates = [entry_price * (1 + fixed_stop_loss_pct)]
         if enable_technical_stop and technical_stop_loss is not None:
             stop_loss_candidates.append(technical_stop_loss)
         if atr_value is not None and atr_value > 0:
             stop_loss_candidates.append(entry_price + (atr_value * atr_multiplier))
-
-        final_stop_loss = min(stop_loss_candidates)
-
+        final_stop_loss = min(c for c in stop_loss_candidates if c is not None)
         if final_stop_loss <= entry_price:
-            return _prepare_and_log_result(
-                reason=f"Stop loss ({final_stop_loss}) must be above entry price ({entry_price}) for a SHORT action.",
-                symbol=symbol, action=action_lower, position_size=0, stop_loss=final_stop_loss,
-                risk_amount=0, entry_price=entry_price
-            )
+            return _prepare_and_log_result(reason=f"Stop loss ({final_stop_loss}) must be above entry price ({entry_price}) for a SHORT action.", symbol=symbol, action=action_lower, position_size=0, stop_loss=final_stop_loss, risk_amount=0, entry_price=entry_price)
 
-    # 1.5. Determine Take Profit & Validate Risk/Reward Ratio
     risk_per_share = abs(entry_price - final_stop_loss)
+    if risk_per_share <= 0:
+        return _prepare_and_log_result(reason="Risk per share is zero or negative. Cannot calculate position size.", symbol=symbol, action=action_lower, position_size=0, stop_loss=final_stop_loss, risk_amount=portfolio_value * risk_per_trade, entry_price=entry_price)
+
     final_take_profit = None
     risk_reward_ratio = None
-
     if take_profit_price is not None:
         final_take_profit = take_profit_price
-    elif reward_multiplier is not None and risk_per_share > 0:
-        if action_lower == 'buy':
-            final_take_profit = entry_price + (reward_multiplier * risk_per_share)
-        else: # short
-            final_take_profit = entry_price - (reward_multiplier * risk_per_share)
+    elif reward_multiplier is not None:
+        final_take_profit = entry_price + (reward_multiplier * risk_per_share) if action_lower == 'buy' else entry_price - (reward_multiplier * risk_per_share)
 
     if final_take_profit is not None:
         reward_per_share = abs(final_take_profit - entry_price)
-        if risk_per_share > 0:
-            risk_reward_ratio = reward_per_share / risk_per_share
-            if min_risk_reward_ratio is not None and risk_reward_ratio < min_risk_reward_ratio:
-                return _prepare_and_log_result(
-                    reason=f"Risk/Reward ratio ({risk_reward_ratio:.2f}) is below the minimum required ({min_risk_reward_ratio}).",
-                    symbol=symbol, action=action_lower, position_size=0, stop_loss=final_stop_loss,
-                    take_profit=final_take_profit, risk_reward_ratio=risk_reward_ratio,
-                    risk_amount=0, entry_price=entry_price
-                )
+        risk_reward_ratio = reward_per_share / risk_per_share if risk_per_share > 0 else float('inf')
+        if min_risk_reward_ratio is not None and risk_reward_ratio < min_risk_reward_ratio:
+            return _prepare_and_log_result(reason=f"Risk/Reward ratio ({risk_reward_ratio:.2f}) is below the minimum required ({min_risk_reward_ratio}).", symbol=symbol, action=action_lower, position_size=0, stop_loss=final_stop_loss, take_profit=final_take_profit, risk_reward_ratio=risk_reward_ratio, risk_amount=0, entry_price=entry_price)
 
-    # 2. Calculate Position Size
     risk_amount_per_trade = portfolio_value * risk_per_trade
-
-    if risk_per_share <= 0:
-        return _prepare_and_log_result(
-            reason="Risk per share is zero or negative. Cannot calculate position size.",
-            symbol=symbol, action=action_lower, position_size=0, stop_loss=final_stop_loss,
-            risk_amount=risk_amount_per_trade, entry_price=entry_price
-        )
-
     position_size = floor(risk_amount_per_trade / risk_per_share)
 
     if position_size <= 0:
-        return _prepare_and_log_result(
-            reason=f"Calculated position size is {position_size}. Must be greater than zero.",
-            symbol=symbol, action=action_lower, position_size=0, stop_loss=final_stop_loss,
-            risk_amount=risk_amount_per_trade, entry_price=entry_price
-        )
+        return _prepare_and_log_result(reason=f"Calculated position size is {position_size}. Must be greater than zero.", symbol=symbol, action=action_lower, position_size=0, stop_loss=final_stop_loss, risk_amount=risk_amount_per_trade, entry_price=entry_price)
 
-    # 3. Check and Adjust for Max Position Value
     position_value = position_size * entry_price
     max_allowed_value = portfolio_value * max_position_pct
     reason = "Trade approved by Risk Manager."
@@ -229,10 +153,11 @@ def assess_trade(
     if position_value > max_allowed_value:
         original_size = position_size
         position_size = floor(max_allowed_value / entry_price)
+        if position_size <= 0:
+            return _prepare_and_log_result(reason=f"Position size scaled down to {position_size} which is not a valid size.", symbol=symbol, action=action_lower, position_size=0, stop_loss=final_stop_loss, risk_amount=risk_amount_per_trade, entry_price=entry_price)
         risk_amount_per_trade = position_size * risk_per_share
         reason = f"Position size scaled down from {original_size} to {position_size} to respect max_position_pct."
 
-    # 4. Approval
     return _prepare_and_log_result(
         approved=True, reason=reason, symbol=symbol, action=action_lower,
         position_size=position_size, stop_loss=final_stop_loss,

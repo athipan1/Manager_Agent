@@ -82,7 +82,7 @@ class PortfolioRiskManager:
 
 def assess_portfolio_trades(
     analysis_results: List[Dict[str, Any]],
-    portfolio_value: float,
+    cash_balance: float,
     existing_positions: List[Position],
     per_request_risk_budget: float,
     max_total_exposure: float,
@@ -95,6 +95,7 @@ def assess_portfolio_trades(
     """
     Assesses a portfolio of trades using the PortfolioRiskManager class.
     """
+    portfolio_value = cash_balance + sum(p.quantity * (p.current_market_price or p.average_cost) for p in existing_positions)
     manager = PortfolioRiskManager(
         portfolio_value=portfolio_value,
         existing_positions=existing_positions,
@@ -125,7 +126,7 @@ def assess_portfolio_trades(
             (p for p in existing_positions if p.symbol == ticker), None
         )
         sell_decision = assess_trade(
-            portfolio_value=portfolio_value,
+            portfolio_value=cash_balance,
             risk_per_trade=risk_per_trade,
             fixed_stop_loss_pct=fixed_stop_loss_pct,
             enable_technical_stop=enable_technical_stop,
@@ -145,7 +146,7 @@ def assess_portfolio_trades(
             (p for p in existing_positions if p.symbol == ticker), None
         )
         initial_buy_decision = assess_trade(
-            portfolio_value=portfolio_value,
+            portfolio_value=cash_balance,
             risk_per_trade=risk_per_trade,
             fixed_stop_loss_pct=fixed_stop_loss_pct,
             enable_technical_stop=enable_technical_stop,
