@@ -135,5 +135,76 @@ class TestRiskManager(unittest.TestCase):
         self.assertFalse(decision["approved"])
         self.assertIn("Invalid action", decision["reason"])
 
+    def test_approve_short_order(self):
+        """Test a standard short order approval."""
+        decision = assess_trade(
+            portfolio_value=100000,
+            risk_per_trade=0.01,
+            fixed_stop_loss_pct=0.05, # SL will be 157.5
+            enable_technical_stop=False,
+            max_position_pct=0.20,
+            symbol="TSLA",
+            action="short",
+            entry_price=150.00,
+        )
+        self.assertTrue(decision["approved"])
+        self.assertEqual(decision["position_size"], 133)
+        self.assertEqual(decision["stop_loss"], 157.5)
+        self.assertEqual(decision["action"], "short")
+
+    def test_approve_cover_order(self):
+        """Test a cover order for an existing short position."""
+        decision = assess_trade(
+            portfolio_value=100000,
+            risk_per_trade=0.01,
+            fixed_stop_loss_pct=0.05,
+            enable_technical_stop=False,
+            max_position_pct=0.20,
+            symbol="TSLA",
+            action="cover",
+            entry_price=140.00,
+            current_position_size=-100 # Negative for short
+        )
+        self.assertTrue(decision["approved"])
+        self.assertEqual(decision["position_size"], 100)
+        self.assertEqual(decision["reason"], "Approval to cover existing short position.")
+
+    def test_reject_buy_bad_risk_reward(self):
+        """Test rejection of a buy order due to a poor risk/reward ratio."""
+        decision = assess_trade(
+            portfolio_value=100000,
+            risk_per_trade=0.01, # Risk: 1000
+            fixed_stop_loss_pct=0.05, # SL: 142.5, Risk/share: 7.5
+            enable_technical_stop=False,
+            max_position_pct=0.20,
+            symbol="AAPL",
+            action="buy",
+            entry_price=150.00,
+            take_profit_price=155.00, # Reward/share: 5.0
+            min_risk_reward_ratio=1.5 # R:R is 5/7.5 = 0.66, which is < 1.5
+        )
+        self.assertFalse(decision["approved"])
+        self.assertIn("Risk/Reward ratio", decision["reason"])
+        self.assertAlmostEqual(decision["risk_reward_ratio"], 0.67, places=2)
+
+    def test_approve_buy_atr_stop(self):
+        """Test that the ATR stop is correctly used when it's the most conservative."""
+        decision = assess_trade(
+            portfolio_value=100000,
+            risk_per_trade=0.01,
+            fixed_stop_loss_pct=0.10, # Fixed SL would be 135
+            enable_technical_stop=False,
+            max_position_pct=0.20,
+            symbol="AAPL",
+            action="buy",
+            entry_price=150.00,
+            atr_value=4,
+            atr_multiplier=2.5 # ATR Stop = 150 - (4 * 2.5) = 140
+        )
+        # ATR stop of 140 is higher (tighter) than fixed stop of 135
+        self.assertTrue(decision["approved"])
+        self.assertEqual(decision["stop_loss"], 140)
+        self.assertEqual(decision["position_size"], 100) # 1000 / (150 - 140)
+
 if __name__ == '__main__':
     unittest.main()
