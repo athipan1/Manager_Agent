@@ -6,7 +6,7 @@ from copy import deepcopy
 from . import config as static_config
 
 # Define persistent storage paths
-CONFIG_DIR = "/persistent_config"
+CONFIG_DIR = "./config_data"
 CONFIG_FILE = os.path.join(CONFIG_DIR, "config.json")
 HISTORY_DIR = os.path.join(CONFIG_DIR, "history")
 

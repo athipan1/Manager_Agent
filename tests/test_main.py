@@ -2,6 +2,7 @@ from fastapi.testclient import TestClient
 from unittest.mock import patch, AsyncMock
 import pytest
 import datetime
+from decimal import Decimal
 
 from app.main import app
 from app.models import AccountBalance, CreateOrderResponse, Order
@@ -25,12 +26,12 @@ def mock_db_client():
     """Fixture to mock the DatabaseAgentClient for all tests in this module."""
     with patch("app.main.DatabaseAgentClient") as mock:
         instance = mock.return_value.__aenter__.return_value
-        instance.get_account_balance.return_value = AccountBalance(cash_balance=10000.0)
+        instance.get_account_balance.return_value = AccountBalance(cash_balance=Decimal("10000.0"))
         instance.get_positions.return_value = []
         instance.create_order.return_value = CreateOrderResponse(order_id=123, status="pending")
         instance.execute_order.return_value = Order(
             order_id=123, account_id=1, symbol="GOOGL", order_type="BUY",
-            quantity=1, price=2800.0, status="executed",
+            quantity=1, price=Decimal("2800.0"), status="executed",
             timestamp=datetime.datetime.now(datetime.UTC).isoformat()
         )
         yield mock

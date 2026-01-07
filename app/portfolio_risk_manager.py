@@ -1,4 +1,5 @@
 from typing import List, Dict, Any
+from decimal import Decimal
 from .risk_manager import assess_trade
 from .logger import report_logger
 from .models import Position
@@ -6,11 +7,11 @@ from .models import Position
 class PortfolioRiskManager:
     def __init__(
         self,
-        portfolio_value: float,
+        portfolio_value: Decimal,
         existing_positions: List[Position],
-        per_request_risk_budget: float,
-        max_total_exposure: float,
-        min_position_value: float,
+        per_request_risk_budget: Decimal,
+        max_total_exposure: Decimal,
+        min_position_value: Decimal,
     ):
         self.portfolio_value = portfolio_value
         self.existing_positions = existing_positions
@@ -19,10 +20,10 @@ class PortfolioRiskManager:
 
         self.remaining_budget = self.portfolio_value * per_request_risk_budget
         self.current_exposure = sum(
-            p.quantity * (p.current_market_price or p.average_cost)
+            Decimal(p.quantity) * (p.current_market_price or p.average_cost)
             for p in self.existing_positions
         )
-        self.approved_buys_value = 0.0
+        self.approved_buys_value = Decimal("0.0")
 
     def evaluate_sell(self, sell_decision: Dict[str, Any]):
         """Updates portfolio exposure based on an approved sell decision."""
@@ -34,7 +35,7 @@ class PortfolioRiskManager:
             None,
         )
         if position_to_sell:
-            sell_value = sell_decision["position_size"] * (
+            sell_value = Decimal(sell_decision["position_size"]) * (
                 position_to_sell.current_market_price or position_to_sell.average_cost
             )
             self.current_exposure -= sell_value
@@ -51,7 +52,7 @@ class PortfolioRiskManager:
         if required_risk > self.remaining_budget:
             scaling_factor = self.remaining_budget / required_risk
             scaled_size = int(decision["position_size"] * scaling_factor)
-            scaled_value = scaled_size * decision["entry_price"]
+            scaled_value = Decimal(scaled_size) * decision["entry_price"]
 
             if scaled_value < self.min_position_value:
                 decision["approved"] = False
@@ -64,7 +65,7 @@ class PortfolioRiskManager:
             decision["reason"] = f"Position scaled down to fit risk budget."
 
         # --- 2. Max Total Exposure Check ---
-        new_trade_value = decision["position_size"] * decision["entry_price"]
+        new_trade_value = Decimal(decision["position_size"]) * decision["entry_price"]
         total_potential_exposure = (
             self.current_exposure + self.approved_buys_value + new_trade_value
         )
@@ -82,20 +83,20 @@ class PortfolioRiskManager:
 
 def assess_portfolio_trades(
     analysis_results: List[Dict[str, Any]],
-    cash_balance: float,
+    cash_balance: Decimal,
     existing_positions: List[Position],
-    per_request_risk_budget: float,
-    max_total_exposure: float,
-    risk_per_trade: float,
-    fixed_stop_loss_pct: float,
+    per_request_risk_budget: Decimal,
+    max_total_exposure: Decimal,
+    risk_per_trade: Decimal,
+    fixed_stop_loss_pct: Decimal,
     enable_technical_stop: bool,
-    max_position_pct: float,
-    min_position_value: float,
+    max_position_pct: Decimal,
+    min_position_value: Decimal,
 ) -> List[Dict[str, Any]]:
     """
     Assesses a portfolio of trades using the PortfolioRiskManager class.
     """
-    portfolio_value = cash_balance + sum(p.quantity * (p.current_market_price or p.average_cost) for p in existing_positions)
+    portfolio_value = cash_balance + sum(Decimal(p.quantity) * (p.current_market_price or p.average_cost) for p in existing_positions)
     manager = PortfolioRiskManager(
         portfolio_value=portfolio_value,
         existing_positions=existing_positions,
@@ -133,7 +134,7 @@ def assess_portfolio_trades(
             max_position_pct=max_position_pct,
             symbol=ticker,
             action="sell",
-            entry_price=0,
+            entry_price=Decimal("0"),
             current_position_size=current_position.quantity if current_position else 0,
         )
         manager.evaluate_sell(sell_decision)
@@ -145,6 +146,20 @@ def assess_portfolio_trades(
         current_position = next(
             (p for p in existing_positions if p.symbol == ticker), None
         )
+        entry_price_raw = (
+            result["raw_data"]["technical"].data.current_price
+            if result.get("raw_data", {}).get("technical")
+            else result["raw_data"]["fundamental"].data.current_price
+            if result.get("raw_data", {}).get("fundamental")
+            else 0
+        )
+        technical_stop_loss_raw = (
+            result["raw_data"]["technical"]
+            .data.indicators.get("stop_loss")
+            if result.get("raw_data", {}).get("technical")
+            else None
+        )
+
         initial_buy_decision = assess_trade(
             portfolio_value=cash_balance,
             risk_per_trade=risk_per_trade,
@@ -153,17 +168,8 @@ def assess_portfolio_trades(
             max_position_pct=max_position_pct,
             symbol=ticker,
             action="buy",
-            entry_price=(
-                result["raw_data"]["technical"].data.current_price
-                if result.get("raw_data", {}).get("technical")
-                else result["raw_data"]["fundamental"].data.current_price
-                if result.get("raw_data", {}).get("fundamental")
-                else 0
-            ),
-            technical_stop_loss=result["raw_data"]["technical"]
-            .data.indicators.get("stop_loss")
-            if result.get("raw_data", {}).get("technical")
-            else None,
+            entry_price=Decimal(entry_price_raw),
+            technical_stop_loss=Decimal(technical_stop_loss_raw) if technical_stop_loss_raw is not None else None,
             current_position_size=current_position.quantity if current_position else 0,
         )
 

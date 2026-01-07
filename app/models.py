@@ -1,5 +1,6 @@
 from pydantic import BaseModel, ConfigDict
 from typing import Optional, Literal, List
+from decimal import Decimal
 
 # --- Request Models ---
 
@@ -96,15 +97,15 @@ class MultiOrchestratorResponse(BaseModel):
 # --- Database Agent Models ---
 
 class AccountBalance(BaseModel):
-    cash_balance: float
+    cash_balance: Decimal
 
 from typing import Optional
 
 class Position(BaseModel):
     symbol: str
     quantity: int
-    average_cost: float
-    current_market_price: Optional[float] = None
+    average_cost: Decimal
+    current_market_price: Optional[Decimal] = None
 
 class Order(BaseModel):
     order_id: int
@@ -112,7 +113,7 @@ class Order(BaseModel):
     symbol: str
     order_type: Literal["BUY", "SELL"]
     quantity: int
-    price: float
+    price: Decimal
     status: Literal["pending", "executed", "cancelled", "failed"]
     timestamp: str
 
@@ -122,9 +123,9 @@ class Trade(BaseModel):
     """Represents a single historical trade fetched from the Database Agent."""
     timestamp: str
     action: str
-    entry_price: float
-    exit_price: float
-    pnl_pct: float
+    entry_price: Decimal
+    exit_price: Decimal
+    pnl_pct: Decimal
     agents: dict[str, str]
 
 
@@ -143,4 +144,4 @@ class CreateOrderBody(BaseModel):
     symbol: str
     order_type: Literal["BUY", "SELL"]
     quantity: int
-    price: float
+    price: Decimal

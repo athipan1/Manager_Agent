@@ -1,7 +1,7 @@
 
 import httpx
 from typing import Dict, Optional, List, Any
-
+from decimal import Decimal
 from pydantic import BaseModel, Field
 
 from .config_manager import config_manager
@@ -10,11 +10,27 @@ from .logger import report_logger
 from .models import Trade
 
 # --- Pydantic Models for Outgoing API Contract (to Learning Agent) ---
+class LearningTrade(BaseModel):
+    """
+    Represents a single historical trade, enriched for the Learning Agent.
+    This is a distinct model from the one in `app/models.py` to avoid
+    breaking the Database Agent contract.
+    """
+    asset_id: str
+    timestamp: str
+    decision: str
+    entry_price: Decimal
+    exit_price: Optional[Decimal] = None
+    quantity: Optional[Decimal] = None
+    confidence: Optional[float] = None
+    pnl_pct: Optional[float] = None
+    signals: dict[str, str]
+    trade_id: Optional[str] = None
 
 class CurrentPolicyRisk(BaseModel):
-    risk_per_trade: float
-    max_position_pct: float
-    stop_loss_pct: float
+    risk_per_trade: Decimal
+    max_position_pct: Decimal
+    stop_loss_pct: Decimal
 
 class CurrentPolicyStrategyBias(BaseModel):
     # This is a placeholder as the Orchestrator does not yet have a concept
@@ -30,7 +46,7 @@ class LearningRequest(BaseModel):
     """The complete input data structure for the /learn endpoint."""
     learning_mode: str
     window_size: int
-    trade_history: List[Trade]
+    trade_history: List[LearningTrade]
     price_history: Dict[str, List[Dict[str, Any]]]
     current_policy: CurrentPolicy
     execution_result: Optional[dict] = None
@@ -102,10 +118,26 @@ class LearningAgentClient:
 
         try:
             # 1. Gather data
-            trade_history = await self.db_client.get_trade_history(
+            trade_history_raw = await self.db_client.get_trade_history(
                 account_id,
                 correlation_id,
             )
+
+            # Enrich the raw trade history for the learning agent
+            trade_history = [
+                LearningTrade(
+                    asset_id=symbol,
+                    timestamp=t.timestamp,
+                    decision=t.action,
+                    entry_price=t.entry_price,
+                    exit_price=t.exit_price,
+                    pnl_pct=t.pnl_pct,
+                    signals=t.agents,
+                    # Other enriched fields can be populated here if data is available
+                )
+                for t in trade_history_raw
+            ]
+
             price_history_data = await self.db_client.get_price_history(
                 symbol,
                 correlation_id,
@@ -141,7 +173,7 @@ class LearningAgentClient:
                 response = await client.post(
                     url,
                     headers=headers,
-                    json=request_payload.model_dump(),
+                    json=request_payload.model_dump(mode='json'),
                     timeout=self.timeout,
                 )
                 response.raise_for_status()
