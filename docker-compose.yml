@@ -9,7 +9,7 @@ services:
       DATABASE_AGENT_URL: http://database-agent:8003
       AUTO_LEARNING_AGENT_URL: http://learning-agent:8004
     volumes:
-      - persistent_config_volume:/persistent_config
+      - ./config_data:/app/config_data
     depends_on:
       technical-agent:
         condition: service_healthy

@@ -21,22 +21,14 @@ FAKE_CORRELATION_ID = "test-uuid"
 LEARNING_AGENT_URL = "http://mock-learning-agent:8004/learn"
 
 MOCK_TRADE_HISTORY = [
-    {
-        "trade_id": "t1",
-        "ticker": "TEST",
-        "final_verdict": "buy",
-        "executed": True,
-        "pnl_pct": 0.05,
-        "holding_days": 3,
-        "market_regime": "trending",
-        "agent_votes": {"technical": {"action": "buy", "confidence": 0.8}},
-        "timestamp": "2024-07-01T10:00:00Z",
-        # Fields required by the orchestrator's internal `Trade` model
-        "action": "buy",
-        "entry_price": 100.0,
-        "exit_price": 105.0,
-        "agents": {"technical": "buy", "fundamental": "hold"},
-    }
+    Trade(
+        timestamp="2024-07-01T10:00:00Z",
+        action="buy",
+        entry_price=100.0,
+        exit_price=105.0,
+        pnl_pct=0.05,
+        agents={"technical": "buy", "fundamental": "hold"},
+    )
 ]
 
 MOCK_PRICE_HISTORY = [
@@ -145,7 +137,7 @@ async def test_trigger_learning_cycle_success(
         assert len(request_json["trade_history"]) == 1
         assert request_json["price_history"][FAKE_SYMBOL][0]["volume"] == 50000
         assert request_json["current_policy"]["agent_weights"]["technical"] == 0.6
-        assert request_json["current_policy"]["risk"]["risk_per_trade"] == MOCK_RISK_PER_TRADE
+        assert request_json["current_policy"]["risk"]["risk_per_trade"] == str(MOCK_RISK_PER_TRADE)
 
         # 3. Verify the final translated response
         assert result is not None
