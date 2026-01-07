@@ -2,6 +2,7 @@ from fastapi import FastAPI, HTTPException
 import uuid
 import datetime
 from typing import List
+from decimal import Decimal
 
 from .models import (
     AgentRequestBody, OrchestratorResponse, ReportDetail, ReportDetails,
@@ -186,15 +187,15 @@ async def analyze_ticker(request: AgentRequestBody):
                 technical_stop = normalized_tech.data.indicators.get("stop_loss") if (normalized_tech and hasattr(normalized_tech.data, 'indicators')) else None
 
                 trade_decision = assess_trade(
-                    portfolio_value=portfolio_value,
-                    risk_per_trade=config_manager.get('RISK_PER_TRADE'),
-                    fixed_stop_loss_pct=config_manager.get('STOP_LOSS_PERCENTAGE'),
+                    portfolio_value=Decimal(portfolio_value),
+                    risk_per_trade=Decimal(config_manager.get('RISK_PER_TRADE')),
+                    fixed_stop_loss_pct=Decimal(config_manager.get('STOP_LOSS_PERCENTAGE')),
                     enable_technical_stop=config_manager.get('ENABLE_TECHNICAL_STOP'),
-                    max_position_pct=config_manager.get('MAX_POSITION_PERCENTAGE'),
+                    max_position_pct=Decimal(config_manager.get('MAX_POSITION_PERCENTAGE')),
                     symbol=ticker,
                     action=final_verdict,
-                    entry_price=entry_price,
-                    technical_stop_loss=technical_stop,
+                    entry_price=Decimal(entry_price),
+                    technical_stop_loss=Decimal(technical_stop) if technical_stop is not None else None,
                     current_position_size=current_position_size
                 )
 
