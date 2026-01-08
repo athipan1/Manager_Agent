@@ -52,7 +52,30 @@ INVALID_RESPONSE_BAD_DATA = {
     "data": {"action": "invalid_action", "confidence_score": 99.0}
 }
 
+FUNDAMENTAL_V2_RESPONSE_VALID = {
+    "agent": "fundamental_agent",
+    "data": {
+        "analysis": {
+            "action": "buy",
+            "confidence": 0.95,
+            "reason": "Strong quarterly earnings growth."
+        }
+    }
+}
+
+
 # --- Test Cases ---
+
+def test_normalize_fundamental_v2_success():
+    """Tests successful normalization of a valid V2 fundamental response."""
+    result = normalize_response(FUNDAMENTAL_V2_RESPONSE_VALID)
+    assert isinstance(result, CanonicalAgentResponse)
+    assert result.agent_type == "fundamental"
+    assert result.version == "2.0"
+    assert result.data.action == "buy"
+    assert result.data.confidence_score == 0.95
+    assert "Strong quarterly" in result.data.analysis_summary
+    assert result.data.metrics == {}
 
 def test_normalize_legacy_technical_success():
     """Tests successful normalization of a valid legacy technical response."""
