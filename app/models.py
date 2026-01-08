@@ -8,12 +8,14 @@ class AgentRequestBody(BaseModel):
     """Request body sent to child agents."""
     ticker: str
     period: Optional[str] = "1mo"
+    account_id: Optional[int] = None
 
 
 class MultiAgentRequestBody(BaseModel):
     """Request body for the multi-asset analysis endpoint."""
     tickers: List[str]
     period: Optional[str] = "1mo"
+    account_id: Optional[int] = None
 
 # --- Canonical Internal Models ---
 
@@ -141,6 +143,7 @@ class CreateOrderResponse(BaseModel):
     status: str
 
 class CreateOrderBody(BaseModel):
+    client_order_id: str
     symbol: str
     order_type: Literal["BUY", "SELL"]
     quantity: int
