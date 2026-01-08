@@ -36,7 +36,14 @@ async def _execute_trade(db_client: DatabaseAgentClient, trade_decision: dict, a
     entry_price = trade_decision.get('entry_price', 0)
 
     try:
-        order_body = CreateOrderBody(symbol=ticker, order_type=final_verdict.upper(), quantity=quantity, price=entry_price)
+        client_oid = str(uuid.uuid4())
+        order_body = CreateOrderBody(
+            client_order_id=client_oid,
+            symbol=ticker,
+            order_type=final_verdict.upper(),
+            quantity=quantity,
+            price=entry_price
+        )
         new_order_response_raw = await db_client.create_order(account_id, order_body, correlation_id)
         normalized_creation = normalize_database_response(new_order_response_raw)
 
@@ -124,7 +131,7 @@ async def analyze_ticker(request: AgentRequestBody):
     """
     correlation_id = str(uuid.uuid4())
     ticker = request.ticker
-    account_id = 1  # Using a fixed account ID as per original logic
+    account_id = request.account_id if request.account_id is not None else config_manager.get('DEFAULT_ACCOUNT_ID')
 
     try:
         async with DatabaseAgentClient() as db_client:
@@ -253,7 +260,7 @@ async def analyze_tickers_endpoint(request: MultiAgentRequestBody):
     risk management, and executes trades.
     """
     correlation_id = str(uuid.uuid4())
-    account_id = 1  # Fixed account ID
+    account_id = request.account_id if request.account_id is not None else config_manager.get('DEFAULT_ACCOUNT_ID')
 
     try:
         async with DatabaseAgentClient() as db_client:
