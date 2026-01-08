@@ -41,6 +41,7 @@ class CanonicalAgentResponse(BaseModel):
     data: CanonicalAgentData
     # Contains original, raw data or other useful debugging info.
     raw_metadata: dict = {}
+    error: Optional[dict] = None
 
 
 # --- Orchestrator Response Models ---

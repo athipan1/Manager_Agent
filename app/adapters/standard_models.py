@@ -1,5 +1,5 @@
 from pydantic import BaseModel, Field, field_validator, ConfigDict
-from typing import Literal, Optional
+from typing import Literal, Optional, Dict, Any
 import datetime
 
 class StandardAgentData(BaseModel):
@@ -20,6 +20,7 @@ class StandardAgentResponse(BaseModel):
     version: str
     timestamp: datetime.datetime
     data: StandardAgentData
+    error: Optional[Dict[str, Any]] = None
 
     @field_validator('version')
     def version_must_be_semantic(cls, v):
