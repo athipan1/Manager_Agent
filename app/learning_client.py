@@ -1,31 +1,18 @@
 
 import httpx
+import asyncio
 from typing import Dict, Optional, List, Any
 from decimal import Decimal
 from pydantic import BaseModel, Field
+import uuid
 
 from .config_manager import config_manager
 from .database_client import DatabaseAgentClient
 from .logger import report_logger
-from .models import Trade
+from .models import Trade, PricePoint # Import Trade และ PricePoint จาก common models
 
 # --- Pydantic Models for Outgoing API Contract (to Learning Agent) ---
-class LearningTrade(BaseModel):
-    """
-    Represents a single historical trade, enriched for the Learning Agent.
-    This is a distinct model from the one in `app/models.py` to avoid
-    breaking the Database Agent contract.
-    """
-    asset_id: str
-    timestamp: str
-    decision: str
-    entry_price: Decimal
-    exit_price: Optional[Decimal] = None
-    quantity: Optional[Decimal] = None
-    confidence: Optional[float] = None
-    pnl_pct: Optional[float] = None
-    signals: dict[str, str]
-    trade_id: Optional[str] = None
+# ลบ LearningTrade ออกไป เพราะจะใช้ Trade จาก app.models แทน
 
 class CurrentPolicyRisk(BaseModel):
     risk_per_trade: Decimal
@@ -46,8 +33,8 @@ class LearningRequest(BaseModel):
     """The complete input data structure for the /learn endpoint."""
     learning_mode: str
     window_size: int
-    trade_history: List[LearningTrade]
-    price_history: Dict[str, List[Dict[str, Any]]]
+    trade_history: List[Trade] # ใช้ Trade model ที่ import มา
+    price_history: Dict[str, List[PricePoint]] # ใช้ PricePoint model ที่ import มา
     current_policy: CurrentPolicy
     execution_result: Optional[dict] = None
 
@@ -58,6 +45,7 @@ class IncomingPolicyDeltas(BaseModel):
     risk: Dict[str, float] = Field(default_factory=dict)
     strategy_bias: Dict[str, Any] = Field(default_factory=dict)
     guardrails: Dict[str, Any] = Field(default_factory=dict)
+    asset_biases: Dict[str, float] = Field(default_factory=dict) # เพิ่ม asset_biases
 
 class LearningResponse(BaseModel):
     """The complete output data structure from the /learn endpoint."""
@@ -71,8 +59,7 @@ class InternalPolicyDeltas(BaseModel):
     """Represents the recommended adjustments to the system's policy."""
     agent_weights: Optional[Dict[str, float]] = None
     risk_per_trade: Optional[float] = None
-    # Future-proofing: can add other risk params here as needed
-    # e.g., stop_loss_pct: Optional[float] = None
+    asset_biases: Optional[Dict[str, float]] = None # เพิ่ม asset_biases
 
 class LearningResponseBody(BaseModel):
     """The expected JSON response for the orchestrator's internal logic."""
@@ -106,10 +93,6 @@ class LearningAgentClient:
         correlation_id: str,
         execution_result: Optional[Dict[str, Any]] = None,
     ) -> Optional[LearningResponseBody]:
-        """
-        Gathers all necessary data, calls the learning agent, and translates
-        the response into the format expected by the Orchestrator's ConfigManager.
-        """
         if not self.base_url:
             report_logger.warning(
                 "AUTO_LEARNING_AGENT_URL is not configured. Skipping learning cycle."
@@ -123,19 +106,21 @@ class LearningAgentClient:
                 correlation_id,
             )
 
-            # Enrich the raw trade history for the learning agent
+            # ไม่ต้องแปลงเป็น LearningTrade แล้ว ใช้ Trade model โดยตรง
             trade_history = [
-                LearningTrade(
-                    asset_id=t.asset_id,
-                    timestamp=t.executed_at,
-                    decision=t.side,
+                Trade(
+                    trade_id=str(uuid.uuid4()), # ต้องสร้าง trade_id ถ้า Database Agent ไม่ได้ให้มา
+                    account_id=str(account_id),
+                    asset_id=t.symbol, # ใช้ symbol เป็น asset_id
+                    symbol=t.symbol,
+                    side=t.action.lower(), # แปลง BUY/SELL เป็น buy/sell
+                    quantity=Decimal(t.quantity),
+                    price=t.entry_price, # ใช้ entry_price
+                    executed_at=t.timestamp,
+                    agents=t.agents, # เพิ่ม agents field
+                    pnl_pct=t.pnl_pct, # เพิ่ม pnl_pct
                     entry_price=t.entry_price,
                     exit_price=t.exit_price,
-                    quantity=t.quantity,
-                    confidence=None,  # Placeholder, not available in current Trade model
-                    pnl_pct=t.pnl_pct,
-                    signals=t.agents,
-                    trade_id=t.trade_id,
                 )
                 for t in trade_history_raw
             ]
@@ -144,16 +129,16 @@ class LearningAgentClient:
                 symbol,
                 correlation_id,
             )
-            price_history = {symbol: price_history_data}
-
+            # แปลง price_history_data ให้อยู่ในรูปแบบ List[PricePoint]
+            price_history = {symbol: [PricePoint(**p) for p in price_history_data]}
 
             # 2. Get current configuration from ConfigManager
             current_policy = CurrentPolicy(
                 agent_weights=config_manager.get("AGENT_WEIGHTS"),
                 risk=CurrentPolicyRisk(
-                    risk_per_trade=config_manager.get("RISK_PER_TRADE"),
-                    max_position_pct=config_manager.get("MAX_POSITION_PERCENTAGE"),
-                    stop_loss_pct=config_manager.get("STOP_LOSS_PERCENTAGE"),
+                    risk_per_trade=Decimal(config_manager.get("RISK_PER_TRADE")),
+                    max_position_pct=Decimal(config_manager.get("MAX_POSITION_PERCENTAGE")),
+                    stop_loss_pct=Decimal(config_manager.get("STOP_LOSS_PERCENTAGE")),
                 ),
                 strategy_bias=CurrentPolicyStrategyBias(),
             )
@@ -188,8 +173,8 @@ class LearningAgentClient:
             # 5. Translate the response into the Orchestrator's internal format
             internal_deltas = InternalPolicyDeltas(
                 agent_weights=learning_response.policy_deltas.agent_weights,
-                # Extract the specific risk param the ConfigManager knows how to handle
                 risk_per_trade=learning_response.policy_deltas.risk.get("risk_per_trade"),
+                asset_biases=learning_response.policy_deltas.asset_biases, # เพิ่ม asset_biases
             )
 
             return LearningResponseBody(
@@ -209,7 +194,6 @@ class LearningAgentClient:
             )
             return None
         except Exception as e:
-            # Catches validation errors or other unexpected issues
             report_logger.error(
                 f"Failed to process response from Auto-Learning Agent: {e}"
             )
