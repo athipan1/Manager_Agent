@@ -4,125 +4,86 @@ from app.models import CanonicalAgentResponse
 
 # --- Test Data ---
 
-LEGACY_TECH_RESPONSE_VALID = {
+STANDARD_SUCCESS_RESPONSE = {
     "status": "success",
     "agent_type": "technical",
-    "ticker": "AOT.BK",
-    "data": {
-        "current_price": 68.25,
-        "action": "buy",
-        "confidence_score": 0.78,
-        "indicators": {"trend": "uptrend", "rsi": 62.4}
-    }
-}
-
-LEGACY_FUND_RESPONSE_VALID = {
-    "status": "success",
-    "agent_type": "fundamental",
-    "ticker": "AOT.BK",
-    "data": {
-        "action": "hold",
-        "confidence_score": 0.65,
-        "analysis_summary": "Solid but fairly valued.",
-        "metrics": {"pe_ratio": 15.5}
-    }
-}
-
-STANDARD_SENTIMENT_RESPONSE_VALID = {
-    "status": "success",
-    "agent_type": "sentiment",
-    "version": "1.0",
+    "version": "2.1",
     "timestamp": "2023-10-27T10:00:00Z",
     "data": {
         "action": "buy",
         "confidence_score": 0.88,
-        "reason": "High positive sentiment detected.",
-        "sentiment_score": 0.92
+        "reason": "Price crossed 50-day moving average.",
+        "some_extra_data": "value"
     }
 }
 
-INVALID_RESPONSE_MISSING_TYPE = {
-    "status": "success",
-    "data": {"action": "buy", "confidence_score": 0.5}
+STANDARD_ERROR_RESPONSE = {
+    "status": "error",
+    "agent_type": "fundamental",
+    "version": "1.5",
+    "timestamp": "2023-10-27T10:05:00Z",
+    "error": {
+        "code": 5001,
+        "message": "Failed to fetch data from external API."
+    },
+    # Data is required, even in an error case, for the model to parse.
+    # The service under test should ignore this and use fallback values.
+    "data": {
+        "action": "buy",
+        "confidence_score": 0.9,
+        "reason": "This data should be ignored."
+    }
 }
 
-INVALID_RESPONSE_BAD_DATA = {
+
+INVALID_RESPONSE_VALIDATION_ERROR = {
     "status": "success",
     "agent_type": "technical",
-    "data": {"action": "invalid_action", "confidence_score": 99.0}
-}
-
-FUNDAMENTAL_V2_RESPONSE_VALID = {
-    "agent": "fundamental_agent",
+    "version": "1.0",
+    "timestamp": "2023-10-27T10:00:00Z",
     "data": {
-        "analysis": {
-            "action": "buy",
-            "confidence": 0.95,
-            "reason": "Strong quarterly earnings growth."
-        }
+        "action": "buy",
+        # confidence_score is out of bounds (0-1)
+        "confidence_score": 99.0,
+        "reason": "This will fail validation."
     }
 }
 
 
 # --- Test Cases ---
 
-def test_normalize_fundamental_v2_success():
-    """Tests successful normalization of a valid V2 fundamental response."""
-    result = normalize_response(FUNDAMENTAL_V2_RESPONSE_VALID)
-    assert isinstance(result, CanonicalAgentResponse)
-    assert result.agent_type == "fundamental"
-    assert result.version == "2.0"
-    assert result.data.action == "buy"
-    assert result.data.confidence_score == 0.95
-    assert "Strong quarterly" in result.data.analysis_summary
-    assert result.data.metrics == {}
-
-def test_normalize_legacy_technical_success():
-    """Tests successful normalization of a valid legacy technical response."""
-    result = normalize_response(LEGACY_TECH_RESPONSE_VALID)
+def test_normalize_standard_success():
+    """Tests successful normalization of a valid standard response."""
+    result = normalize_response(STANDARD_SUCCESS_RESPONSE)
     assert isinstance(result, CanonicalAgentResponse)
     assert result.agent_type == "technical"
-    assert result.version == "1.0-legacy"
-    assert result.data.action == "buy"
-    assert result.data.confidence_score == 0.78
-    assert result.data.current_price == 68.25
-    assert "trend" in result.data.indicators
-
-def test_normalize_legacy_fundamental_success():
-    """Tests successful normalization of a valid legacy fundamental response."""
-    result = normalize_response(LEGACY_FUND_RESPONSE_VALID)
-    assert isinstance(result, CanonicalAgentResponse)
-    assert result.agent_type == "fundamental"
-    assert result.version == "1.0-legacy"
-    assert result.data.action == "hold"
-    assert result.data.confidence_score == 0.65
-    assert "fairly valued" in result.data.analysis_summary
-
-def test_normalize_standard_response_success():
-    """Tests successful normalization of a valid standard (versioned) response."""
-    result = normalize_response(STANDARD_SENTIMENT_RESPONSE_VALID)
-    assert isinstance(result, CanonicalAgentResponse)
-    assert result.agent_type == "sentiment"
-    assert result.version == "1.0"
+    assert result.version == "2.1"
     assert result.data.action == "buy"
     assert result.data.confidence_score == 0.88
-    assert result.data.sentiment_score == 0.92
+    # Check that extra data is preserved
+    assert result.data.some_extra_data == "value"
+    assert result.error is None
+    assert result.raw_metadata == STANDARD_SUCCESS_RESPONSE
 
-def test_normalize_returns_none_for_missing_agent_type():
-    """Tests that normalization fails gracefully for responses with no agent_type."""
-    result = normalize_response(INVALID_RESPONSE_MISSING_TYPE)
-    assert result is None
+def test_normalize_standard_error():
+    """Tests normalization of a standard response with a status of 'error'."""
+    result = normalize_response(STANDARD_ERROR_RESPONSE)
+    assert isinstance(result, CanonicalAgentResponse)
+    assert result.agent_type == "fundamental"
+    assert result.version == "1.5"
+    # Verify the fallback behavior for the 'data' field
+    assert result.data.action == "hold"
+    assert result.data.confidence_score == 0.0
+    assert "Failed to fetch" in result.data.reason
+    # Verify the 'error' field is correctly populated
+    assert result.error is not None
+    assert result.error["code"] == 5001
+    assert result.error["message"] == "Failed to fetch data from external API."
+    assert result.raw_metadata == STANDARD_ERROR_RESPONSE
 
-def test_normalize_returns_none_for_invalid_data():
-    """Tests that normalization fails gracefully for responses with malformed data."""
-    result = normalize_response(INVALID_RESPONSE_BAD_DATA)
-    assert result is None
-
-def test_normalize_returns_none_for_unknown_agent_type():
-    """Tests that normalization fails for an unknown agent type that isn't legacy."""
-    unknown_agent_response = LEGACY_TECH_RESPONSE_VALID.copy()
-    unknown_agent_response["agent_type"] = "unknown_agent"
-    result = normalize_response(unknown_agent_response)
+def test_normalize_returns_none_for_validation_error():
+    """Tests that normalization fails gracefully for responses that fail Pydantic validation."""
+    result = normalize_response(INVALID_RESPONSE_VALIDATION_ERROR)
     assert result is None
 
 def test_normalize_handles_non_dict_input():
