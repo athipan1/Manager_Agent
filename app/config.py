@@ -8,11 +8,18 @@ load_dotenv()
 # General Configuration
 DEFAULT_ACCOUNT_ID = int(os.getenv("DEFAULT_ACCOUNT_ID", 1))
 
-# Agent URLs
-TECHNICAL_AGENT_URL = os.getenv("TECHNICAL_AGENT_URL", "http://localhost:8000/analyze")
-FUNDAMENTAL_AGENT_URL = os.getenv("FUNDAMENTAL_AGENT_URL", "http://localhost:8001/analyze")
-DATABASE_AGENT_URL = os.getenv("DATABASE_AGENT_URL", "http://localhost:8003")
-AUTO_LEARNING_AGENT_URL = os.getenv("AUTO_LEARNING_AGENT_URL", "http://localhost:8004")
+# Agent URLs (use Docker Compose service names as defaults)
+TECHNICAL_AGENT_URL = os.getenv("TECHNICAL_AGENT_URL", "http://technical-agent:8000")
+FUNDAMENTAL_AGENT_URL = os.getenv("FUNDAMENTAL_AGENT_URL", "http://fundamental-agent:8001")
+DATABASE_AGENT_URL = os.getenv("DATABASE_AGENT_URL", "http://database-agent:8003")
+AUTO_LEARNING_AGENT_URL = os.getenv("AUTO_LEARNING_AGENT_URL", "http://learning-agent:8004")
+
+# Resilient Agent Client Parameters
+AGENT_CLIENT_TIMEOUT = int(os.getenv("AGENT_CLIENT_TIMEOUT", 10))
+AGENT_CLIENT_MAX_RETRIES = int(os.getenv("AGENT_CLIENT_MAX_RETRIES", 3))
+AGENT_CLIENT_BACKOFF_FACTOR = float(os.getenv("AGENT_CLIENT_BACKOFF_FACTOR", 0.5))
+AGENT_CLIENT_FAILURE_THRESHOLD = int(os.getenv("AGENT_CLIENT_FAILURE_THRESHOLD", 5))
+AGENT_CLIENT_COOLDOWN_PERIOD = int(os.getenv("AGENT_CLIENT_COOLDOWN_PERIOD", 30))
 
 # Risk Management Parameters
 RISK_PER_TRADE = float(os.getenv("RISK_PER_TRADE", 0.01))  # 1% risk per trade
