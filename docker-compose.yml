@@ -1,88 +1,83 @@
+version: '3.8'
+
 services:
-  orchestrator:
-    image: painaidee/manager-agent:latest
+  manager-agent:
+    build: .
     ports:
-      - "8080:80"
+      - "8000:8000"
     environment:
-      TECHNICAL_AGENT_URL: http://technical-agent:8002/analyze
-      FUNDAMENTAL_AGENT_URL: http://fundamental-agent:8001/analyze
+      # Ensure these environment variables are set correctly
+      TECHNICAL_AGENT_URL: http://technical-agent:8000
+      FUNDAMENTAL_AGENT_URL: http://fundamental-agent:8001
       DATABASE_AGENT_URL: http://database-agent:8003
       AUTO_LEARNING_AGENT_URL: http://learning-agent:8004
+      DEFAULT_ACCOUNT_ID: 1
+      RISK_PER_TRADE: 0.01
+      STOP_LOSS_PERCENTAGE: 0.03
+      MAX_POSITION_PERCENTAGE: 0.20
+      ENABLE_TECHNICAL_STOP: "true"
+      MAX_TOTAL_EXPOSURE: 0.50
+      PER_REQUEST_RISK_BUDGET: 0.05
+      MIN_POSITION_VALUE: 500.0
+      TECHNICAL_AGENT_WEIGHT: 0.5
+      FUNDAMENTAL_AGENT_WEIGHT: 0.5
+      LEARNING_MODE: conservative
+      WINDOW_SIZE: 50
+      # DB Client specific (can be different)
+      DB_CLIENT_TIMEOUT: 10
+      DB_CLIENT_MAX_RETRIES: 3
+      DB_CLIENT_BACKOFF_FACTOR: 0.5
+      DB_CLIENT_FAILURE_THRESHOLD: 5
+      DB_CLIENT_COOLDOWN_PERIOD: 30
+      # Generic Agent Client
+      AGENT_CLIENT_TIMEOUT: 10
+      AGENT_CLIENT_MAX_RETRIES: 3
+      AGENT_CLIENT_BACKOFF_FACTOR: 0.5
+      AGENT_CLIENT_FAILURE_THRESHOLD: 5
+      AGENT_CLIENT_COOLDOWN_PERIOD: 30
+      ASSET_BIASES: "{}"
     volumes:
+      - ./logs:/app/logs
       - ./config_data:/app/config_data
     depends_on:
-      technical-agent:
-        condition: service_healthy
-      fundamental-agent:
-        condition: service_healthy
-      database-agent:
-        condition: service_healthy
-      learning-agent:
-        condition: service_healthy
-    networks:
-      - agent-network
-    restart: unless-stopped # แนะนำ: ให้ restart อัตโนมัติถ้าเกิดข้อผิดพลาด
+      - technical-agent
+      - fundamental-agent
+      - database-agent
+      - learning-agent
 
   technical-agent:
-    image: painaidee/technical-agent:latest
-    expose:
-      - "8002"
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8002/health"]
-      interval: 10s
-      timeout: 3s
-      retries: 5
-    networks:
-      - agent-network
-    restart: unless-stopped
+    build: ./Technical_Agent
+    ports:
+      - "8001:8000"
+    environment:
+      API_KEY: your_technical_api_key
+    volumes:
+      - ./Technical_Agent/app:/app/app
 
   fundamental-agent:
-    image: painaidee/fundamental-agent:latest
-    expose:
-      - "8001"
+    build: ./Fundamental_Agent
+    ports:
+      - "8002:8001" # Host port was conflicting with technical-agent, changed to 8002
     environment:
-      GOOGLE_API_KEY: ${GOOGLE_API_KEY:-dummy-key}
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8001/health"]
-      interval: 10s
-      timeout: 3s
-      retries: 5
-    networks:
-      - agent-network
-    restart: unless-stopped
+      API_KEY: your_fundamental_api_key
+    volumes:
+      - ./Fundamental_Agent/app:/app/app
 
   database-agent:
-    image: painaidee/database-agent:latest
-    expose:
-      - "8003"
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8003/health"]
-      interval: 10s
-      timeout: 3s
-      retries: 5
-    networks:
-      - agent-network
-    restart: unless-stopped
+    build: ./Database_Agent
+    ports:
+      - "8003:8000"
+    environment:
+      API_KEY: your_database_api_key
+    volumes:
+      - ./Database_Agent/app:/app/app
+      - ./Database_Agent/example.db:/app/example.db
 
   learning-agent:
-    # --- จุดที่แก้ไข ---
-    # ลบส่วน build ออก และใส่ image แทน
-    # ผมสมมติชื่อ image ตาม pattern ของคุณ โปรดตรวจสอบชื่อจริงบน Docker Hub อีกครั้ง
-    image: painaidee/learning-agent:latest 
-    expose:
-      - "8004"
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8004/docs"]
-      interval: 10s
-      timeout: 3s
-      retries: 5
-    networks:
-      - agent-network
-    restart: unless-stopped
-
-networks:
-  agent-network:
-    driver: bridge
-
-volumes:
-  persistent_config_volume:
+    build: ./Learning_Agent
+    ports:
+      - "8004:8000"
+    environment:
+      API_KEY: your_learning_api_key
+    volumes:
+      - ./Learning_Agent/learning_agent:/app/learning_agent

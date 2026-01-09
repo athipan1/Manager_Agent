@@ -1,32 +1,22 @@
-import httpx
 import asyncio
 from typing import Tuple, Dict, Any
 
 from .models import AgentRequestBody
 from .config import TECHNICAL_AGENT_URL, FUNDAMENTAL_AGENT_URL
+from .resilient_client import ResilientAgentClient, AgentUnavailable
 
-async def _call_agent(client: httpx.AsyncClient, url: str, request_body: Dict) -> Dict[str, Any]:
-    """Helper function to make a single API call to an agent."""
-    try:
-        response = await client.post(url, json=request_body, timeout=10.0)
-        response.raise_for_status()  # Raise an exception for bad status codes (4xx or 5xx)
-        return response.json()
-    except httpx.RequestError as exc:
-        # Handle connection errors, timeouts, etc.
-        return {"error": f"An error occurred while requesting {exc.request.url!r}: {exc}"}
-    except httpx.HTTPStatusError as exc:
-        # Handle non-2xx responses
-        return {"error": f"Error response {exc.response.status_code} while requesting {exc.request.url!r}."}
-
-async def call_agents(ticker: str) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+async def call_agents(ticker: str, correlation_id: str) -> Tuple[Dict[str, Any], Dict[str, Any]]:
     """
-    Calls both the Technical and Fundamental agents concurrently.
+    Calls both the Technical and Fundamental agents concurrently using ResilientAgentClient.
     """
     request_body = AgentRequestBody(ticker=ticker).model_dump()
 
-    async with httpx.AsyncClient() as client:
-        technical_task = _call_agent(client, TECHNICAL_AGENT_URL, request_body)
-        fundamental_task = _call_agent(client, FUNDAMENTAL_AGENT_URL, request_body)
+    tech_client = ResilientAgentClient(base_url=TECHNICAL_AGENT_URL)
+    fund_client = ResilientAgentClient(base_url=FUNDAMENTAL_AGENT_URL)
+
+    async with tech_client as tc, fund_client as fc:
+        technical_task = tc._post("/analyze", correlation_id, request_body)
+        fundamental_task = fc._post("/analyze", correlation_id, request_body)
 
         results = await asyncio.gather(
             technical_task,
@@ -34,4 +24,9 @@ async def call_agents(ticker: str) -> Tuple[Dict[str, Any], Dict[str, Any]]:
             return_exceptions=True  # Prevent one failed request from stopping the other
         )
 
-    return results[0], results[1]
+    # Handle potential AgentUnavailable exceptions from ResilientAgentClient
+    tech_response = results[0] if not isinstance(results[0], BaseException) else {"error": str(results[0])}
+    fund_response = results[1] if not isinstance(results[1], BaseException) else {"error": str(results[1])}
+
+
+    return tech_response, fund_response

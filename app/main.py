@@ -12,7 +12,8 @@ from .models import (
 from .agent_client import call_agents
 from .adapters.service import normalize_response
 from .adapters.database import normalize_database_response
-from .database_client import DatabaseAgentClient, DatabaseAgentUnavailable
+from .database_client import DatabaseAgentClient
+from .resilient_client import AgentUnavailable
 from .synthesis import get_weighted_verdict, get_reasons
 from .logger import report_logger
 from .risk_manager import assess_trade
@@ -73,7 +74,7 @@ async def _analyze_single_asset(ticker: str, correlation_id: str) -> dict:
     This function will be called concurrently for multiple assets.
     """
     # 2. Call analysis agents concurrently
-    tech_response_raw, fund_response_raw = await call_agents(ticker)
+    tech_response_raw, fund_response_raw = await call_agents(ticker, correlation_id)
 
     # 3. Normalize agent responses to the canonical model
     normalized_tech = normalize_response(tech_response_raw)
@@ -145,7 +146,7 @@ async def analyze_ticker(request: AgentRequestBody):
             )
 
             # 2. Call analysis agents concurrently
-            tech_response_raw, fund_response_raw = await call_agents(ticker)
+            tech_response_raw, fund_response_raw = await call_agents(ticker, correlation_id)
 
             # 3. Normalize agent responses to the canonical model
             normalized_tech = normalize_response(tech_response_raw)
@@ -251,9 +252,9 @@ async def analyze_ticker(request: AgentRequestBody):
 
             return report
 
-    except DatabaseAgentUnavailable as e:
-        report_logger.critical(f"Database Agent is unavailable: {e}")
-        raise HTTPException(status_code=503, detail="The Database Agent service is currently unavailable.")
+    except AgentUnavailable as e:
+        report_logger.critical(f"An agent is unavailable: {e}")
+        raise HTTPException(status_code=503, detail=f"A required agent service is currently unavailable: {e}")
 
 @app.post("/analyze-multi", response_model=MultiOrchestratorResponse)
 async def analyze_tickers_endpoint(request: MultiAgentRequestBody):
@@ -387,6 +388,6 @@ async def analyze_tickers_endpoint(request: MultiAgentRequestBody):
                 results=asset_responses
             )
 
-    except DatabaseAgentUnavailable as e:
-        report_logger.critical(f"Database Agent is unavailable: {e}")
-        raise HTTPException(status_code=503, detail="The Database Agent service is currently unavailable.")
+    except AgentUnavailable as e:
+        report_logger.critical(f"An agent is unavailable: {e}")
+        raise HTTPException(status_code=503, detail=f"A required agent service is currently unavailable: {e}")
