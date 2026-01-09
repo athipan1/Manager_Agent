@@ -78,6 +78,33 @@ class TestConfigManager(unittest.TestCase):
         self.assertAlmostEqual(new_weights['technical'], 0.5714, places=4)
         self.assertAlmostEqual(new_weights['fundamental'], 0.4286, places=4)
 
+    @patch('shutil.copy2')
+    @patch('builtins.open', new_callable=mock_open)
+    def test_apply_deltas_for_asset_biases(self, mock_open_obj, mock_copy):
+        # 1. Add a new bias
+        deltas_add = {"asset_biases": {"AAPL": 0.15}}
+        self.config_manager.apply_deltas(deltas_add)
+        new_biases = self.config_manager.get('ASSET_BIASES')
+        self.assertAlmostEqual(new_biases['AAPL'], 0.15)
+
+        # 2. Update an existing bias
+        deltas_update = {"asset_biases": {"AAPL": -0.05}}
+        self.config_manager.apply_deltas(deltas_update)
+        new_biases = self.config_manager.get('ASSET_BIASES')
+        self.assertAlmostEqual(new_biases['AAPL'], 0.10)
+
+        # 3. Clamp at the upper bound
+        deltas_clamp_high = {"asset_biases": {"MSFT": 1.5}} # MAX_ASSET_BIAS is 1.0
+        self.config_manager.apply_deltas(deltas_clamp_high)
+        new_biases = self.config_manager.get('ASSET_BIASES')
+        self.assertAlmostEqual(new_biases['MSFT'], 1.0)
+
+        # 4. Clamp at the lower bound
+        deltas_clamp_low = {"asset_biases": {"GOOG": -1.2}} # MIN_ASSET_BIAS is -1.0
+        self.config_manager.apply_deltas(deltas_clamp_low)
+        new_biases = self.config_manager.get('ASSET_BIASES')
+        self.assertAlmostEqual(new_biases['GOOG'], -1.0)
+
     @classmethod
     def tearDownClass(cls):
         patcher.stop()

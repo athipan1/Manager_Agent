@@ -86,6 +86,19 @@ class ConfigManager:
                 normalized_weights = {agent: w / total_weight for agent, w in current_weights.items()}
                 updated_config_values['AGENT_WEIGHTS'] = normalized_weights
 
+        # Handle asset_biases deltas
+        if 'asset_biases' in deltas and deltas['asset_biases'] is not None:
+            current_asset_biases = updated_config_values.get('ASSET_BIASES', {}).copy()
+            min_bound = self._base_config.get('MIN_ASSET_BIAS')
+            max_bound = self._base_config.get('MAX_ASSET_BIAS')
+
+            for asset, bias_delta in deltas['asset_biases'].items():
+                current_bias = current_asset_biases.get(asset, 0.0)
+                new_bias = current_bias + bias_delta
+                clamped_bias = max(min_bound, min(new_bias, max_bound))
+                current_asset_biases[asset] = clamped_bias
+            updated_config_values['ASSET_BIASES'] = current_asset_biases
+
         # Persist the changes
         self._save_dynamic_config(updated_config_values)
 

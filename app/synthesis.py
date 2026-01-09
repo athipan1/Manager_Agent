@@ -17,25 +17,34 @@ REASON_MAPPING = {
 
 def get_weighted_verdict(
     technical_action: str,
-    technical_score: float, # Confidence score, not used in this version but kept for API compatibility
+    technical_score: float,
     fundamental_action: str,
-    fundamental_score: float, # Confidence score, not used in this version but kept for API compatibility
+    fundamental_score: float,
+    asset_symbol: str,
 ) -> str:
     """
-    Calculates a weighted verdict based on agent actions and their dynamically
-    configured weights.
+    Calculates a weighted verdict based on agent actions, their dynamically
+    configured weights, and any asset-specific biases.
     """
-    # Fetch dynamic weights from the config manager
+    # Fetch dynamic weights and biases from the config manager
     agent_weights = config_manager.get("AGENT_WEIGHTS")
+    asset_biases = config_manager.get("ASSET_BIASES", {})
+
     tech_weight = agent_weights.get("technical", 0.5)
     fund_weight = agent_weights.get("fundamental", 0.5)
+    bias = asset_biases.get(asset_symbol, 0.0)
 
     action_map = {"buy": 1, "hold": 0, "sell": -1}
     tech_val = action_map.get(technical_action, 0)
     fund_val = action_map.get(fundamental_action, 0)
 
-    # New weighted score calculation using dynamic weights
-    weighted_score = (tech_val * tech_weight) + (fund_val * fund_weight)
+    # Calculate the base weighted score
+    base_weighted_score = (tech_val * tech_weight) + (fund_val * fund_weight)
+
+    # Apply the asset-specific bias. The bias is a multiplier.
+    # A positive bias increases the magnitude of the score (pro-trend).
+    # A negative bias decreases the magnitude of the score (anti-trend).
+    weighted_score = base_weighted_score * (1 + bias)
 
     # Determine final verdict based on the weighted score.
     # Thresholds are adjusted for a direct weighted average score.

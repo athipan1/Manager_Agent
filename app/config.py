@@ -1,5 +1,6 @@
 import os
 from dotenv import load_dotenv
+import json
 
 # Load environment variables from .env file
 load_dotenv()
@@ -31,6 +32,11 @@ AGENT_WEIGHTS = {
     "technical": float(os.getenv("TECHNICAL_AGENT_WEIGHT", 0.5)),
     "fundamental": float(os.getenv("FUNDAMENTAL_AGENT_WEIGHT", 0.5))
 }
+
+# Asset-specific biases
+ASSET_BIASES = json.loads(os.getenv("ASSET_BIASES", "{}"))
+MIN_ASSET_BIAS = float(os.getenv("MIN_ASSET_BIAS", -1.0))
+MAX_ASSET_BIAS = float(os.getenv("MAX_ASSET_BIAS", 1.0))
 
 # Auto-Learning Parameters
 LEARNING_MODE = os.getenv("LEARNING_MODE", "conservative")

@@ -111,6 +111,7 @@ async def _analyze_single_asset(ticker: str, correlation_id: str) -> dict:
         tech_detail.score if tech_detail else 0.0,
         fund_detail.action if fund_detail else "hold",
         fund_detail.score if fund_detail else 0.0,
+        asset_symbol=ticker,
     )
 
     # This dictionary will be enhanced with risk assessment and execution details later
@@ -181,6 +182,7 @@ async def analyze_ticker(request: AgentRequestBody):
                 tech_detail.score if tech_detail else 0.0,
                 fund_detail.action if fund_detail else "hold",
                 fund_detail.score if fund_detail else 0.0,
+                asset_symbol=ticker,
             )
 
             # 6. Execute trade based on verdict
