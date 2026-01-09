@@ -26,6 +26,11 @@ AGENT_WEIGHTS = {
     "fundamental": 0.5
 }
 
+# Asset-specific biases
+ASSET_BIASES = {}
+MIN_ASSET_BIAS = -1.0
+MAX_ASSET_BIAS = 1.0
+
 # Database Agent Client Parameters
 DB_CLIENT_TIMEOUT = 5
 DB_CLIENT_MAX_RETRIES = 2
