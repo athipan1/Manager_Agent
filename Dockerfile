@@ -20,7 +20,7 @@ ENV PATH="/opt/venv/bin:$PATH"
 # This is done in a separate step to leverage Docker's layer caching.
 # The dependencies will only be re-installed if requirements.txt changes.
 COPY requirements.txt .
-requirements.base.txt
+     requirements.base.txt
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Stage 2: Runner
