@@ -22,22 +22,18 @@ LEARNING_AGENT_URL = "http://mock-learning-agent:8004/learn"
 
 from decimal import Decimal
 
-MOCK_TRADE_HISTORY = [
-    Trade(
-        trade_id="trade-uuid-1",
-        account_id="account-uuid-1",
-        asset_id="asset-uuid-1",
-        symbol="TEST",
-        side="buy",
-        quantity=Decimal("10"),
-        price=Decimal("100.0"),
-        executed_at="2024-07-01T10:00:00Z",
-        agents={"technical": "buy", "fundamental": "hold"},
-        pnl_pct=Decimal("0.05"),
-        entry_price=Decimal("100.0"),
-        exit_price=Decimal("105.0"),
-    )
-]
+# This mock represents the raw data returned by the database client,
+# not the Pydantic `Trade` model. The SUT will perform the mapping.
+MOCK_RAW_TRADE_DATA = MagicMock()
+MOCK_RAW_TRADE_DATA.symbol = "TEST"
+MOCK_RAW_TRADE_DATA.action = "BUY"  # SUT expects 'action', not 'side'
+MOCK_RAW_TRADE_DATA.quantity = Decimal("10")
+MOCK_RAW_TRADE_DATA.entry_price = Decimal("100.0")
+MOCK_RAW_TRADE_DATA.timestamp = "2024-07-01T10:00:00Z"
+MOCK_RAW_TRADE_DATA.agents = {"technical": "buy", "fundamental": "hold"}
+MOCK_RAW_TRADE_DATA.pnl_pct = Decimal("0.05")
+MOCK_RAW_TRADE_DATA.exit_price = Decimal("105.0")
+
 
 MOCK_PRICE_HISTORY = [
     {"timestamp": "2024-07-01T09:00:00Z", "open": 100, "high": 102, "low": 99, "close": 101, "volume": 50000}
@@ -45,9 +41,10 @@ MOCK_PRICE_HISTORY = [
 
 
 MOCK_AGENT_WEIGHTS = {"technical": 0.6, "fundamental": 0.4}
-MOCK_RISK_PER_TRADE = 0.01
-MOCK_MAX_POSITION_PCT = 0.20
-MOCK_STOP_LOSS_PCT = 0.03
+# Use strings for Decimal-based config values to avoid float precision issues
+MOCK_RISK_PER_TRADE = "0.01"
+MOCK_MAX_POSITION_PCT = "0.20"
+MOCK_STOP_LOSS_PCT = "0.03"
 MOCK_LEARNING_MODE = "conservative"
 MOCK_WINDOW_SIZE = 50
 
@@ -58,7 +55,8 @@ MOCK_LEARNING_AGENT_RESPONSE = {
         "agent_weights": {"technical": 0.05},
         "risk": {"risk_per_trade": -0.001},
         "strategy_bias": {},
-        "guardrails": {}
+        "guardrails": {},
+        "asset_biases": {"TEST": 0.1}
     },
     "reasoning": ["Adjusting risk down due to recent losses."],
 }
@@ -68,13 +66,8 @@ MOCK_LEARNING_AGENT_RESPONSE = {
 def mock_db_client():
     """Fixture to create a mock DatabaseAgentClient."""
     mock = AsyncMock()
-    # Note: The data sent to the Learning Agent uses a different contract
-    # than the Orchestrator's internal `Trade` model. The test mock
-    # now includes fields for both to satisfy the different models used
-    # in the client.
-    mock.get_trade_history.return_value = [
-        t for t in MOCK_TRADE_HISTORY
-    ]
+    # Return raw trade data that mimics the DB client response
+    mock.get_trade_history.return_value = [MOCK_RAW_TRADE_DATA]
     mock.get_price_history.return_value = MOCK_PRICE_HISTORY
     return mock
 
@@ -145,13 +138,14 @@ async def test_trigger_learning_cycle_success(
         assert len(request_json["trade_history"]) == 1
         assert request_json["price_history"][FAKE_SYMBOL][0]["volume"] == 50000
         assert request_json["current_policy"]["agent_weights"]["technical"] == 0.6
-        assert request_json["current_policy"]["risk"]["risk_per_trade"] == str(MOCK_RISK_PER_TRADE)
+        assert request_json["current_policy"]["risk"]["risk_per_trade"] == MOCK_RISK_PER_TRADE
 
         # 3. Verify the final translated response
         assert result is not None
         assert result.learning_state == "learning"
         assert result.policy_deltas.agent_weights["technical"] == 0.05
         assert result.policy_deltas.risk_per_trade == -0.001
+        assert result.policy_deltas.asset_biases["TEST"] == 0.1
         assert result.version == "2.0.0"
 
 
