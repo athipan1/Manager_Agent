@@ -20,14 +20,22 @@ FAKE_SYMBOL = "TEST"
 FAKE_CORRELATION_ID = "test-uuid"
 LEARNING_AGENT_URL = "http://mock-learning-agent:8004/learn"
 
+from decimal import Decimal
+
 MOCK_TRADE_HISTORY = [
     Trade(
-        timestamp="2024-07-01T10:00:00Z",
-        action="buy",
-        entry_price=100.0,
-        exit_price=105.0,
-        pnl_pct=0.05,
+        trade_id="trade-uuid-1",
+        account_id="account-uuid-1",
+        asset_id="asset-uuid-1",
+        symbol="TEST",
+        side="buy",
+        quantity=Decimal("10"),
+        price=Decimal("100.0"),
+        executed_at="2024-07-01T10:00:00Z",
         agents={"technical": "buy", "fundamental": "hold"},
+        pnl_pct=Decimal("0.05"),
+        entry_price=Decimal("100.0"),
+        exit_price=Decimal("105.0"),
     )
 ]
 
