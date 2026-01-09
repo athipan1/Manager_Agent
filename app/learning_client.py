@@ -126,14 +126,16 @@ class LearningAgentClient:
             # Enrich the raw trade history for the learning agent
             trade_history = [
                 LearningTrade(
-                    asset_id=symbol,
-                    timestamp=t.timestamp,
-                    decision=t.action,
+                    asset_id=t.asset_id,
+                    timestamp=t.executed_at,
+                    decision=t.side,
                     entry_price=t.entry_price,
                     exit_price=t.exit_price,
+                    quantity=t.quantity,
+                    confidence=None,  # Placeholder, not available in current Trade model
                     pnl_pct=t.pnl_pct,
                     signals=t.agents,
-                    # Other enriched fields can be populated here if data is available
+                    trade_id=t.trade_id,
                 )
                 for t in trade_history_raw
             ]

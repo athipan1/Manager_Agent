@@ -1,5 +1,5 @@
-from pydantic import BaseModel, ConfigDict
-from typing import Optional, Literal, List
+from pydantic import BaseModel, ConfigDict, Field
+from typing import Optional, Literal, List, Dict
 from decimal import Decimal
 
 # --- Request Models ---
@@ -120,16 +120,32 @@ class Order(BaseModel):
     status: Literal["pending", "executed", "cancelled", "failed"]
     timestamp: str
 
-# --- Auto-Learning Data Models ---
+# --- Common Models for Learning Agent (ปรับให้ตรงกับ Learning_Agent/learning_agent/models.py) ---
+
+class PricePoint(BaseModel):
+    """Represents a single price point in history."""
+    timestamp: str
+    open: float
+    high: float
+    low: float
+    close: float
+    volume: int
 
 class Trade(BaseModel):
-    """Represents a single historical trade fetched from the Database Agent."""
-    timestamp: str
-    action: str
-    entry_price: Decimal
-    exit_price: Decimal
-    pnl_pct: Decimal
-    agents: dict[str, str]
+    """Represents a single historical trade, as received from the Manager."""
+    trade_id: str # uuid
+    account_id: str # uuid
+    asset_id: str
+    symbol: str
+    side: Literal["buy", "sell"]
+    quantity: Decimal
+    price: Decimal
+    executed_at: str # ISO-8601 timestamp
+    # เพิ่ม field สำหรับเก็บข้อมูล agent ที่เกี่ยวข้องกับ trade นั้นๆ
+    agents: Dict[str, str] = Field(default_factory=dict)
+    pnl_pct: Optional[Decimal] = None # เพิ่ม pnl_pct
+    entry_price: Optional[Decimal] = None # เพิ่ม entry_price
+    exit_price: Optional[Decimal] = None # เพิ่ม exit_price
 
 
 class PortfolioMetrics(BaseModel):
