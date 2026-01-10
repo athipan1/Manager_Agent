@@ -33,10 +33,16 @@ class DatabaseAgentClient(ResilientAgentClient):
     async def create_order(
         self, account_id: int, order_body: CreateOrderBody, correlation_id: str
     ) -> CreateOrderResponse:
+        # Convert model to dictionary to modify it for API compatibility
+        order_payload = order_body.model_dump()
+
+        # Rename 'order_type' to 'side' to match the Database_Agent's expected schema
+        order_payload['side'] = order_payload.pop('order_type')
+
         response_data = await self._post(
             f"/accounts/{account_id}/orders",
             correlation_id,
-            json_data=order_body.model_dump(),
+            json_data=order_payload,
         )
         return CreateOrderResponse(**response_data)
 
