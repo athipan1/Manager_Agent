@@ -5,12 +5,12 @@ import datetime
 from decimal import Decimal
 
 from app.main import app
-from app.models import AccountBalance, CreateOrderResponse, Order
+from app.models import AccountBalance, CreateOrderResponse, Order, CreateOrderBody
+from app.database_client import DatabaseAgentClient
 
 client = TestClient(app)
 
 # --- Mock Data ---
-# Updated to the new StandardAgentResponse format
 
 TIMESTAMP = datetime.datetime.now(datetime.UTC).isoformat()
 
@@ -22,21 +22,16 @@ SUCCESS_FUND_RESPONSE = {
     "status": "success", "agent_type": "fundamental", "version": "1.0", "timestamp": TIMESTAMP,
     "data": { "action": "buy", "confidence_score": 0.9, "reason": "Strong fundamentals." }
 }
-
-# A valid, standard error response that the adapter should handle gracefully.
 ERROR_RESPONSE_STANDARD = {
     "status": "error", "agent_type": "technical", "version": "2.0", "timestamp": TIMESTAMP,
     "error": {"code": 500, "message": "Agent failed to process"},
-    # Data block is still required by the model schema.
     "data": {"action": "hold", "confidence_score": 0.0, "reason": "N/A"}
 }
-
-# A malformed response that will fail normalization and result in `None`.
 UNNORMALIZABLE_RESPONSE = {"detail": "This response is invalid"}
 
 @pytest.fixture(autouse=True)
 def mock_db_client():
-    """Fixture to mock the DatabaseAgentClient for all tests in this module."""
+    """Fixture to mock the DatabaseAgentClient for all endpoint tests in this module."""
     with patch("app.main.DatabaseAgentClient") as mock:
         instance = mock.return_value.__aenter__.return_value
         instance.get_account_balance.return_value = AccountBalance(cash_balance=Decimal("10000.0"))
@@ -49,7 +44,7 @@ def mock_db_client():
         )
         yield mock
 
-# --- Test Cases ---
+# --- Endpoint Test Cases ---
 
 @patch('app.main.call_agents', new_callable=AsyncMock)
 def test_analyze_both_agents_succeed(mock_call_agents):
@@ -65,12 +60,10 @@ def test_analyze_both_agents_succeed(mock_call_agents):
 @patch('app.main.call_agents', new_callable=AsyncMock)
 def test_analyze_one_agent_returns_standard_error(mock_call_agents):
     """Test graceful handling when one agent returns a standard, well-formed error."""
-    # The adapter normalizes this error to a 'hold' action.
     mock_call_agents.return_value = (ERROR_RESPONSE_STANDARD, SUCCESS_FUND_RESPONSE)
     response = client.post("/analyze", json={"ticker": "GOOGL"})
     assert response.status_code == 200
     data = response.json()
-    # Status is 'complete' because the error was handled and normalized.
     assert data["status"] == "complete"
     assert data["details"]["technical"]["action"] == "hold"
     assert data["details"]["fundamental"]["action"] == "buy"
@@ -94,3 +87,44 @@ def test_analyze_both_agents_return_unnormalizable_data(mock_call_agents):
     response = client.post("/analyze", json={"ticker": "GOOGL"})
     assert response.status_code == 500
     assert "Both Technical and Fundamental Agents failed" in response.json()["detail"]
+
+# --- Unit Test for Database Client ---
+
+@pytest.mark.asyncio
+async def test_database_client_create_order_payload():
+    """
+    Unit test to verify that the DatabaseAgentClient correctly transforms
+    the 'order_type' field to 'side' in the JSON payload.
+    """
+    # Arrange: Instantiate a real client, but patch its _post method
+    with patch.object(DatabaseAgentClient, '_post', new_callable=AsyncMock) as mock_post:
+        # Configure the mock to return a valid dictionary on await
+        mock_post.return_value = {"order_id": 999, "status": "mocked_pending"}
+
+        client_under_test = DatabaseAgentClient()
+        order_body = CreateOrderBody(
+            client_order_id="test-uuid-123",
+            symbol="TEST",
+            order_type="BUY",
+            quantity=15,
+            price=Decimal("123.45")
+        )
+
+        # Act: Call the method to be tested
+        response = await client_under_test.create_order(account_id=1, order_body=order_body, correlation_id="corr-id-abc")
+
+        # Assert: Check that _post was called with the transformed payload
+        mock_post.assert_called_once()
+        call_kwargs = mock_post.call_args.kwargs
+        json_payload = call_kwargs.get('json_data', {})
+
+        assert 'side' in json_payload, "The key 'side' should be in the payload"
+        assert 'order_type' not in json_payload, "The key 'order_type' should not be in the payload"
+        assert json_payload['side'] == "BUY"
+        assert json_payload['client_order_id'] == "test-uuid-123"
+        assert json_payload['quantity'] == 15
+
+        # Assert: Check that the response is correctly parsed
+        assert isinstance(response, CreateOrderResponse)
+        assert response.order_id == 999
+        assert response.status == "mocked_pending"
