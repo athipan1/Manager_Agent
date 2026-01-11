@@ -92,6 +92,10 @@ class ResilientAgentClient:
         headers["X-Correlation-ID"] = correlation_id
 
         for attempt in range(self._max_retries):
+            if self._circuit_state == "OPEN":
+                raise AgentUnavailable(
+                    f"Circuit breaker is open for {self.base_url}. correlation_id={correlation_id}"
+                )
             try:
                 report_logger.info(
                     f"Attempt {attempt + 1}/{self._max_retries} to {method} {self.base_url}{url}, correlation_id={correlation_id}"
