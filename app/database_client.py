@@ -1,4 +1,5 @@
 import os
+import uuid
 from typing import List
 
 from .models import (
@@ -20,18 +21,24 @@ class DatabaseAgentClient(ResilientAgentClient):
     """
     def __init__(self):
         super().__init__(base_url=DATABASE_AGENT_URL)
+        # ดึง API Key จาก Environment Variable
         self._api_key = os.getenv("DATABASE_AGENT_API_KEY")
 
     async def _get(self, url: str, correlation_id: str, **kwargs) -> dict:
         headers = kwargs.pop("headers", {})
+        # ใส่ API Key และ Correlation ID ใน Header มาตรฐาน
         if self._api_key:
             headers["X-API-KEY"] = self._api_key
+        headers["X-Correlation-ID"] = correlation_id
+        
         return await super()._get(url, correlation_id, headers=headers, **kwargs)
 
     async def _post(self, url: str, correlation_id: str, json_data: dict, **kwargs) -> dict:
         headers = kwargs.pop("headers", {})
         if self._api_key:
             headers["X-API-KEY"] = self._api_key
+        headers["X-Correlation-ID"] = correlation_id
+        
         return await super()._post(url, correlation_id, json_data, headers=headers, **kwargs)
 
     async def get_account_balance(
@@ -47,11 +54,15 @@ class DatabaseAgentClient(ResilientAgentClient):
     async def create_order(
         self, account_id: int, order_body: CreateOrderBody, correlation_id: str
     ) -> CreateOrderResponse:
-        # Convert model to dictionary to modify it for API compatibility
+        # 1. แปลง Model เป็น Dictionary โดยตรง
         order_payload = order_body.model_dump()
 
-        # Rename 'order_type' to 'side' to match the Database_Agent's expected schema
-        order_payload['side'] = order_payload.pop('order_type')
+        # 2. แก้ไข: ไม่ต้อง pop('order_type') เพื่อเปลี่ยนเป็น 'side' อีกแล้ว
+        # ส่ง order_type ไปตรงๆ ตามที่ Database_Agent คาดหวัง
+        
+        # 3. (แนะนำเพิ่ม) ใส่ client_order_id หากใน model ไม่มี เพื่อป้องกันออเดอร์ซ้ำ (Idempotency)
+        if not order_payload.get('client_order_id'):
+            order_payload['client_order_id'] = str(uuid.uuid4())
 
         response_data = await self._post(
             f"/accounts/{account_id}/orders",
