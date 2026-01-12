@@ -1,3 +1,4 @@
+import os
 from typing import List
 
 from .models import (
@@ -19,6 +20,19 @@ class DatabaseAgentClient(ResilientAgentClient):
     """
     def __init__(self):
         super().__init__(base_url=DATABASE_AGENT_URL)
+        self._api_key = os.getenv("DATABASE_AGENT_API_KEY")
+
+    async def _get(self, url: str, correlation_id: str, **kwargs) -> dict:
+        headers = kwargs.pop("headers", {})
+        if self._api_key:
+            headers["X-API-KEY"] = self._api_key
+        return await super()._get(url, correlation_id, headers=headers, **kwargs)
+
+    async def _post(self, url: str, correlation_id: str, json_data: dict, **kwargs) -> dict:
+        headers = kwargs.pop("headers", {})
+        if self._api_key:
+            headers["X-API-KEY"] = self._api_key
+        return await super()._post(url, correlation_id, json_data, headers=headers, **kwargs)
 
     async def get_account_balance(
         self, account_id: int, correlation_id: str
