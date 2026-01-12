@@ -19,20 +19,9 @@ class DatabaseAgentClient(ResilientAgentClient):
     A client for the Database Agent service, built on top of ResilientAgentClient.
     """
     def __init__(self):
-        super().__init__(base_url=DATABASE_AGENT_URL)
-        self._api_key = os.getenv("DATABASE_AGENT_API_KEY")
-
-    async def _get(self, url: str, correlation_id: str, **kwargs) -> dict:
-        headers = kwargs.pop("headers", {})
-        if self._api_key:
-            headers["X-API-KEY"] = self._api_key
-        return await super()._get(url, correlation_id, headers=headers, **kwargs)
-
-    async def _post(self, url: str, correlation_id: str, json_data: dict, **kwargs) -> dict:
-        headers = kwargs.pop("headers", {})
-        if self._api_key:
-            headers["X-API-KEY"] = self._api_key
-        return await super()._post(url, correlation_id, json_data, headers=headers, **kwargs)
+        api_key = os.getenv("DATABASE_AGENT_API_KEY")
+        headers = {"X-API-KEY": api_key} if api_key else {}
+        super().__init__(base_url=DATABASE_AGENT_URL, headers=headers)
 
     async def get_account_balance(
         self, account_id: int, correlation_id: str
@@ -47,11 +36,7 @@ class DatabaseAgentClient(ResilientAgentClient):
     async def create_order(
         self, account_id: int, order_body: CreateOrderBody, correlation_id: str
     ) -> CreateOrderResponse:
-        # Convert model to dictionary to modify it for API compatibility
         order_payload = order_body.model_dump()
-
-        # Rename 'order_type' to 'side' to match the Database_Agent's expected schema
-        order_payload['side'] = order_payload.pop('order_type')
 
         response_data = await self._post(
             f"/accounts/{account_id}/orders",

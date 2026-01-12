@@ -93,8 +93,8 @@ def test_analyze_both_agents_return_unnormalizable_data(mock_call_agents):
 @pytest.mark.asyncio
 async def test_database_client_create_order_payload():
     """
-    Unit test to verify that the DatabaseAgentClient correctly transforms
-    the 'order_type' field to 'side' in the JSON payload.
+    Unit test to verify that the DatabaseAgentClient sends the correct payload
+    for creating an order, ensuring 'order_type' is present.
     """
     # Arrange: Instantiate a real client, but patch its _post method
     with patch.object(DatabaseAgentClient, '_post', new_callable=AsyncMock) as mock_post:
@@ -113,14 +113,14 @@ async def test_database_client_create_order_payload():
         # Act: Call the method to be tested
         response = await client_under_test.create_order(account_id=1, order_body=order_body, correlation_id="corr-id-abc")
 
-        # Assert: Check that _post was called with the transformed payload
+        # Assert: Check that _post was called with the correct payload
         mock_post.assert_called_once()
         call_kwargs = mock_post.call_args.kwargs
         json_payload = call_kwargs.get('json_data', {})
 
-        assert 'side' in json_payload, "The key 'side' should be in the payload"
-        assert 'order_type' not in json_payload, "The key 'order_type' should not be in the payload"
-        assert json_payload['side'] == "BUY"
+        assert 'order_type' in json_payload, "The key 'order_type' should be in the payload"
+        assert 'side' not in json_payload, "The key 'side' should not be in the payload"
+        assert json_payload['order_type'] == "BUY"
         assert json_payload['client_order_id'] == "test-uuid-123"
         assert json_payload['quantity'] == 15
 

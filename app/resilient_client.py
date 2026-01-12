@@ -34,8 +34,9 @@ class ResilientAgentClient:
         backoff_factor: float = AGENT_CLIENT_BACKOFF_FACTOR,
         failure_threshold: int = AGENT_CLIENT_FAILURE_THRESHOLD,
         cooldown_period: int = AGENT_CLIENT_COOLDOWN_PERIOD,
+        headers: Optional[Dict[str, str]] = None,
     ):
-        self._client = httpx.AsyncClient(base_url=base_url, timeout=timeout)
+        self._client = httpx.AsyncClient(base_url=base_url, timeout=timeout, headers=headers)
         self._max_retries = max_retries
         self._backoff_factor = backoff_factor
 

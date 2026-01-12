@@ -16,18 +16,17 @@ def mock_config():
 @pytest.mark.asyncio
 async def test_database_client_sends_api_key_header(mock_config):
     """
-    Verify that the DatabaseAgentClient includes the X-API-KEY header in its requests.
+    Verify that the DatabaseAgentClient initializes the HTTP client with the correct X-API-KEY header.
     """
-    with patch("app.resilient_client.ResilientAgentClient._get", new_callable=AsyncMock) as mock_get:
-        mock_get.return_value = {"cash_balance": 1000}
-
+    with patch("app.resilient_client.httpx.AsyncClient") as mock_async_client:
+        # This will trigger the __init__ chain and instantiate the mocked client
         client = DatabaseAgentClient()
-        await client.get_account_balance(account_id=1, correlation_id="test-corr-id")
 
-        mock_get.assert_called_once()
-        request_headers = mock_get.call_args.kwargs["headers"]
-        assert "X-API-KEY" in request_headers
-        assert request_headers["X-API-KEY"] == "test-api-key"
+        # Assert that the underlying httpx client was initialized with the correct header
+        mock_async_client.assert_called_once()
+        constructor_kwargs = mock_async_client.call_args.kwargs
+        assert "headers" in constructor_kwargs
+        assert constructor_kwargs["headers"]["X-API-KEY"] == "test-api-key"
 
 @pytest.mark.asyncio
 async def test_resilient_client_circuit_breaker_opens_after_failures():
