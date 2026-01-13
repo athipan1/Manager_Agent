@@ -16,8 +16,8 @@ ENV PATH="/opt/venv/bin:$PATH"
 
 # Install base dependencies into the venv.
 # This layer will be cached and reused by other services.
-COPY requirements.base.txt .
-RUN pip install --no-cache-dir -r requirements.base.txt
+COPY requirements.prod.base.txt .
+RUN pip install --no-cache-dir -r requirements.prod.base.txt
 
 # Create a non-root user for security.
 RUN addgroup --system app && adduser --system --group app
