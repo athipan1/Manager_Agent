@@ -13,6 +13,9 @@ TECHNICAL_AGENT_URL = os.getenv("TECHNICAL_AGENT_URL", "http://technical-agent:8
 FUNDAMENTAL_AGENT_URL = os.getenv("FUNDAMENTAL_AGENT_URL", "http://fundamental-agent:8001")
 DATABASE_AGENT_URL = os.getenv("DATABASE_AGENT_URL", "http://database-agent:8003")
 AUTO_LEARNING_AGENT_URL = os.getenv("AUTO_LEARNING_AGENT_URL", "http://learning-agent:8004")
+EXECUTION_AGENT_URL = os.getenv("EXECUTION_AGENT_URL", "http://execution-agent:8006")
+EXECUTION_API_KEY = os.getenv("EXECUTION_API_KEY", "your_secret_key")
+
 
 # Resilient Agent Client Parameters
 AGENT_CLIENT_TIMEOUT = int(os.getenv("AGENT_CLIENT_TIMEOUT", 10))

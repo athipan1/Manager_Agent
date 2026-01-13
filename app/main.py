@@ -13,6 +13,8 @@ from .agent_client import call_agents
 from .adapters.service import normalize_response
 from .adapters.database import normalize_database_response
 from .database_client import DatabaseAgentClient
+from .execution_client import ExecutionAgentClient
+from .models import CreateOrderRequest
 from .resilient_client import AgentUnavailable
 from .synthesis import get_weighted_verdict, get_reasons
 from .logger import report_logger
@@ -26,45 +28,57 @@ import asyncio
 app = FastAPI()
 
 
-async def _execute_trade(db_client: DatabaseAgentClient, trade_decision: dict, account_id: int, correlation_id: str) -> dict:
+async def _execute_trade(exec_client: ExecutionAgentClient, trade_decision: dict, account_id: int, correlation_id: str) -> dict:
     """
-    Executes a single trade and returns the outcome.
+    Submits a trade to the Execution Agent and returns the outcome.
     """
     ticker = trade_decision['symbol']
     final_verdict = trade_decision['action']
     quantity = trade_decision['position_size']
-    # NOTE: Entry price might need to be sourced more reliably for sells
     entry_price = trade_decision.get('entry_price', 0)
 
     try:
-        client_oid = str(uuid.uuid4())
-        order_body = CreateOrderBody(
-            client_order_id=client_oid,
+        # 1. Prepare data for Execution Agent
+        order_request = CreateOrderRequest(
             symbol=ticker,
-            order_type=final_verdict.upper(),
+            side=final_verdict,
             quantity=quantity,
-            price=entry_price
+            price=entry_price,
+            client_order_id=uuid.uuid4()
         )
-        new_order_response_raw = await db_client.create_order(account_id, order_body, correlation_id)
-        normalized_creation = normalize_database_response(new_order_response_raw)
 
-        if not new_order_response_raw or normalized_creation.data.status != "pending":
-            return {"status": "failed", "reason": "Failed to create trade order."}
+        # 2. Call the Execution Agent
+        async with exec_client as client:
+            response = await client.create_order(order_request, correlation_id)
 
-        order_id = normalized_creation.data.order_id
-        report_logger.info(f"Created order {order_id} to {final_verdict} {quantity} {ticker} @ {entry_price}, correlation_id={correlation_id}")
+        # 3. Handle response (accepting PENDING/PLACED as success)
+        if isinstance(response, dict) or not response:
+            reason = response.get("reason", "Unknown error from Execution Agent")
+            report_logger.error(f"Failed to submit order for {ticker}: {reason}, correlation_id={correlation_id}")
+            return {"status": "failed", "reason": reason}
 
-        executed_order_raw = await db_client.execute_order(order_id, correlation_id)
-        normalized_execution = normalize_database_response(executed_order_raw)
-
-        if not executed_order_raw or normalized_execution.data.status != "executed":
-            return {"status": "failed", "reason": f"Order {order_id} failed to execute. Status: {normalized_execution.data.status if executed_order_raw else 'N/A'}"}
-
-        report_logger.info(f"Successfully executed order {normalized_execution.data.order_id}, correlation_id={correlation_id}")
-        return {"status": "executed", "order_id": normalized_execution.data.order_id, "details": normalized_execution.data.model_dump()}
+        if response.status.upper() in ["PENDING", "PLACED"]:
+            report_logger.info(
+                f"Successfully submitted order for {ticker}. "
+                f"Execution Agent Order ID: {response.order_id}, "
+                f"Client Order ID: {response.client_order_id}, "
+                f"Status: {response.status}, correlation_id={correlation_id}"
+            )
+            # Return a structure consistent with the original function's success case
+            return {
+                "status": "submitted", # Renamed from "executed"
+                "order_id": response.order_id,
+                "details": response.model_dump()
+            }
+        else:
+            report_logger.warning(
+                f"Order for {ticker} was not accepted by Execution Agent. "
+                f"Status: {response.status}, correlation_id={correlation_id}"
+            )
+            return {"status": "rejected", "reason": f"Execution Agent returned status: {response.status}"}
 
     except Exception as e:
-        report_logger.error(f"Trade execution failed for {ticker}: {e}, correlation_id={correlation_id}")
+        report_logger.exception(f"Trade submission failed for {ticker}: {e}, correlation_id={correlation_id}")
         return {"status": "failed", "reason": str(e)}
 
 
@@ -212,7 +226,8 @@ async def analyze_ticker(request: AgentRequestBody):
                 report_logger.info(f"Risk Manager Decision: {trade_decision}")
 
                 if trade_decision.get("approved"):
-                    execution_result = await _execute_trade(db_client, trade_decision, account_id, correlation_id)
+                    async with ExecutionAgentClient() as exec_client:
+                        execution_result = await _execute_trade(exec_client, trade_decision, account_id, correlation_id)
                 else:
                     report_logger.warning(f"Trade for {ticker} rejected by Risk Manager: {trade_decision.get('reason')}, correlation_id={correlation_id}")
                     execution_result = {"status": "rejected", "reason": trade_decision.get('reason')}
@@ -297,8 +312,10 @@ async def analyze_tickers_endpoint(request: MultiAgentRequestBody):
 
             # --- Step 3: Independent Trade Execution ---
             approved_trades = [d for d in trade_decisions if d.get('approved')]
-            execution_tasks = [_execute_trade(db_client, decision, account_id, correlation_id) for decision in approved_trades]
-            execution_outcomes = await asyncio.gather(*execution_tasks)
+
+            async with ExecutionAgentClient() as exec_client:
+                execution_tasks = [_execute_trade(exec_client, decision, account_id, correlation_id) for decision in approved_trades]
+                execution_outcomes = await asyncio.gather(*execution_tasks)
 
             # --- Final Response Construction ---
             ticker_to_execution = {decision['symbol']: outcome for decision, outcome in zip(approved_trades, execution_outcomes)}
