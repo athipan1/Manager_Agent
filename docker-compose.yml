@@ -1,11 +1,21 @@
 version: '3.8'
 
 services:
+  # This service builds the shared base image that all other Python services will use.
+  base:
+    build:
+      context: .
+      dockerfile: base.Dockerfile
+    image: painaidee-base:latest
+
   manager-agent:
+    build:
+      context: .
+      dockerfile: Dockerfile
     image: painaidee/manager-agent:latest
     restart: always
     ports:
-      - "8000:8000"
+      - "8000:80"
     environment:
       TECHNICAL_AGENT_URL: http://technical-agent:8000
       FUNDAMENTAL_AGENT_URL: http://fundamental-agent:8001
@@ -77,9 +87,12 @@ services:
     environment:
       API_KEY: your_learning_api_key
 
+  # This service is also built from source and will use the shared base image.
+  # Note: This assumes a Dockerfile will be created in the ./execution-agent directory.
   execution-agent:
     build:
       context: ./execution-agent
+    image: painaidee/execution-agent:latest
     restart: always
     ports:
       - "8006:8005"
