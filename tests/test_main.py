@@ -6,8 +6,7 @@ from decimal import Decimal
 import uuid
 
 from app.main import app
-from app.models import AccountBalance
-from app.models import CreateOrderResponse as ExecutionCreateOrderResponse
+from app.models import AccountBalance, CreateOrderResponse, OrderStatus
 
 client = TestClient(app)
 
@@ -46,10 +45,10 @@ def mock_clients():
 
         # Mock ExecutionAgentClient for trade submission
         exec_instance = mock_exec.return_value.__aenter__.return_value
-        mock_order_response = ExecutionCreateOrderResponse(
-            status="PENDING",
-            order_id="EXEC-ORDER-MOCK-123",
-            client_order_id=uuid.uuid4()
+        mock_order_response = CreateOrderResponse(
+            order_id=12345,
+            client_order_id=str(uuid.uuid4()),
+            status=OrderStatus.PENDING,
         )
         exec_instance.create_order.return_value = mock_order_response
 
