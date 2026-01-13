@@ -11,6 +11,9 @@ TECHNICAL_AGENT_URL = "http://mock-technical-agent/analyze"
 FUNDAMENTAL_AGENT_URL = "http://mock-fundamental-agent/analyze"
 DATABASE_AGENT_URL = "http://mock-database-agent"
 AUTO_LEARNING_AGENT_URL = "http://mock-auto-learning-agent"
+EXECUTION_AGENT_URL = "http://mock-execution-agent"
+EXECUTION_API_KEY = "mock_api_key"
+
 
 # Risk Management Parameters (as constants)
 RISK_PER_TRADE = 0.01
