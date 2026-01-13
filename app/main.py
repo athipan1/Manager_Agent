@@ -369,7 +369,7 @@ async def analyze_tickers_endpoint(request: MultiAgentRequestBody):
                     execution=execution_result,
                 ))
 
-            total_executed = sum(1 for outcome in execution_outcomes if outcome['status'] == 'executed')
+            total_executed = sum(1 for outcome in execution_outcomes if outcome['status'] == 'submitted')
             total_failed = len(execution_outcomes) - total_executed
 
             # --- Auto-Learning Feedback Loop ---

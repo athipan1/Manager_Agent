@@ -33,33 +33,33 @@ def mock_analysis_result(ticker, final_verdict, tech_score=0.8, fund_score=0.7, 
         }
     }
 
+from app.models import CreateOrderResponse as ExecutionCreateOrderResponse
+import uuid
+
 @pytest.fixture
 def mock_high_level_dependencies():
-    """Mocks dependencies by patching _analyze_single_asset directly."""
+    """Mocks dependencies by patching _analyze_single_asset and _execute_trade."""
     with patch('app.main._analyze_single_asset', new_callable=AsyncMock) as mock_analyze, \
+         patch('app.main._execute_trade', new_callable=AsyncMock) as mock_execute_trade, \
          patch('app.main.DatabaseAgentClient', autospec=True) as mock_db_client_class, \
          patch('app.main.LearningAgentClient', autospec=True) as mock_learning_client:
 
-        # Let the test define the side effect for analysis
+        # Mock Database Client for portfolio data
         mock_db_instance = mock_db_client_class.return_value.__aenter__.return_value
         mock_db_instance.get_account_balance.return_value = AccountBalance(cash_balance=Decimal("100000.0"))
         mock_db_instance.get_positions.return_value = [Position(symbol="GOOG", quantity=50, average_cost=Decimal("90.0"), current_market_price=Decimal("120.0"))]
 
-        async def create_order_side_effect(account_id, order_body, correlation_id):
-            return CreateOrderResponse(status="pending", order_id=hash(order_body.symbol))
-        mock_db_instance.create_order.side_effect = create_order_side_effect
-
-        async def execute_order_side_effect(order_id, correlation_id):
-            now = datetime.datetime.now(datetime.timezone.utc).isoformat()
-            if order_id == hash("AAPL"): return Order(order_id=order_id, symbol="AAPL", status="executed", order_type="BUY", quantity=66, price=Decimal("150.0"), account_id=1, timestamp=now)
-            if order_id == hash("GOOG"): return Order(order_id=order_id, symbol="GOOG", status="executed", order_type="SELL", quantity=50, price=Decimal("120.0"), account_id=1, timestamp=now)
-            if order_id == hash("MSFT"): return Order(order_id=order_id, symbol="MSFT", status="executed", order_type="BUY", quantity=33, price=Decimal("300.0"), account_id=1, timestamp=now)
-        mock_db_instance.execute_order.side_effect = execute_order_side_effect
+        # Mock _execute_trade to always return a successful submission status
+        mock_execute_trade.return_value = {"status": "submitted", "order_id": "mock-order-id", "details": {}}
 
         mock_learning_instance = mock_learning_client.return_value
         mock_learning_instance.trigger_learning_cycle.return_value = None
 
-        yield { "analyze": mock_analyze, "learning": mock_learning_instance }
+        yield {
+            "analyze": mock_analyze,
+            "execute": mock_execute_trade,
+            "learning": mock_learning_instance
+        }
 
 # --- Tests ---
 
