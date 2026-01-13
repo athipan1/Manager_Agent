@@ -11,7 +11,7 @@ services:
       FUNDAMENTAL_AGENT_URL: http://fundamental-agent:8001
       DATABASE_AGENT_URL: http://database-agent:8003
       AUTO_LEARNING_AGENT_URL: http://learning-agent:8004
-      EXECUTION_AGENT_URL: http://execution-agent:8006
+      EXECUTION_AGENT_URL: http://execution-agent:8005
       EXECUTION_API_KEY: your_secret_key
       DEFAULT_ACCOUNT_ID: 1
       RISK_PER_TRADE: 0.01
@@ -78,9 +78,13 @@ services:
       API_KEY: your_learning_api_key
 
   execution-agent:
-    image: painaidee/execution-agent:latest
+    build:
+      context: ./execution-agent
     restart: always
-    expose:
-      - "8006"
+    ports:
+      - "8006:8005"
     environment:
-      BROKER_API_KEY: your_broker_key
+      API_KEY: your_secret_key
+      DB_AGENT_URL: http://database-agent:8003
+    depends_on:
+      - database-agent

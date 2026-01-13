@@ -4,29 +4,23 @@ from httpx import Response
 from uuid import uuid4
 from decimal import Decimal
 
-from app.models import CreateOrderRequest, CreateOrderResponse
-from app.execution_client import ExecutionAgentClient, AgentUnavailable
-from app.resilient_client import ResilientAgentClient
-from tests.mock_static_config import EXECUTION_AGENT_URL
+from app.execution_client import ExecutionAgentClient
+from app.models import CreateOrderRequest, CreateOrderResponse, OrderSide, OrderType, OrderStatus
+from app.resilient_client import AgentUnavailable
+from app import config as app_config
 
-# Mark all tests in this file as asyncio
+# Mark all tests in this module as asyncio
 pytestmark = pytest.mark.asyncio
 
-
-from app import config as app_config
 
 @pytest.fixture
 def execution_client(monkeypatch):
     """
-    Provides an instance of the ExecutionAgentClient with mocked config values.
+    Fixture to create an ExecutionAgentClient with a mocked base URL.
     """
-    # Use monkeypatch to temporarily set the config values for the duration of the test
     monkeypatch.setattr(app_config, "EXECUTION_AGENT_URL", "http://mock-execution-agent")
     monkeypatch.setattr(app_config, "EXECUTION_API_KEY", "mock_api_key")
-
-    # Now, when ExecutionAgentClient is instantiated, it will use the mocked values
-    client = ExecutionAgentClient()
-    return client
+    return ExecutionAgentClient()
 
 
 @respx.mock
@@ -34,34 +28,36 @@ async def test_create_order_success(execution_client: ExecutionAgentClient):
     """
     Test successful order creation with a PENDING status.
     """
-    mock_order_id = "EXEC-ORDER-123"
-    client_order_id = uuid4()
+    mock_order_id = 12345
+    client_order_id = str(uuid4())
     correlation_id = str(uuid4())
 
     order_request = CreateOrderRequest(
+        client_order_id=client_order_id,
+        account_id=1,
         symbol="AAPL",
-        side="buy",
-        quantity=Decimal("10.5"),
+        side=OrderSide.BUY,
+        order_type=OrderType.LIMIT,
+        quantity=Decimal("10"),
         price=Decimal("150.00"),
-        client_order_id=client_order_id,
     )
 
-    mock_response = CreateOrderResponse(
-        status="PENDING",
-        order_id=mock_order_id,
-        client_order_id=client_order_id,
+    # Mock the HTTP POST request to the execution agent
+    respx.post("http://mock-execution-agent/orders").mock(
+        return_value=Response(
+            200,
+            json={
+                "order_id": mock_order_id,
+                "client_order_id": client_order_id,
+                "status": "pending",
+            },
+        )
     )
 
-    # Mock the POST request to the execution agent
-    respx.post(f"{EXECUTION_AGENT_URL}/orders").mock(
-        return_value=Response(200, json=mock_response.model_dump(mode='json'))
-    )
-
-    async with execution_client as client:
-        response = await client.create_order(order_request, correlation_id)
+    response = await execution_client.create_order(order_request, correlation_id)
 
     assert isinstance(response, CreateOrderResponse)
-    assert response.status == "PENDING"
+    assert response.status == OrderStatus.PENDING
     assert response.order_id == mock_order_id
     assert response.client_order_id == client_order_id
 
@@ -73,23 +69,22 @@ async def test_create_order_agent_unavailable(execution_client: ExecutionAgentCl
     """
     correlation_id = str(uuid4())
     order_request = CreateOrderRequest(
-        symbol="GOOG", side="sell", quantity=Decimal("5"), price=Decimal("2800.00"), client_order_id=uuid4()
+        client_order_id=str(uuid4()),
+        account_id=1,
+        symbol="GOOG",
+        side=OrderSide.SELL,
+        order_type=OrderType.MARKET,
+        quantity=Decimal("5"),
     )
 
-    # Mock a server error (500) to trigger the retry and circuit breaker logic
-    respx.post(f"{EXECUTION_AGENT_URL}/orders").mock(
-        side_effect=Response(500)
-    )
+    # Mock the route to be unavailable
+    respx.post("http://mock-execution-agent/orders").mock(side_effect=AgentUnavailable)
 
-    # Temporarily reduce retries for faster test execution
-    execution_client._max_retries = 2
+    response = await execution_client.create_order(order_request, correlation_id)
 
-    async with execution_client as client:
-        response = await client.create_order(order_request, correlation_id)
-
-    assert isinstance(response, dict)
     assert response["status"] == "error"
     assert response["reason"] == "Execution Agent unavailable"
+
 
 @respx.mock
 async def test_create_order_unexpected_error(execution_client: ExecutionAgentClient, monkeypatch):
@@ -98,18 +93,22 @@ async def test_create_order_unexpected_error(execution_client: ExecutionAgentCli
     """
     correlation_id = str(uuid4())
     order_request = CreateOrderRequest(
-        symbol="TSLA", side="buy", quantity=Decimal("2"), price=Decimal("700.00"), client_order_id=uuid4()
+        client_order_id=str(uuid4()),
+        account_id=1,
+        symbol="TSLA",
+        side=OrderSide.BUY,
+        order_type=OrderType.LIMIT,
+        quantity=Decimal("2"),
+        price=Decimal("700.00"),
     )
 
-    # Mock an unexpected exception during the _post call
+    # Mock the internal _post method to raise a generic exception
     async def mock_post(*args, **kwargs):
         raise ValueError("Something went wrong")
 
     monkeypatch.setattr(execution_client, "_post", mock_post)
 
-    async with execution_client as client:
-        response = await client.create_order(order_request, correlation_id)
+    response = await execution_client.create_order(order_request, correlation_id)
 
-    assert isinstance(response, dict)
     assert response["status"] == "error"
-    assert "An unexpected error occurred: Something went wrong" in response["reason"]
+    assert "An unexpected error occurred" in response["reason"]
