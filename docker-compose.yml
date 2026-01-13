@@ -2,11 +2,11 @@ version: '3.8'
 
 services:
   manager-agent:
-    build: .
+    image: painaidee/manager-agent:latest
+    restart: always
     ports:
       - "8000:8000"
     environment:
-      # Ensure these environment variables are set correctly
       TECHNICAL_AGENT_URL: http://technical-agent:8000
       FUNDAMENTAL_AGENT_URL: http://fundamental-agent:8001
       DATABASE_AGENT_URL: http://database-agent:8003
@@ -25,61 +25,62 @@ services:
       FUNDAMENTAL_AGENT_WEIGHT: 0.5
       LEARNING_MODE: conservative
       WINDOW_SIZE: 50
-      # DB Client specific (can be different)
       DB_CLIENT_TIMEOUT: 10
       DB_CLIENT_MAX_RETRIES: 3
       DB_CLIENT_BACKOFF_FACTOR: 0.5
       DB_CLIENT_FAILURE_THRESHOLD: 5
       DB_CLIENT_COOLDOWN_PERIOD: 30
-      # Generic Agent Client
       AGENT_CLIENT_TIMEOUT: 10
       AGENT_CLIENT_MAX_RETRIES: 3
       AGENT_CLIENT_BACKOFF_FACTOR: 0.5
       AGENT_CLIENT_FAILURE_THRESHOLD: 5
       AGENT_CLIENT_COOLDOWN_PERIOD: 30
       ASSET_BIASES: "{}"
-    volumes:
-      - ./logs:/app/logs
-      - ./config_data:/app/config_data
     depends_on:
       - technical-agent
       - fundamental-agent
       - database-agent
       - learning-agent
+      - execution-agent
 
   technical-agent:
-    build: ./Technical_Agent
-    ports:
-      - "8001:8000"
+    image: painaidee/technical-agent:latest
+    restart: always
+    expose:
+      - "8000"
     environment:
       API_KEY: your_technical_api_key
-    volumes:
-      - ./Technical_Agent/app:/app/app
 
   fundamental-agent:
-    build: ./Fundamental_Agent
-    ports:
-      - "8002:8001" # Host port was conflicting with technical-agent, changed to 8002
+    image: painaidee/fundamental-agent:latest
+    restart: always
+    expose:
+      - "8001"
     environment:
       API_KEY: your_fundamental_api_key
-    volumes:
-      - ./Fundamental_Agent/app:/app/app
 
   database-agent:
-    build: ./Database_Agent
-    ports:
-      - "8003:8000"
+    image: painaidee/database-agent:latest
+    restart: always
+    expose:
+      - "8003"
     environment:
       API_KEY: your_database_api_key
     volumes:
-      - ./Database_Agent/app:/app/app
-      - ./Database_Agent/example.db:/app/example.db
+      - ./data:/app/data
 
   learning-agent:
-    build: ./Learning_Agent
-    ports:
-      - "8004:8000"
+    image: painaidee/learning-agent:latest
+    restart: always
+    expose:
+      - "8004"
     environment:
       API_KEY: your_learning_api_key
-    volumes:
-      - ./Learning_Agent/learning_agent:/app/learning_agent
+
+  execution-agent:
+    image: painaidee/execution-agent:latest
+    restart: always
+    expose:
+      - "8006"
+    environment:
+      BROKER_API_KEY: your_broker_key
