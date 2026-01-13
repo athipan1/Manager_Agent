@@ -78,6 +78,7 @@ class ResilientAgentClient:
         method: str,
         url: str,
         correlation_id: str,
+        extra_headers: Optional[Dict[str, str]] = None,
         **kwargs,
     ) -> httpx.Response:
         if self._circuit_state == "OPEN":
@@ -91,6 +92,8 @@ class ResilientAgentClient:
 
         headers = kwargs.pop("headers", {})
         headers["X-Correlation-ID"] = correlation_id
+        if extra_headers:
+            headers.update(extra_headers)
 
         for attempt in range(self._max_retries):
             if self._circuit_state == "OPEN":
@@ -145,6 +148,20 @@ class ResilientAgentClient:
         response = await self._request("GET", url, correlation_id, **kwargs)
         return response.json()
 
-    async def _post(self, url: str, correlation_id: str, json_data: Dict[str, Any], **kwargs) -> Dict[str, Any]:
-        response = await self._request("POST", url, correlation_id, json=json_data, **kwargs)
+    async def _post(
+        self,
+        url: str,
+        correlation_id: str,
+        json_data: Dict[str, Any],
+        extra_headers: Optional[Dict[str, str]] = None,
+        **kwargs,
+    ) -> Dict[str, Any]:
+        response = await self._request(
+            "POST",
+            url,
+            correlation_id,
+            json=json_data,
+            extra_headers=extra_headers,
+            **kwargs,
+        )
         return response.json()

@@ -6,7 +6,7 @@ from decimal import Decimal
 
 from .models import (
     AgentRequestBody, OrchestratorResponse, ReportDetail, ReportDetails,
-    CreateOrderBody, MultiAgentRequestBody, MultiOrchestratorResponse,
+    MultiAgentRequestBody, MultiOrchestratorResponse,
     AssetResult, ExecutionSummary, AnalysisResult, ExecutionResult
 )
 from .agent_client import call_agents

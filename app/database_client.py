@@ -5,7 +5,7 @@ from .models import (
     AccountBalance,
     Position,
     Order,
-    CreateOrderBody,
+    CreateOrderRequest,
     CreateOrderResponse,
     Trade,
     PortfolioMetrics,
@@ -34,9 +34,9 @@ class DatabaseAgentClient(ResilientAgentClient):
         return [Position(**p) for p in response_data]
 
     async def create_order(
-        self, account_id: int, order_body: CreateOrderBody, correlation_id: str
+        self, account_id: int, order_body: CreateOrderRequest, correlation_id: str
     ) -> CreateOrderResponse:
-        order_payload = order_body.model_dump()
+        order_payload = order_body.model_dump(mode='json')
 
         response_data = await self._post(
             f"/accounts/{account_id}/orders",

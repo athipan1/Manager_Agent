@@ -1,4 +1,3 @@
-from uuid import UUID
 import json
 from .resilient_client import ResilientAgentClient, AgentUnavailable
 from .models import CreateOrderRequest, CreateOrderResponse
@@ -33,6 +32,7 @@ class ExecutionAgentClient(ResilientAgentClient):
         try:
             # Pydantic's model_dump is used for serialization, including Decimals
             payload = order_details.model_dump(mode='json')
+            idempotency_key = order_details.client_order_id
 
             report_logger.info(
                 f"Sending order to Execution Agent: {payload}, correlation_id={correlation_id}"
@@ -42,6 +42,7 @@ class ExecutionAgentClient(ResilientAgentClient):
                 endpoint,
                 correlation_id,
                 json_data=payload,
+                extra_headers={"Idempotency-Key": idempotency_key},
             )
 
             return CreateOrderResponse.model_validate(response_data)

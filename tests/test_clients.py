@@ -4,7 +4,7 @@ from unittest.mock import patch, AsyncMock
 from app.database_client import DatabaseAgentClient
 from app.resilient_client import ResilientAgentClient, AgentUnavailable
 from app.config import DATABASE_AGENT_URL
-from httpx import TimeoutException
+from httpx import TimeoutException, Response
 
 @pytest.fixture
 def mock_config():
@@ -58,3 +58,46 @@ async def test_resilient_client_circuit_breaker_opens_after_failures():
 
         # Assert that the request was only called twice (the initial failures)
         assert mock_client.request.call_count == 2
+
+from uuid import uuid4
+from decimal import Decimal
+import respx
+from app.models import CreateOrderRequest, CreateOrderResponse, OrderSide, OrderType, OrderStatus
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_database_client_create_order(mock_config):
+    """
+    Verify that the DatabaseAgentClient can successfully create an order.
+    """
+    client = DatabaseAgentClient()
+    correlation_id = str(uuid4())
+    client_order_id = str(uuid4())
+    order_request = CreateOrderRequest(
+        client_order_id=client_order_id,
+        account_id=1,
+        symbol="AAPL",
+        side=OrderSide.BUY,
+        order_type=OrderType.LIMIT,
+        quantity=Decimal("10"),
+        price=Decimal("150.00"),
+    )
+    mock_order_id = 12345
+
+    respx.post(f"{DATABASE_AGENT_URL}/accounts/1/orders").mock(
+        return_value=Response(
+            200,
+            json={
+                "order_id": mock_order_id,
+                "client_order_id": client_order_id,
+                "status": "pending",
+            },
+        )
+    )
+
+    response = await client.create_order(1, order_request, correlation_id)
+
+    assert isinstance(response, CreateOrderResponse)
+    assert response.status == OrderStatus.PENDING
+    assert response.order_id == mock_order_id
+    assert response.client_order_id == client_order_id
