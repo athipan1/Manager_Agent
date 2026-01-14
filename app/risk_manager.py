@@ -92,13 +92,13 @@ def assess_trade(
 
     if action_lower == "sell":
         if current_position_size > 0:
-            return _prepare_and_log_result(approved=True, reason="Approval to sell existing position.", symbol=symbol, action=action_lower, position_size=current_position_size, risk_amount=Decimal("0.0"))
+            return _prepare_and_log_result(approved=True, reason="Approval to sell existing position.", symbol=symbol, action=action_lower, position_size=int(current_position_size), risk_amount=Decimal("0.0"))
         else:
             return _prepare_and_log_result(reason="Sell rejected. No existing position to sell.", symbol=symbol, action=action_lower, position_size=0, risk_amount=Decimal("0.0"))
 
     if action_lower == "cover":
         if current_position_size < 0:
-            return _prepare_and_log_result(approved=True, reason="Approval to cover existing short position.", symbol=symbol, action=action_lower, position_size=abs(current_position_size), risk_amount=Decimal("0.0"))
+            return _prepare_and_log_result(approved=True, reason="Approval to cover existing short position.", symbol=symbol, action=action_lower, position_size=int(abs(current_position_size)), risk_amount=Decimal("0.0"))
         else:
             return _prepare_and_log_result(reason="Cover rejected. No existing short position to cover.", symbol=symbol, action=action_lower, position_size=0, risk_amount=Decimal("0.0"))
 
@@ -165,9 +165,12 @@ def assess_trade(
         risk_amount_per_trade = Decimal(position_size) * risk_per_share
         reason = f"Position size scaled down from {original_size} to {position_size} to respect max_position_pct."
 
+    # Final conversion to int for position_size
+    final_position_size = int(position_size)
+
     return _prepare_and_log_result(
         approved=True, reason=reason, symbol=symbol, action=action_lower,
-        position_size=position_size, stop_loss=final_stop_loss,
+        position_size=final_position_size, stop_loss=final_stop_loss,
         take_profit=final_take_profit, risk_reward_ratio=risk_reward_ratio,
         risk_amount=risk_amount_per_trade, entry_price=entry_price
     )

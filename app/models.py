@@ -188,8 +188,8 @@ class CreateOrderRequest(BaseModel):
     symbol: str
     side: OrderSide
     order_type: OrderType
-    price: Optional[Decimal] = None
-    quantity: Decimal
+    price: Optional[float] = None
+    quantity: int
     time_in_force: TimeInForce = TimeInForce.GTC
 
 
