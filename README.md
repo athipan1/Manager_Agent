@@ -7,29 +7,42 @@ Orchestrator (ศูนย์บัญชาการ)
 	•	normalize response schema
 	•	ส่งผลรวมให้ Learning Agent
 
----
+โปรเจกต์นี้คือระบบ "Orchestrator" สำหรับการซื้อขายสินทรัพย์อัตโนมัติ ที่ทำหน้าที่เป็นศูนย์กลางในการรวบรวมข้อมูล, วิเคราะห์, จัดการความเสี่ยง, และส่งคำสั่งซื้อขาย โดยมี Flow การทำงานหลัก 2 รูปแบบคือ:
 
-### ❗ Best Practices for AI/ML Models (แนวทางปฏิบัติที่ดีที่สุดสำหรับโมเดล AI/ML)
+1. การวิเคราะห์สินทรัพย์เดียว (/analyze)
 
-To ensure that the Docker images remain small, fast, and secure, **AI/ML models, datasets, or checkpoints should NOT be copied directly into the image.** Including these large files directly into the image leads to several problems:
-*   **Large Image Size:** Models can be hundreds of megabytes or even gigabytes, which dramatically increases the image size.
-*   **Slow Builds & Transfers:** Larger images are slower to build, push to a registry, and pull onto a server.
-*   **Tight Coupling:** The model is "baked in" to the application. Updating the model requires rebuilding and redeploying the entire service.
+รับ Request: ระบบรับ ticker (ชื่อย่อสินทรัพย์) และ account_id ที่ต้องการวิเคราะห์
+ดึงข้อมูลบัญชี: ติดต่อ Database-Agent เพื่อดึงข้อมูลทางการเงินล่าสุดของบัญชี เช่น เงินสดคงเหลือ, รายการสินทรัพย์ที่ถืออยู่ (positions)
+รวบรวมข้อมูลวิเคราะห์: ส่ง ticker ไปให้ Technical-Agent และ Fundamental-Agent ทำงานพร้อมกัน (concurrently) เพื่อวิเคราะห์ในมุมของแต่ละ Agent
+แปลงข้อมูล (Normalize): นำผลลัพธ์ที่ได้จาก Agent ทั้งสองมาแปลงให้อยู่ในรูปแบบข้อมูลมาตรฐาน (Canonical Model) ที่ระบบเข้าใจตรงกัน
+สังเคราะห์ผลลัพธ์ (Synthesize): นำข้อมูลที่แปลงแล้วมาคำนวณเพื่อให้ได้ "Final Verdict" (เช่น "buy", "sell", "hold") โดยมีการให้น้ำหนัก (weight) คะแนนจากแต่ละ Agent ตามที่ตั้งค่าไว้ และอาจมีการปรับค่าตาม "Bias" ของสินทรัพย์นั้นๆ
+จัดการความเสี่ยง (Risk Management):
+ถ้า "Final Verdict" เป็น "buy" หรือ "sell" ระบบจะนำข้อมูลเข้าสู่ Risk Manager
+Risk Manager จะประเมินว่าควรเปิด position หรือไม่ โดยพิจารณาจาก:
+มูลค่าพอร์ตโดยรวม
+ความเสี่ยงที่ตั้งค่าไว้ต่อการเทรดหนึ่งครั้ง (RISK_PER_TRADE)
+เปอร์เซ็นต์การตัดขาดทุน (STOP_LOSS_PERCENTAGE)
+ขนาด position สูงสุดที่อนุญาต (MAX_POSITION_PERCENTAGE)
+ราคาเข้าซื้อ และจุดตัดขาดทุนจาก Technical Agent (ถ้ามี)
+หากการเทรดได้รับการอนุมัติ (approved), Risk Manager จะคำนวณขนาดของ position (จำนวนที่ต้องซื้อ/ขาย)
+ส่งคำสั่งซื้อขาย (Execution):
+ถ้าการเทรดได้รับการอนุมัติจาก Risk Manager, ระบบจะสร้างคำสั่งและส่งไปยัง Execution-Agent
+Execution-Agent จะรับผิดชอบการส่งคำสั่งไปยังตลาดจริงๆ และคืนสถานะกลับมา (เช่น "PENDING", "PLACED")
+วงจรการเรียนรู้ (Learning Feedback Loop):
+ไม่ว่าการซื้อขายจะเกิดขึ้นหรือไม่, ระบบจะส่งข้อมูลผลลัพธ์ทั้งหมด (ข้อมูลวิเคราะห์, ผลการตัดสินใจของ Risk Manager, ผลการส่งคำสั่ง) ไปยัง Learning-Agent
+Learning-Agent จะใช้ข้อมูลนี้เพื่อเรียนรู้และอาจจะมีการปรับเปลี่ยนนโยบายหรือพารามิเตอร์ต่างๆ (Policy Deltas) กลับมายัง Orchestrator เพื่อใช้ในการตัดสินใจครั้งต่อไป
+ส่งผลลัพธ์กลับ: ระบบจะสร้าง Report สรุปผลการทำงานทั้งหมดและส่งกลับไปยังผู้เรียก
+2. การวิเคราะห์หลายสินทรัพย์ (/analyze-multi)
 
-#### Recommended Approach: Externalize Models
+Workflow นี้จะซับซ้อนขึ้นมาอีกระดับ โดยออกแบบมาเพื่อวิเคราะห์สินทรัพย์หลายตัวพร้อมกันและจัดการความเสี่ยงในระดับพอร์ตโฟลิโอ:
 
-The best practice is to load models at runtime from an external source. This keeps the application image small and decouples the model lifecycle from the application lifecycle.
-
-**Options for Externalizing Models:**
-
-1.  **Cloud Storage (e.g., AWS S3, Google Cloud Storage):**
-    *   **How it works:** Store your model files in a cloud storage bucket. At application startup, your code downloads the model file into memory or a temporary local directory.
-    *   **Best for:** General-purpose, cost-effective storage.
-
-2.  **Model Registries (e.g., Hugging Face Hub, MLflow, AWS SageMaker Model Registry):**
-    *   **How it works:** Use a dedicated service to host and version your models. Your application can pull a specific model version using an SDK or API call.
-    *   **Best for:** Projects that require robust model versioning, tracking, and governance.
-
-3.  **Dedicated Model Serving API:**
-    *   **How it works:** Deploy your model as its own microservice (e.g., using TensorFlow Serving, TorchServe, or a custom FastAPI server). Your main application then calls this service via an API to get predictions.
-    *   **Best for:** Large models or situations where the model requires specific hardware (like GPUs) that the main application doesn't need.
+วิเคราะห์พร้อมกัน: ทำการวิเคราะห์สินทรัพย์แต่ละตัวตามขั้นตอนที่ 1-5 ของ /analyze พร้อมๆ กัน
+จัดการความเสี่ยงระดับพอร์ต (Portfolio Risk Management):
+นำผลการวิเคราะห์ของทุกสินทรัพย์ที่ "น่าสนใจ" (มี verdict เป็น buy/sell) เข้าสู่ Portfolio Risk Manager
+ระบบจะประเมินภาพรวมของพอร์ต โดยพิจารณาจาก:
+งบประมาณความเสี่ยงทั้งหมดสำหรับ Request นี้ (PER_REQUEST_RISK_BUDGET)
+สัดส่วนความเสี่ยงรวมของพอร์ต (MAX_TOTAL_EXPOSURE)
+และปัจจัยอื่นๆ ที่ใช้ใน assess_trade
+Portfolio Risk Manager จะตัดสินใจว่าจะอนุมัติการเทรดตัวไหนบ้าง และจัดลำดับความสำคัญ เพื่อให้มั่นใจว่าความเสี่ยงโดยรวมไม่เกินที่กำหนด
+ส่งคำสั่งซื้อขาย: ส่งคำสั่งซื้อขายสำหรับทุก trade ที่ได้รับการอนุมัติจาก Portfolio Risk Manager ไปยัง Execution-Agent พร้อมๆ กัน
+สรุปผลและเรียนรู้: รวบรวมผลลัพธ์การซื้อขายทั้งหมด สร้างเป็น Report ใหญ่ และส่งข้อมูลการเทรดที่ "สำคัญที่สุด" (impactful) ไปให้ Learning-Agent เพื่อปรับปรุงนโยบายต่อไป
