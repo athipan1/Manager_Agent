@@ -12,75 +12,49 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v3
 
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v2
-
-      - name: Build & Run Docker Compose
+      - name: Set up Docker Compose
         run: |
-          docker compose up -d --build
+          docker compose version
+
+      - name: Pull images
+        run: |
+          docker compose pull
+
+      - name: Run services
+        run: |
+          docker compose up -d
           docker compose ps
 
-      # รอให้ service ทุกตัวพร้อม
       - name: Wait for services
         run: |
-          echo "⏳ Waiting for services to be ready..."
+          echo "⏳ waiting for services..."
           sleep 20
 
-      # =========================
-      # Health check: Technical Agent
-      # =========================
-      - name: Check Technical Agent API
+      - name: Health Check: Technical Agent
         run: |
-          curl -f http://localhost:8002/health || exit 1
+          curl -f http://localhost:8002/health
 
-      # =========================
-      # Health check: Fundamental Agent
-      # =========================
-      - name: Check Fundamental Agent API
+      - name: Health Check: Fundamental Agent
         run: |
-          curl -f http://localhost:8001/health || exit 1
+          curl -f http://localhost:8001/health
 
-      # =========================
-      # Health check: Orchestrator
-      # =========================
-      - name: Check Manager Health
+      - name: Health Check: Orchestrator
         run: |
-          curl -f http://localhost:8080/health || exit 1
+          curl -f http://localhost:8080/health
 
-      # =========================
-      # Integration Test
-      # Orchestrator -> Agents
-      # =========================
-      - name: Test Menager → Agent Communication
+      - name: Integration Test: Manager → Agents
         run: |
           curl -X POST http://localhost:8080/analyze \
             -H "Content-Type: application/json" \
-            -d '{
-              "symbol": "AAPL",
-              "mode": "test"
-            }' || exit 1
+            -d '{"symbol":"AAPL","mode":"test"}'
 
-      # =========================
-      # Debug logs if failure
-      # =========================
-      - name: Show Docker Logs (on failure)
+      - name: Show Logs (on failure)
         if: failure()
         run: |
           docker compose logs
 
-
-
       - name: Free disk space
-  run: |
-    docker system prune -af
-    docker volume prune -f
-    sudo rm -rf /usr/share/dotnet
-    sudo rm -rf /opt/ghc
-    sudo rm -rf /usr/local/lib/android
-
-
-
-        
-
-
-
+        if: always()
+        run: |
+          docker system prune -af
+          docker volume prune -f
