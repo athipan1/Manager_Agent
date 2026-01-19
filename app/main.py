@@ -23,9 +23,50 @@ from .portfolio_risk_manager import assess_portfolio_trades
 from .config_manager import config_manager
 from .learning_client import LearningAgentClient
 import asyncio
+from fastapi import Depends, status
+from fastapi.responses import JSONResponse
+from .resilient_client import ResilientAgentClient
 
 
 app = FastAPI()
+
+
+@app.get("/health")
+async def health_check():
+    """
+    Health check endpoint for liveness and readiness probes.
+    Checks connectivity to critical downstream services.
+    """
+    # Liveness is implicitly checked by the service responding.
+    is_healthy = True
+    downstream_services = {
+        "database_agent": {"status": "healthy", "details": "Connected successfully."},
+        # In a real system, you'd add other critical services here.
+    }
+
+    # Readiness: Check connection to the Database Agent
+    try:
+        async with DatabaseAgentClient() as db_client:
+            # Perform a lightweight, non-mutating query to confirm connectivity.
+            # Using a non-existent ID is a common pattern for this.
+            await db_client.get_account_balance(account_id=-1, correlation_id=str(uuid.uuid4()))
+
+    except Exception as e:
+        is_healthy = False
+        downstream_services["database_agent"]["status"] = "unhealthy"
+        downstream_services["database_agent"]["details"] = f"Connection failed: {str(e)}"
+        report_logger.warning(f"Health check failed: Database Agent connection error: {e}")
+
+    if is_healthy:
+        return JSONResponse(
+            status_code=status.HTTP_200_OK,
+            content={"status": "ok", "dependencies": downstream_services}
+        )
+    else:
+        return JSONResponse(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            content={"status": "unhealthy", "dependencies": downstream_services}
+        )
 
 
 async def _execute_trade(exec_client: ExecutionAgentClient, trade_decision: dict, account_id: int, correlation_id: str) -> dict:

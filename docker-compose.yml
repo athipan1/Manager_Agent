@@ -16,6 +16,11 @@ services:
     restart: always
     ports:
       - "8000:80"
+    healthcheck:
+      test: ["CMD", "python", "/app/healthcheck.py"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
     environment:
       TECHNICAL_AGENT_URL: http://technical-agent:8000
       FUNDAMENTAL_AGENT_URL: http://fundamental-agent:8001
