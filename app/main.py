@@ -47,9 +47,7 @@ async def health_check():
     # Readiness: Check connection to the Database Agent
     try:
         async with DatabaseAgentClient() as db_client:
-            # Perform a lightweight, non-mutating query to confirm connectivity.
-            # Using a non-existent ID is a common pattern for this.
-            await db_client.get_account_balance(account_id=-1, correlation_id=str(uuid.uuid4()))
+            await db_client.health(correlation_id=str(uuid.uuid4()))
 
     except Exception as e:
         is_healthy = False

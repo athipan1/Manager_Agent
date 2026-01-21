@@ -90,10 +90,11 @@ class ResilientAgentClient:
                     f"Circuit breaker is open for {self.base_url}. correlation_id={correlation_id}"
                 )
 
-        headers = kwargs.pop("headers", {})
-        headers["X-Correlation-ID"] = correlation_id
+        # Combine headers from the client, the call-site, and extra headers
+        combined_headers = {**self._client.headers, **kwargs.pop("headers", {})}
+        combined_headers["X-Correlation-ID"] = correlation_id
         if extra_headers:
-            headers.update(extra_headers)
+            combined_headers.update(extra_headers)
 
         for attempt in range(self._max_retries):
             if self._circuit_state == "OPEN":
@@ -105,7 +106,7 @@ class ResilientAgentClient:
                     f"Attempt {attempt + 1}/{self._max_retries} to {method} {self.base_url}{url}, correlation_id={correlation_id}"
                 )
                 response = await self._client.request(
-                    method, url, headers=headers, **kwargs
+                    method, url, headers=combined_headers, **kwargs
                 )
                 response.raise_for_status()
                 self._handle_successful_response()
