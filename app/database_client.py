@@ -15,6 +15,8 @@ from .config import DATABASE_AGENT_URL
 from .resilient_client import ResilientAgentClient, AgentUnavailable
 
 class DatabaseAgentClient(ResilientAgentClient):
+    async def health(self, correlation_id: str) -> dict:
+        return await self._get("/health", correlation_id)
     """
     A client for the Database Agent service, built on top of ResilientAgentClient.
     """
