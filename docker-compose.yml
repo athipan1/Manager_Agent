@@ -1,4 +1,4 @@
-version: '3.8'
+#version: '3.8'
 
 services:
   # This service builds the shared base image that all other Python services will use.
@@ -15,7 +15,7 @@ services:
     image: painaidee/manager-agent:latest
     restart: always
     ports:
-      - "8000:80"
+      - "8000:8000"
     healthcheck:
       test: ["CMD", "python", "/app/healthcheck.py"]
       interval: 10s
