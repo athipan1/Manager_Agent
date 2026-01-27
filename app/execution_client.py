@@ -36,7 +36,7 @@ class ExecutionAgentClient(ResilientAgentClient):
         """
 
         # ✅ FIX: Must match Execution_Agent main.py
-        endpoint = "/execute"
+        endpoint = "/orders"
 
         try:
             # Serialize payload (Decimal-safe)
@@ -49,7 +49,7 @@ class ExecutionAgentClient(ResilientAgentClient):
             )
 
             response_data = await self._post(
-                endpoint=endpoint,
+                url=endpoint,
                 correlation_id=correlation_id,
                 json_data=payload,
                 extra_headers={
@@ -76,5 +76,5 @@ class ExecutionAgentClient(ResilientAgentClient):
             )
             return {
                 "status": "error",
-                "reason": f"Unexpected error: {e}",
+                "reason": f"An unexpected error occurred: {e}",
             }
