@@ -12,7 +12,16 @@ from .logger import report_logger
 from .models import Trade, PricePoint # Import Trade และ PricePoint จาก common models
 
 # --- Pydantic Models for Outgoing API Contract (to Learning Agent) ---
-# ลบ LearningTrade ออกไป เพราะจะใช้ Trade จาก app.models แทน
+
+class LearningTrade(BaseModel):
+    trade_id: str
+    asset_id: str
+    side: str
+    entry_price: Decimal
+    exit_price: Decimal
+    quantity: Decimal
+    executed_at: str
+    pnl_pct: Decimal
 
 class CurrentPolicyRisk(BaseModel):
     risk_per_trade: Decimal
@@ -33,8 +42,8 @@ class LearningRequest(BaseModel):
     """The complete input data structure for the /learn endpoint."""
     learning_mode: str
     window_size: int
-    trade_history: List[Trade] # ใช้ Trade model ที่ import มา
-    price_history: Dict[str, List[PricePoint]] # ใช้ PricePoint model ที่ import มา
+    trade_history: List[LearningTrade]
+    price_history: Dict[str, List[PricePoint]]
     current_policy: CurrentPolicy
     execution_result: Optional[dict] = None
 
@@ -106,21 +115,17 @@ class LearningAgentClient:
                 correlation_id,
             )
 
-            # ไม่ต้องแปลงเป็น LearningTrade แล้ว ใช้ Trade model โดยตรง
+            # Map raw trades from DB Agent to the LearningTrade format
             trade_history = [
-                Trade(
-                    trade_id=str(uuid.uuid4()), # ต้องสร้าง trade_id ถ้า Database Agent ไม่ได้ให้มา
-                    account_id=str(account_id),
-                    asset_id=t.symbol, # ใช้ symbol เป็น asset_id
-                    symbol=t.symbol,
-                    side=t.action.lower(), # แปลง BUY/SELL เป็น buy/sell
-                    quantity=Decimal(t.quantity),
-                    price=t.entry_price, # ใช้ entry_price
-                    executed_at=t.timestamp,
-                    agents=t.agents, # เพิ่ม agents field
-                    pnl_pct=t.pnl_pct, # เพิ่ม pnl_pct
-                    entry_price=t.entry_price,
-                    exit_price=t.exit_price,
+                LearningTrade(
+                    trade_id=str(t.trade_id),
+                    asset_id=t.asset_id or t.symbol,
+                    side=t.side.lower(),
+                    entry_price=Decimal(str(getattr(t, 'entry_price', t.price) or t.price)),
+                    exit_price=Decimal(str(getattr(t, 'exit_price', 0) or 0)),
+                    quantity=Decimal(str(t.quantity)),
+                    executed_at=t.executed_at,
+                    pnl_pct=Decimal(str(getattr(t, 'pnl_pct', 0) or 0))
                 )
                 for t in trade_history_raw
             ]

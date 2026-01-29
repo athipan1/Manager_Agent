@@ -43,7 +43,7 @@ async def test_create_order_success(execution_client: ExecutionAgentClient):
     )
 
     # Mock the HTTP POST request to the execution agent
-    respx.post("http://mock-execution-agent/orders").mock(
+    respx.post("http://mock-execution-agent/execute").mock(
         return_value=Response(
             200,
             json={
@@ -78,7 +78,7 @@ async def test_create_order_agent_unavailable(execution_client: ExecutionAgentCl
     )
 
     # Mock the route to be unavailable
-    respx.post("http://mock-execution-agent/orders").mock(side_effect=AgentUnavailable)
+    respx.post("http://mock-execution-agent/execute").mock(side_effect=AgentUnavailable)
 
     response = await execution_client.create_order(order_request, correlation_id)
 

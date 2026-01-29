@@ -16,7 +16,7 @@ class StandardAgentResponse(BaseModel):
     should ideally conform to.
     """
     status: Literal["success", "error"]
-    agent_type: Literal["fundamental", "technical", "sentiment", "macro"]
+    agent_type: Literal["fundamental", "technical", "sentiment", "macro", "scanner"]
     version: str
     timestamp: datetime.datetime
     data: StandardAgentData

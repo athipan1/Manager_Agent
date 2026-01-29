@@ -25,14 +25,17 @@ from decimal import Decimal
 # This mock represents the raw data returned by the database client,
 # not the Pydantic `Trade` model. The SUT will perform the mapping.
 MOCK_RAW_TRADE_DATA = MagicMock()
+MOCK_RAW_TRADE_DATA.trade_id = "trade-1"
+MOCK_RAW_TRADE_DATA.asset_id = "TEST"
 MOCK_RAW_TRADE_DATA.symbol = "TEST"
-MOCK_RAW_TRADE_DATA.action = "BUY"  # SUT expects 'action', not 'side'
+MOCK_RAW_TRADE_DATA.side = "BUY"
 MOCK_RAW_TRADE_DATA.quantity = Decimal("10")
-MOCK_RAW_TRADE_DATA.entry_price = Decimal("100.0")
-MOCK_RAW_TRADE_DATA.timestamp = "2024-07-01T10:00:00Z"
+MOCK_RAW_TRADE_DATA.price = Decimal("100.0")
+MOCK_RAW_TRADE_DATA.entry_price = None
+MOCK_RAW_TRADE_DATA.exit_price = Decimal("105.0")
+MOCK_RAW_TRADE_DATA.executed_at = "2024-07-01T10:00:00Z"
 MOCK_RAW_TRADE_DATA.agents = {"technical": "buy", "fundamental": "hold"}
 MOCK_RAW_TRADE_DATA.pnl_pct = Decimal("0.05")
-MOCK_RAW_TRADE_DATA.exit_price = Decimal("105.0")
 
 
 MOCK_PRICE_HISTORY = [

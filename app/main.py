@@ -79,11 +79,13 @@ async def _execute_trade(exec_client: ExecutionAgentClient, trade_decision: dict
     try:
         # 1. Prepare data for Execution Agent
         order_request = CreateOrderRequest(
+            account_id=account_id,
             symbol=ticker,
             side=final_verdict,
+            order_type="market",
             quantity=quantity,
             price=entry_price,
-            client_order_id=uuid.uuid4()
+            client_order_id=str(uuid.uuid4())
         )
 
         # 2. Call the Execution Agent

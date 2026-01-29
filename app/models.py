@@ -1,6 +1,8 @@
 from pydantic import BaseModel, ConfigDict, Field
-from typing import Optional, Literal, List, Dict
+from typing import Optional, Literal, List, Dict, Any, Union
 from decimal import Decimal
+import datetime
+import uuid
 
 # --- Request Models ---
 
@@ -112,13 +114,15 @@ class Position(BaseModel):
 
 class Order(BaseModel):
     order_id: int
-    account_id: int
+    client_order_id: Optional[Union[str, uuid.UUID]] = None
+    account_id: Optional[int] = None
     symbol: str
     order_type: Literal["BUY", "SELL"]
     quantity: int
-    price: Decimal
+    price: Optional[Decimal] = None
     status: Literal["pending", "executed", "cancelled", "failed"]
-    timestamp: str
+    failure_reason: Optional[str] = None
+    timestamp: Union[str, datetime.datetime]
 
 # --- Common Models for Learning Agent (ปรับให้ตรงกับ Learning_Agent/learning_agent/models.py) ---
 
@@ -133,11 +137,11 @@ class PricePoint(BaseModel):
 
 class Trade(BaseModel):
     """Represents a single historical trade, as received from the Manager."""
-    trade_id: str # uuid
-    account_id: str # uuid
-    asset_id: str
+    trade_id: Union[int, str]
+    account_id: Union[int, str]
+    asset_id: Optional[str] = None
     symbol: str
-    side: Literal["buy", "sell"]
+    side: str
     quantity: Decimal
     price: Decimal
     executed_at: str # ISO-8601 timestamp
@@ -150,12 +154,24 @@ class Trade(BaseModel):
 
 from uuid import UUID
 
+class PositionMetrics(BaseModel):
+    asset_id: Optional[str] = None
+    symbol: str
+    quantity: int
+    avg_cost: Decimal
+    market_price: Decimal
+    market_value: Decimal
+    unrealized_pnl: Decimal
+
 class PortfolioMetrics(BaseModel):
     """Represents the overall performance metrics of the portfolio."""
-    win_rate: float
-    average_return: float
-    max_drawdown: float
-    sharpe_ratio: float
+    account_id: int
+    as_of: str
+    total_portfolio_value: Decimal
+    cash_balance: Decimal
+    unrealized_pnl: Decimal
+    realized_pnl: Decimal
+    positions: List[PositionMetrics] = Field(default_factory=list)
 
 # --- Execution Agent Models ---
 from enum import Enum
