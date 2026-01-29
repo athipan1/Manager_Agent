@@ -22,17 +22,21 @@ LEARNING_AGENT_URL = "http://mock-learning-agent:8004/learn"
 
 from decimal import Decimal
 
-# This mock represents the raw data returned by the database client,
-# not the Pydantic `Trade` model. The SUT will perform the mapping.
-MOCK_RAW_TRADE_DATA = MagicMock()
-MOCK_RAW_TRADE_DATA.symbol = "TEST"
-MOCK_RAW_TRADE_DATA.action = "BUY"  # SUT expects 'action', not 'side'
-MOCK_RAW_TRADE_DATA.quantity = Decimal("10")
-MOCK_RAW_TRADE_DATA.entry_price = Decimal("100.0")
-MOCK_RAW_TRADE_DATA.timestamp = "2024-07-01T10:00:00Z"
-MOCK_RAW_TRADE_DATA.agents = {"technical": "buy", "fundamental": "hold"}
-MOCK_RAW_TRADE_DATA.pnl_pct = Decimal("0.05")
-MOCK_RAW_TRADE_DATA.exit_price = Decimal("105.0")
+# This mock represents the raw data returned by the database client.
+MOCK_RAW_TRADE_DATA = {
+    "trade_id": "test-trade-uuid",
+    "account_id": "123",
+    "asset_id": "TEST",
+    "symbol": "TEST",
+    "side": "buy",
+    "quantity": Decimal("10"),
+    "price": Decimal("100.0"),
+    "executed_at": "2024-07-01T10:00:00Z",
+    "agents": {"technical": "buy", "fundamental": "hold"},
+    "pnl_pct": Decimal("0.05"),
+    "entry_price": Decimal("100.0"),
+    "exit_price": Decimal("105.0")
+}
 
 
 MOCK_PRICE_HISTORY = [

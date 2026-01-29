@@ -2,6 +2,24 @@ from pydantic import BaseModel, ConfigDict, Field
 from typing import Optional, Literal, List, Dict
 from decimal import Decimal
 
+# Import from contracts
+from .contracts import (
+    PricePoint,
+    OrderSide,
+    OrderType,
+    TimeInForce,
+    OrderStatus,
+    CreateOrderRequest,
+    CreateOrderResponse,
+    AccountBalance,
+    Position,
+    Order,
+    Trade,
+    PortfolioMetrics,
+    CanonicalAgentData,
+    CanonicalAgentResponse
+)
+
 # --- Request Models ---
 
 class AgentRequestBody(BaseModel):
@@ -16,33 +34,6 @@ class MultiAgentRequestBody(BaseModel):
     tickers: List[str]
     period: Optional[str] = "1mo"
     account_id: Optional[int] = None
-
-# --- Canonical Internal Models ---
-
-class CanonicalAgentData(BaseModel):
-    """
-    The unified 'data' block for internal processing after normalization.
-    It contains the mandatory fields required for orchestration logic.
-    """
-    action: Literal["buy", "sell", "hold"]
-    confidence_score: float
-    # It can hold any other agent-specific data in a flexible way.
-    model_config = ConfigDict(extra="allow")
-
-
-class CanonicalAgentResponse(BaseModel):
-    """
-    A standardized internal representation of an agent's response after it has been
-    parsed, validated, and normalized. This is the single, trusted schema
-    the orchestrator logic will work with.
-    """
-    agent_type: str
-    version: str
-    data: CanonicalAgentData
-    # Contains original, raw data or other useful debugging info.
-    raw_metadata: dict = {}
-    error: Optional[dict] = None
-
 
 # --- Orchestrator Response Models ---
 
@@ -96,106 +87,3 @@ class MultiOrchestratorResponse(BaseModel):
     timestamp: str
     execution_summary: ExecutionSummary
     results: List[AssetResult]
-
-# --- Database Agent Models ---
-
-class AccountBalance(BaseModel):
-    cash_balance: Decimal
-
-from typing import Optional
-
-class Position(BaseModel):
-    symbol: str
-    quantity: int
-    average_cost: Decimal
-    current_market_price: Optional[Decimal] = None
-
-class Order(BaseModel):
-    order_id: int
-    account_id: int
-    symbol: str
-    order_type: Literal["BUY", "SELL"]
-    quantity: int
-    price: Decimal
-    status: Literal["pending", "executed", "cancelled", "failed"]
-    timestamp: str
-
-# --- Common Models for Learning Agent (ปรับให้ตรงกับ Learning_Agent/learning_agent/models.py) ---
-
-class PricePoint(BaseModel):
-    """Represents a single price point in history."""
-    timestamp: str
-    open: float
-    high: float
-    low: float
-    close: float
-    volume: int
-
-class Trade(BaseModel):
-    """Represents a single historical trade, as received from the Manager."""
-    trade_id: str # uuid
-    account_id: str # uuid
-    asset_id: str
-    symbol: str
-    side: Literal["buy", "sell"]
-    quantity: Decimal
-    price: Decimal
-    executed_at: str # ISO-8601 timestamp
-    # เพิ่ม field สำหรับเก็บข้อมูล agent ที่เกี่ยวข้องกับ trade นั้นๆ
-    agents: Dict[str, str] = Field(default_factory=dict)
-    pnl_pct: Optional[Decimal] = None # เพิ่ม pnl_pct
-    entry_price: Optional[Decimal] = None # เพิ่ม entry_price
-    exit_price: Optional[Decimal] = None # เพิ่ม exit_price
-
-
-from uuid import UUID
-
-class PortfolioMetrics(BaseModel):
-    """Represents the overall performance metrics of the portfolio."""
-    win_rate: float
-    average_return: float
-    max_drawdown: float
-    sharpe_ratio: float
-
-# --- Execution Agent Models ---
-from enum import Enum
-import uuid
-
-class OrderSide(str, Enum):
-    BUY = "buy"
-    SELL = "sell"
-
-class OrderType(str, Enum):
-    MARKET = "market"
-    LIMIT = "limit"
-
-class TimeInForce(str, Enum):
-    GTC = "GTC"  # Good 'til Canceled
-    IOC = "IOC"  # Immediate or Cancel
-    FOK = "FOK"  # Fill or Kill
-
-class OrderStatus(str, Enum):
-    PENDING = "pending"
-    PLACED = "placed"
-    PARTIALLY_FILLED = "partially_filled"
-    EXECUTED = "executed"
-    FAILED = "failed"
-    CANCELLED = "cancelled"
-
-class CreateOrderRequest(BaseModel):
-    client_order_id: str = Field(..., description="Globally unique client order ID")
-    account_id: int
-    symbol: str
-    side: OrderSide
-    order_type: OrderType
-    price: Optional[float] = None
-    quantity: int
-    time_in_force: TimeInForce = TimeInForce.GTC
-
-
-class CreateOrderResponse(BaseModel):
-    order_id: int
-    client_order_id: str
-    status: OrderStatus
-    broker_order_id: Optional[str] = None
-    reason: Optional[str] = None
