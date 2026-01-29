@@ -36,7 +36,7 @@ class ExecutionAgentClient(ResilientAgentClient):
         """
 
         # ✅ FIX: Must match Execution_Agent main.py
-        endpoint = "/orders"
+        endpoint = "/execute"
 
         try:
             # Serialize payload (Decimal-safe)

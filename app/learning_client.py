@@ -106,31 +106,39 @@ class LearningAgentClient:
                 correlation_id,
             )
 
-            # ไม่ต้องแปลงเป็น LearningTrade แล้ว ใช้ Trade model โดยตรง
-            trade_history = [
-                Trade(
-                    trade_id=str(uuid.uuid4()), # ต้องสร้าง trade_id ถ้า Database Agent ไม่ได้ให้มา
+            # ✅ FIX: Map trade history safely, handling potentially missing fields
+            # and matching the unified Trade contract.
+            trade_history = []
+            for t in trade_history_raw:
+                # Use model_dump if it's a Pydantic model, otherwise assume it's a dict
+                t_data = t.model_dump() if hasattr(t, "model_dump") else t
+
+                trade_history.append(Trade(
+                    trade_id=t_data.get("trade_id") or str(uuid.uuid4()),
                     account_id=str(account_id),
-                    asset_id=t.symbol, # ใช้ symbol เป็น asset_id
-                    symbol=t.symbol,
-                    side=t.action.lower(), # แปลง BUY/SELL เป็น buy/sell
-                    quantity=Decimal(t.quantity),
-                    price=t.entry_price, # ใช้ entry_price
-                    executed_at=t.timestamp,
-                    agents=t.agents, # เพิ่ม agents field
-                    pnl_pct=t.pnl_pct, # เพิ่ม pnl_pct
-                    entry_price=t.entry_price,
-                    exit_price=t.exit_price,
-                )
-                for t in trade_history_raw
-            ]
+                    asset_id=t_data.get("symbol") or t_data.get("asset_id", "unknown"),
+                    symbol=t_data.get("symbol", "unknown"),
+                    side=t_data.get("side", t_data.get("action", "buy")).lower(),
+                    quantity=Decimal(str(t_data.get("quantity", 0))),
+                    price=Decimal(str(t_data.get("price") or t_data.get("entry_price", 0))),
+                    executed_at=t_data.get("executed_at") or t_data.get("timestamp", ""),
+                    agents=t_data.get("agents", {}),
+                    pnl_pct=t_data.get("pnl_pct"),
+                    entry_price=t_data.get("entry_price"),
+                    exit_price=t_data.get("exit_price"),
+                ))
 
             price_history_data = await self.db_client.get_price_history(
                 symbol,
                 correlation_id,
             )
-            # แปลง price_history_data ให้อยู่ในรูปแบบ List[PricePoint]
-            price_history = {symbol: [PricePoint(**p) for p in price_history_data]}
+            # ✅ FIX: Map price history safely
+            price_history = {
+                symbol: [
+                    PricePoint.model_validate(p) if hasattr(p, "model_validate") else PricePoint(**p)
+                    for p in price_history_data
+                ]
+            }
 
             # 2. Get current configuration from ConfigManager
             current_policy = CurrentPolicy(
