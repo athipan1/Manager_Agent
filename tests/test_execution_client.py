@@ -3,6 +3,7 @@ import respx
 from httpx import Response
 from uuid import uuid4
 from decimal import Decimal
+import datetime
 
 from app.execution_client import ExecutionAgentClient
 from app.models import CreateOrderRequest, CreateOrderResponse, OrderSide, OrderType, OrderStatus
@@ -47,9 +48,15 @@ async def test_create_order_success(execution_client: ExecutionAgentClient):
         return_value=Response(
             200,
             json={
-                "order_id": mock_order_id,
-                "client_order_id": client_order_id,
-                "status": "pending",
+                "status": "success",
+                "agent_type": "execution",
+                "version": "1.0",
+                "timestamp": datetime.datetime.now().isoformat(),
+                "data": {
+                    "order_id": mock_order_id,
+                    "client_order_id": client_order_id,
+                    "status": "pending",
+                }
             },
         )
     )
@@ -65,7 +72,7 @@ async def test_create_order_success(execution_client: ExecutionAgentClient):
 @respx.mock
 async def test_create_order_agent_unavailable(execution_client: ExecutionAgentClient):
     """
-    Test that AgentUnavailable exception is caught and handled correctly.
+    Test that AgentUnavailable exception is raised.
     """
     correlation_id = str(uuid4())
     order_request = CreateOrderRequest(
@@ -78,12 +85,10 @@ async def test_create_order_agent_unavailable(execution_client: ExecutionAgentCl
     )
 
     # Mock the route to be unavailable
-    respx.post("http://mock-execution-agent/execute").mock(side_effect=AgentUnavailable)
+    respx.post("http://mock-execution-agent/execute").mock(side_effect=AgentUnavailable("Agent down"))
 
-    response = await execution_client.create_order(order_request, correlation_id)
-
-    assert response["status"] == "error"
-    assert response["reason"] == "Execution Agent unavailable"
+    with pytest.raises(AgentUnavailable):
+        await execution_client.create_order(order_request, correlation_id)
 
 
 @respx.mock
@@ -108,7 +113,5 @@ async def test_create_order_unexpected_error(execution_client: ExecutionAgentCli
 
     monkeypatch.setattr(execution_client, "_post", mock_post)
 
-    response = await execution_client.create_order(order_request, correlation_id)
-
-    assert response["status"] == "error"
-    assert "An unexpected error occurred" in response["reason"]
+    with pytest.raises(ValueError):
+        await execution_client.create_order(order_request, correlation_id)

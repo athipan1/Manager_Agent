@@ -1,6 +1,10 @@
-import json
 from .resilient_client import ResilientAgentClient, AgentUnavailable
-from .models import CreateOrderRequest, CreateOrderResponse
+from .contracts import (
+    CreateOrderRequest,
+    CreateOrderResponse,
+    ExecutionEndpoints,
+    StandardAgentResponse
+)
 from . import config
 from .logger import report_logger
 
@@ -21,22 +25,11 @@ class ExecutionAgentClient(ResilientAgentClient):
         self,
         order_details: CreateOrderRequest,
         correlation_id: str,
-    ) -> CreateOrderResponse | dict:
+    ) -> CreateOrderResponse:
         """
-        Submits a new trade order to the Execution Agent
-        via POST /execute (Execution Agent contract).
-
-        Args:
-            order_details: The Pydantic model containing the order details.
-            correlation_id: A unique identifier for tracing the request.
-
-        Returns:
-            A CreateOrderResponse object on success,
-            or a dictionary with an error message on failure.
+        Submits a new trade order to the Execution Agent.
         """
-
-        # ✅ FIX: Must match Execution_Agent main.py
-        endpoint = "/execute"
+        endpoint = ExecutionEndpoints.EXECUTE
 
         try:
             # Serialize payload (Decimal-safe)
@@ -57,24 +50,19 @@ class ExecutionAgentClient(ResilientAgentClient):
                 },
             )
 
-            return CreateOrderResponse.model_validate(response_data)
+            standard_resp = self.validate_standard_response(response_data)
+            return CreateOrderResponse.model_validate(standard_resp.data)
 
         except AgentUnavailable as e:
             report_logger.error(
                 f"Execution Agent is unavailable: {e}, "
                 f"correlation_id={correlation_id}"
             )
-            return {
-                "status": "error",
-                "reason": "Execution Agent unavailable",
-            }
+            raise
 
         except Exception as e:
             report_logger.exception(
                 "Unexpected error while creating order "
                 f"(correlation_id={correlation_id})"
             )
-            return {
-                "status": "error",
-                "reason": f"An unexpected error occurred: {e}",
-            }
+            raise

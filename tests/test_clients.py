@@ -1,5 +1,6 @@
 import pytest
 from unittest.mock import patch, AsyncMock
+import datetime
 
 from app.database_client import DatabaseAgentClient
 from app.resilient_client import ResilientAgentClient, AgentUnavailable
@@ -88,9 +89,15 @@ async def test_database_client_create_order(mock_config):
         return_value=Response(
             200,
             json={
-                "order_id": mock_order_id,
-                "client_order_id": client_order_id,
-                "status": "pending",
+                "status": "success",
+                "agent_type": "database",
+                "version": "1.0",
+                "timestamp": datetime.datetime.now().isoformat(),
+                "data": {
+                    "order_id": mock_order_id,
+                    "client_order_id": client_order_id,
+                    "status": "pending",
+                }
             },
         )
     )

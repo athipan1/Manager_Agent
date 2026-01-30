@@ -53,16 +53,23 @@ MOCK_LEARNING_MODE = "conservative"
 MOCK_WINDOW_SIZE = 50
 
 
+import datetime
 MOCK_LEARNING_AGENT_RESPONSE = {
-    "learning_state": "learning",
-    "policy_deltas": {
-        "agent_weights": {"technical": 0.05},
-        "risk": {"risk_per_trade": -0.001},
-        "strategy_bias": {},
-        "guardrails": {},
-        "asset_biases": {"TEST": 0.1}
-    },
-    "reasoning": ["Adjusting risk down due to recent losses."],
+    "status": "success",
+    "agent_type": "learning",
+    "version": "1.0",
+    "timestamp": datetime.datetime.now().isoformat(),
+    "data": {
+        "learning_state": "learning",
+        "policy_deltas": {
+            "agent_weights": {"technical": 0.05},
+            "risk": {"risk_per_trade": -0.001},
+            "strategy_bias": {},
+            "guardrails": {},
+            "asset_biases": {"TEST": 0.1}
+        },
+        "reasoning": ["Adjusting risk down due to recent losses."],
+    }
 }
 
 

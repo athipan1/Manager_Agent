@@ -1,8 +1,9 @@
 import httpx
 import time
 import asyncio
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, Type, TypeVar
 
+from .contracts import StandardAgentResponse
 from .config import (
     AGENT_CLIENT_TIMEOUT,
     AGENT_CLIENT_MAX_RETRIES,
@@ -166,3 +167,18 @@ class ResilientAgentClient:
             **kwargs,
         )
         return response.json()
+
+    def validate_standard_response(self, response_data: Dict[str, Any]) -> StandardAgentResponse:
+        """
+        Validates that the response follows the StandardAgentResponse contract
+        and that its status is 'success'.
+        """
+        try:
+            standard_resp = StandardAgentResponse.model_validate(response_data)
+            if standard_resp.status != "success":
+                error_msg = standard_resp.error.get("message", "Unknown error") if standard_resp.error else "No error message provided"
+                raise ValueError(f"Agent returned error status: {error_msg}")
+            return standard_resp
+        except Exception as e:
+            report_logger.error(f"Response validation failed for {self.base_url}: {e}")
+            raise
