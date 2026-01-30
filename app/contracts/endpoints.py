@@ -14,5 +14,10 @@ class ExecutionEndpoints:
 class AnalysisEndpoints:
     ANALYZE = "/analyze"
 
+class ScannerEndpoints:
+    SCAN = "/scan"
+    SCAN_FUNDAMENTAL = "/scan/fundamental"
+    HEALTH = "/health"
+
 class LearningEndpoints:
     LEARN = "/learn"

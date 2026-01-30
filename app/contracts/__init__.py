@@ -13,7 +13,7 @@ from .trade import (
     PortfolioMetrics
 )
 from .standard import StandardAgentData, StandardAgentResponse
-from .endpoints import DatabaseEndpoints, ExecutionEndpoints, AnalysisEndpoints, LearningEndpoints
+from .endpoints import DatabaseEndpoints, ExecutionEndpoints, AnalysisEndpoints, ScannerEndpoints, LearningEndpoints
 from .learning import (
     CurrentPolicy,
     CurrentPolicyRisk,

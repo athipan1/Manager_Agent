@@ -24,6 +24,7 @@ services:
     environment:
       TECHNICAL_AGENT_URL: http://technical-agent:8000
       FUNDAMENTAL_AGENT_URL: http://fundamental-agent:8001
+      SCANNER_AGENT_URL: http://scanner-agent:8000
       DATABASE_AGENT_URL: http://database-agent:8000
       DATABASE_AGENT_API_KEY: your_database_api_key
       AUTO_LEARNING_AGENT_URL: http://learning-agent:8004
@@ -57,12 +58,30 @@ services:
         condition: service_healthy
       fundamental-agent:
         condition: service_healthy
+      scanner-agent:
+        condition: service_healthy
       database-agent:
         condition: service_healthy
       learning-agent:
         condition: service_healthy
       execution-agent:
         condition: service_healthy
+
+  scanner-agent:
+    build:
+      context: ./Scanner_Agent
+      dockerfile: Dockerfile
+    image: painaidee/scanner-agent:latest
+    restart: always
+    expose:
+      - "8000"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8000/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    environment:
+      PYTHONPATH: /app
 
   technical-agent:
     image: painaidee/technical-agent:latest
