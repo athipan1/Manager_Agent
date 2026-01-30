@@ -9,6 +9,7 @@ without being affected by the actual environment variables.
 # Agent URLs
 TECHNICAL_AGENT_URL = "http://mock-technical-agent/analyze"
 FUNDAMENTAL_AGENT_URL = "http://mock-fundamental-agent/analyze"
+SCANNER_AGENT_URL = "http://mock-scanner-agent"
 DATABASE_AGENT_URL = "http://mock-database-agent"
 AUTO_LEARNING_AGENT_URL = "http://mock-auto-learning-agent"
 EXECUTION_AGENT_URL = "http://mock-execution-agent"

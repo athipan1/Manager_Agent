@@ -7,9 +7,11 @@ from decimal import Decimal
 from .models import (
     AgentRequestBody, OrchestratorResponse, ReportDetail, ReportDetails,
     MultiAgentRequestBody, MultiOrchestratorResponse,
-    AssetResult, ExecutionSummary, AnalysisResult, ExecutionResult
+    AssetResult, ExecutionSummary, AnalysisResult, ExecutionResult,
+    ScanAndAnalyzeRequest
 )
 from .agent_client import call_agents
+from .scanner_client import ScannerAgentClient
 from .database_client import DatabaseAgentClient
 from .execution_client import ExecutionAgentClient
 from .contracts import (
@@ -249,14 +251,10 @@ async def analyze_ticker(request: AgentRequestBody):
         report_logger.critical(f"An agent is unavailable: {e}")
         raise HTTPException(status_code=503, detail=str(e))
 
-@app.post("/analyze-multi", response_model=MultiOrchestratorResponse)
-async def analyze_tickers_endpoint(request: MultiAgentRequestBody):
+async def _process_multi_asset_analysis(tickers: List[str], account_id: int, correlation_id: str) -> MultiOrchestratorResponse:
     """
-    Analyzes multiple tickers and manages portfolio risk.
+    Internal logic for analyzing multiple assets and managing portfolio risk.
     """
-    correlation_id = str(uuid.uuid4())
-    account_id = request.account_id if request.account_id is not None else config_manager.get('DEFAULT_ACCOUNT_ID')
-
     try:
         async with DatabaseAgentClient() as db_client:
             balance = await db_client.get_account_balance(account_id, correlation_id)
@@ -266,7 +264,7 @@ async def analyze_tickers_endpoint(request: MultiAgentRequestBody):
             positions_value = sum(p.quantity * (p.current_market_price or p.average_cost) for p in positions)
             portfolio_value = cash_balance + positions_value
 
-            analysis_tasks = [_analyze_single_asset(ticker, correlation_id) for ticker in request.tickers]
+            analysis_tasks = [_analyze_single_asset(ticker, correlation_id) for ticker in tickers]
             analysis_results = await asyncio.gather(*analysis_tasks)
             valid_results = [res for res in analysis_results if "error" not in res]
 
@@ -341,7 +339,62 @@ async def analyze_tickers_endpoint(request: MultiAgentRequestBody):
                 ),
                 results=asset_responses
             )
-
     except AgentUnavailable as e:
         report_logger.critical(f"An agent is unavailable: {e}")
         raise HTTPException(status_code=503, detail=str(e))
+
+
+@app.post("/analyze-multi", response_model=MultiOrchestratorResponse)
+async def analyze_tickers_endpoint(request: MultiAgentRequestBody):
+    """
+    Analyzes multiple tickers and manages portfolio risk.
+    """
+    correlation_id = str(uuid.uuid4())
+    account_id = request.account_id if request.account_id is not None else config_manager.get('DEFAULT_ACCOUNT_ID')
+    return await _process_multi_asset_analysis(request.tickers, account_id, correlation_id)
+
+
+@app.post("/scan-and-analyze", response_model=MultiOrchestratorResponse)
+async def scan_and_analyze_endpoint(request: ScanAndAnalyzeRequest):
+    """
+    Scans for potential candidates and then performs multi-asset analysis on them.
+    """
+    correlation_id = str(uuid.uuid4())
+    account_id = request.account_id if request.account_id is not None else config_manager.get('DEFAULT_ACCOUNT_ID')
+
+    try:
+        async with ScannerAgentClient() as scanner_client:
+            if request.scan_type == "technical":
+                scan_response = await scanner_client.scan(request.symbols, correlation_id)
+                candidates = scan_response.data.get("candidates", []) if scan_response.data else []
+                # Simple ranking: STRONG_BUY first, then BUY
+                candidates.sort(key=lambda x: 2 if x.get("recommendation") == "STRONG_BUY" else 1, reverse=True)
+            else:
+                scan_response = await scanner_client.scan_fundamental(request.symbols, correlation_id)
+                candidates = scan_response.data.get("candidates", []) if scan_response.data else []
+                # Already ranked by fundamental_score in Scanner_Agent
+
+            selected_tickers = [c["symbol"] for c in candidates[:request.max_candidates]]
+
+            if not selected_tickers:
+                report_logger.info(f"No candidates found by scanner for scan_type={request.scan_type}, correlation_id={correlation_id}")
+                return MultiOrchestratorResponse(
+                    multi_report_id=correlation_id,
+                    timestamp=datetime.datetime.now(datetime.UTC).isoformat(),
+                    execution_summary=ExecutionSummary(
+                        total_trades_approved=0,
+                        total_trades_executed=0,
+                        total_trades_failed=0
+                    ),
+                    results=[]
+                )
+
+            report_logger.info(f"Scanner found {len(selected_tickers)} candidates: {selected_tickers}, correlation_id={correlation_id}")
+            return await _process_multi_asset_analysis(selected_tickers, account_id, correlation_id)
+
+    except AgentUnavailable as e:
+        report_logger.critical(f"Scanner Agent is unavailable: {e}")
+        raise HTTPException(status_code=503, detail=str(e))
+    except Exception as e:
+        report_logger.exception(f"Scan and analyze failed: {e}, correlation_id={correlation_id}")
+        raise HTTPException(status_code=500, detail=str(e))

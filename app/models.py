@@ -33,6 +33,13 @@ class MultiAgentRequestBody(BaseModel):
     period: Optional[str] = "1mo"
     account_id: Optional[int] = None
 
+class ScanAndAnalyzeRequest(BaseModel):
+    """Request body for the scan and analyze endpoint."""
+    symbols: Optional[List[str]] = None
+    scan_type: Literal["technical", "fundamental"] = "technical"
+    account_id: Optional[int] = None
+    max_candidates: int = 5
+
 # --- Orchestrator Response Models ---
 
 class ReportDetail(BaseModel):
