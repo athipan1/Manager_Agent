@@ -1,7 +1,7 @@
 import os
-from typing import List
+from typing import List, Any, Dict
 
-from .models import (
+from .contracts import (
     AccountBalance,
     Position,
     Order,
@@ -9,14 +9,14 @@ from .models import (
     CreateOrderResponse,
     Trade,
     PortfolioMetrics,
-    PricePoint
+    PricePoint,
+    DatabaseEndpoints,
+    StandardAgentResponse
 )
 from .config import DATABASE_AGENT_URL
 from .resilient_client import ResilientAgentClient, AgentUnavailable
 
 class DatabaseAgentClient(ResilientAgentClient):
-    async def health(self, correlation_id: str) -> dict:
-        return await self._get("/health", correlation_id)
     """
     A client for the Database Agent service, built on top of ResilientAgentClient.
     """
@@ -25,46 +25,64 @@ class DatabaseAgentClient(ResilientAgentClient):
         headers = {"X-API-KEY": api_key} if api_key else {}
         super().__init__(base_url=DATABASE_AGENT_URL, headers=headers)
 
+    async def health(self, correlation_id: str) -> StandardAgentResponse:
+        response_data = await self._get(DatabaseEndpoints.HEALTH, correlation_id)
+        return self.validate_standard_response(response_data)
+
     async def get_account_balance(
         self, account_id: int, correlation_id: str
     ) -> AccountBalance:
-        response_data = await self._get(f"/accounts/{account_id}/balance", correlation_id)
-        return AccountBalance(**response_data)
+        url = DatabaseEndpoints.BALANCE.format(account_id=account_id)
+        response_data = await self._get(url, correlation_id)
+        standard_resp = self.validate_standard_response(response_data)
+        return AccountBalance(**standard_resp.data)
 
     async def get_positions(self, account_id: int, correlation_id: str) -> List[Position]:
-        response_data = await self._get(f"/accounts/{account_id}/positions", correlation_id)
-        return [Position(**p) for p in response_data]
+        url = DatabaseEndpoints.POSITIONS.format(account_id=account_id)
+        response_data = await self._get(url, correlation_id)
+        standard_resp = self.validate_standard_response(response_data)
+        return [Position(**p) for p in standard_resp.data]
 
     async def create_order(
         self, account_id: int, order_body: CreateOrderRequest, correlation_id: str
     ) -> CreateOrderResponse:
+        url = DatabaseEndpoints.ORDERS.format(account_id=account_id)
         order_payload = order_body.model_dump(mode='json')
 
         response_data = await self._post(
-            f"/accounts/{account_id}/orders",
+            url,
             correlation_id,
             json_data=order_payload,
         )
-        return CreateOrderResponse(**response_data)
+        standard_resp = self.validate_standard_response(response_data)
+        return CreateOrderResponse(**standard_resp.data)
 
     async def execute_order(self, order_id: int, correlation_id: str) -> Order:
-        response_data = await self._post(f"/orders/{order_id}/execute", correlation_id, json_data={})
-        return Order(**response_data)
+        url = DatabaseEndpoints.EXECUTE_ORDER.format(order_id=order_id)
+        response_data = await self._post(url, correlation_id, json_data={})
+        standard_resp = self.validate_standard_response(response_data)
+        return Order(**standard_resp.data)
 
     async def get_trade_history(
         self, account_id: int, correlation_id: str
     ) -> List[Trade]:
-        response_data = await self._get(f"/accounts/{account_id}/trade_history", correlation_id)
-        return [Trade(**t) for t in response_data]
+        url = DatabaseEndpoints.TRADE_HISTORY.format(account_id=account_id)
+        response_data = await self._get(url, correlation_id)
+        standard_resp = self.validate_standard_response(response_data)
+        return [Trade(**t) for t in standard_resp.data]
 
     async def get_portfolio_metrics(
         self, account_id: int, correlation_id: str
     ) -> PortfolioMetrics:
-        response_data = await self._get(f"/accounts/{account_id}/portfolio_metrics", correlation_id)
-        return PortfolioMetrics(**response_data)
+        url = DatabaseEndpoints.PORTFOLIO_METRICS.format(account_id=account_id)
+        response_data = await self._get(url, correlation_id)
+        standard_resp = self.validate_standard_response(response_data)
+        return PortfolioMetrics(**standard_resp.data)
 
     async def get_price_history(
         self, symbol: str, correlation_id: str
     ) -> List[PricePoint]:
-        response_data = await self._get(f"/prices/{symbol}", correlation_id)
-        return [PricePoint(**p) for p in response_data]
+        url = DatabaseEndpoints.PRICE_HISTORY.format(symbol=symbol)
+        response_data = await self._get(url, correlation_id)
+        standard_resp = self.validate_standard_response(response_data)
+        return [PricePoint(**p) for p in standard_resp.data]

@@ -1,5 +1,5 @@
 from pydantic import BaseModel, Field, field_validator, ConfigDict
-from typing import Literal, Optional, Dict, Any
+from typing import Literal, Optional, Dict, Any, Union
 import datetime
 
 class StandardAgentData(BaseModel):
@@ -7,19 +7,21 @@ class StandardAgentData(BaseModel):
     action: Literal["buy", "sell", "hold"]
     confidence_score: float = Field(..., ge=0, le=1)
     reason: Optional[str] = None
+    current_price: Optional[float] = None
+    indicators: Optional[Dict[str, Any]] = Field(default_factory=dict)
     # Allow arbitrary extra fields for agent-specific data
     model_config = ConfigDict(extra="allow")
 
 class StandardAgentResponse(BaseModel):
     """
     The standardized and versioned response schema that all agents
-    should ideally conform to.
+    should conform to.
     """
     status: Literal["success", "error"]
-    agent_type: Literal["fundamental", "technical", "sentiment", "macro"]
+    agent_type: str
     version: str
     timestamp: datetime.datetime
-    data: StandardAgentData
+    data: Any # Can be StandardAgentData, AccountBalance, Order, etc.
     error: Optional[Dict[str, Any]] = None
 
     @field_validator('version')

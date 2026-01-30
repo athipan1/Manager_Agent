@@ -15,9 +15,7 @@ from .contracts import (
     Position,
     Order,
     Trade,
-    PortfolioMetrics,
-    CanonicalAgentData,
-    CanonicalAgentResponse
+    PortfolioMetrics
 )
 
 # --- Request Models ---

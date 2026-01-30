@@ -9,9 +9,9 @@ with patch('os.makedirs', return_value=None):
     from fastapi.testclient import TestClient
     from app.main import app
     from app.models import (
-        AccountBalance, Position, CreateOrderResponse, Order, ReportDetails, ReportDetail,
-        CanonicalAgentResponse, CanonicalAgentData
+        AccountBalance, Position, CreateOrderResponse, Order, ReportDetails, ReportDetail
     )
+    from app.contracts import StandardAgentResponse, StandardAgentData
 
 client = TestClient(app)
 
@@ -28,12 +28,32 @@ def mock_analysis_result(ticker, final_verdict, tech_score=0.8, fund_score=0.7, 
             fundamental=ReportDetail(action=final_verdict, score=fund_score, reason="")
         ),
         "raw_data": {
-            "technical": CanonicalAgentResponse(agent_type="tech", version="1.0", data=CanonicalAgentData(action=final_verdict, confidence_score=tech_score, current_price=price, indicators={'stop_loss': price * Decimal("0.9")})),
-            "fundamental": CanonicalAgentResponse(agent_type="fund", version="1.0", data=CanonicalAgentData(action=final_verdict, confidence_score=fund_score, current_price=price))
+            "technical": StandardAgentResponse(
+                status="success",
+                agent_type="technical",
+                version="1.0",
+                timestamp=datetime.datetime.now(),
+                data=StandardAgentData(
+                    action=final_verdict,
+                    confidence_score=tech_score,
+                    current_price=float(price),
+                    indicators={'stop_loss': float(price * Decimal("0.9"))}
+                )
+            ),
+            "fundamental": StandardAgentResponse(
+                status="success",
+                agent_type="fundamental",
+                version="1.0",
+                timestamp=datetime.datetime.now(),
+                data=StandardAgentData(
+                    action=final_verdict,
+                    confidence_score=fund_score,
+                    current_price=float(price)
+                )
+            )
         }
     }
 
-from app.models import CreateOrderResponse as ExecutionCreateOrderResponse
 import uuid
 
 @pytest.fixture
@@ -69,7 +89,8 @@ def test_analyze_multi_endpoint_success(mock_main_cm, mock_high_level_dependenci
         'PER_REQUEST_RISK_BUDGET': '0.25', 'RISK_PER_TRADE': '0.01',
         'STOP_LOSS_PERCENTAGE': '0.10', 'MAX_POSITION_PERCENTAGE': '0.2',
         'ENABLE_TECHNICAL_STOP': True, 'MIN_POSITION_VALUE': '500',
-        'MAX_TOTAL_EXPOSURE': '0.8'
+        'MAX_TOTAL_EXPOSURE': '0.8',
+        'DEFAULT_ACCOUNT_ID': 1
     }.get(key, default)
 
     mock_high_level_dependencies["analyze"].side_effect = [
@@ -94,7 +115,8 @@ def test_position_scaling_on_risk_budget(mock_main_cm, mock_high_level_dependenc
         'PER_REQUEST_RISK_BUDGET': '0.015', 'RISK_PER_TRADE': '0.01',
         'STOP_LOSS_PERCENTAGE': '0.10', 'MAX_POSITION_PERCENTAGE': '0.2',
         'ENABLE_TECHNICAL_STOP': True, 'MIN_POSITION_VALUE': '500',
-        'MAX_TOTAL_EXPOSURE': '0.8'
+        'MAX_TOTAL_EXPOSURE': '0.8',
+        'DEFAULT_ACCOUNT_ID': 1
     }.get(key, default)
 
     mock_high_level_dependencies["analyze"].side_effect = [
@@ -114,9 +136,10 @@ def test_position_scaling_on_risk_budget(mock_main_cm, mock_high_level_dependenc
 @patch('app.main.config_manager')
 def test_max_exposure_limit(mock_main_cm, mock_high_level_dependencies):
     mock_main_cm.get.side_effect = lambda key, default=None: {
-        'MAX_TOTAL_EXPOSURE': '0.2', 'RISK_PER_TRADE': '0.01', # Increased to 0.2
+        'MAX_TOTAL_EXPOSURE': '0.2', 'RISK_PER_TRADE': '0.01',
         'STOP_LOSS_PERCENTAGE': '0.10', 'MAX_POSITION_PERCENTAGE': '0.2',
-        'ENABLE_TECHNICAL_STOP': True, 'MIN_POSITION_VALUE': '500'
+        'ENABLE_TECHNICAL_STOP': True, 'MIN_POSITION_VALUE': '500',
+        'DEFAULT_ACCOUNT_ID': 1
     }.get(key, default)
 
     mock_high_level_dependencies["analyze"].side_effect = [

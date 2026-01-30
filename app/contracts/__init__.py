@@ -12,4 +12,15 @@ from .trade import (
     Trade,
     PortfolioMetrics
 )
-from .signal import CanonicalAgentData, CanonicalAgentResponse
+from .standard import StandardAgentData, StandardAgentResponse
+from .endpoints import DatabaseEndpoints, ExecutionEndpoints, AnalysisEndpoints, LearningEndpoints
+from .learning import (
+    CurrentPolicy,
+    CurrentPolicyRisk,
+    CurrentPolicyStrategyBias,
+    LearningRequest,
+    LearningResponse,
+    IncomingPolicyDeltas,
+    InternalPolicyDeltas,
+    LearningResponseBody
+)

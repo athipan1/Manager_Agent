@@ -1,90 +1,40 @@
-
-import httpx
 import asyncio
 from typing import Dict, Optional, List, Any
 from decimal import Decimal
-from pydantic import BaseModel, Field
 import uuid
 
 from .config_manager import config_manager
-from .database_client import DatabaseAgentClient
 from .logger import report_logger
-from .models import Trade, PricePoint # Import Trade และ PricePoint จาก common models
+from .contracts import (
+    Trade,
+    PricePoint,
+    CurrentPolicy,
+    CurrentPolicyRisk,
+    CurrentPolicyStrategyBias,
+    LearningRequest,
+    LearningResponse,
+    IncomingPolicyDeltas,
+    InternalPolicyDeltas,
+    LearningResponseBody,
+    LearningEndpoints,
+    StandardAgentResponse
+)
+from .database_client import DatabaseAgentClient
+from .resilient_client import ResilientAgentClient
 
-# --- Pydantic Models for Outgoing API Contract (to Learning Agent) ---
-# ลบ LearningTrade ออกไป เพราะจะใช้ Trade จาก app.models แทน
-
-class CurrentPolicyRisk(BaseModel):
-    risk_per_trade: Decimal
-    max_position_pct: Decimal
-    stop_loss_pct: Decimal
-
-class CurrentPolicyStrategyBias(BaseModel):
-    # This is a placeholder as the Orchestrator does not yet have a concept
-    # of preferred regimes. The Learning Agent is designed to handle this.
-    preferred_regime: str = "any"
-
-class CurrentPolicy(BaseModel):
-    agent_weights: Dict[str, float]
-    risk: CurrentPolicyRisk
-    strategy_bias: CurrentPolicyStrategyBias
-
-class LearningRequest(BaseModel):
-    """The complete input data structure for the /learn endpoint."""
-    learning_mode: str
-    window_size: int
-    trade_history: List[Trade] # ใช้ Trade model ที่ import มา
-    price_history: Dict[str, List[PricePoint]] # ใช้ PricePoint model ที่ import มา
-    current_policy: CurrentPolicy
-    execution_result: Optional[dict] = None
-
-# --- Pydantic Models for Incoming API Contract (from Learning Agent) ---
-
-class IncomingPolicyDeltas(BaseModel):
-    agent_weights: Dict[str, float] = Field(default_factory=dict)
-    risk: Dict[str, float] = Field(default_factory=dict)
-    strategy_bias: Dict[str, Any] = Field(default_factory=dict)
-    guardrails: Dict[str, Any] = Field(default_factory=dict)
-    asset_biases: Dict[str, float] = Field(default_factory=dict) # เพิ่ม asset_biases
-
-class LearningResponse(BaseModel):
-    """The complete output data structure from the /learn endpoint."""
-    learning_state: str
-    policy_deltas: IncomingPolicyDeltas = Field(default_factory=IncomingPolicyDeltas)
-    reasoning: List[str] = Field(default_factory=list)
-
-# --- Pydantic Models for Internal Orchestrator Contract ---
-
-class InternalPolicyDeltas(BaseModel):
-    """Represents the recommended adjustments to the system's policy."""
-    agent_weights: Optional[Dict[str, float]] = None
-    risk_per_trade: Optional[float] = None
-    asset_biases: Optional[Dict[str, float]] = None # เพิ่ม asset_biases
-
-class LearningResponseBody(BaseModel):
-    """The expected JSON response for the orchestrator's internal logic."""
-    learning_state: str = Field(..., description="e.g., 'warmup', 'learning'")
-    version: str
-    policy_deltas: InternalPolicyDeltas
-
-# --- Client Logic ---
-
-class LearningAgentClient:
+class LearningAgentClient(ResilientAgentClient):
     """
     An adapter client for interacting with the Learning Agent.
-    It handles the impedance mismatch between the Orchestrator's internal
-    data model and the external Learning Agent's API contract.
     """
 
     def __init__(
         self,
         db_client: DatabaseAgentClient,
-        timeout: int = 20,
     ):
-        self.base_url = config_manager.get("AUTO_LEARNING_AGENT_URL")
+        base_url = config_manager.get("AUTO_LEARNING_AGENT_URL")
+        super().__init__(base_url=base_url)
         self.db_client = db_client
-        self.timeout = timeout
-        self.version = "2.0.0"  # Bumping version for new contract
+        self.version = "2.0.0"
 
     async def trigger_learning_cycle(
         self,
@@ -106,13 +56,9 @@ class LearningAgentClient:
                 correlation_id,
             )
 
-            # ✅ FIX: Map trade history safely, handling potentially missing fields
-            # and matching the unified Trade contract.
             trade_history = []
             for t in trade_history_raw:
-                # Use model_dump if it's a Pydantic model, otherwise assume it's a dict
                 t_data = t.model_dump() if hasattr(t, "model_dump") else t
-
                 trade_history.append(Trade(
                     trade_id=t_data.get("trade_id") or str(uuid.uuid4()),
                     account_id=str(account_id),
@@ -132,7 +78,6 @@ class LearningAgentClient:
                 symbol,
                 correlation_id,
             )
-            # ✅ FIX: Map price history safely
             price_history = {
                 symbol: [
                     PricePoint.model_validate(p) if hasattr(p, "model_validate") else PricePoint(**p)
@@ -140,7 +85,7 @@ class LearningAgentClient:
                 ]
             }
 
-            # 2. Get current configuration from ConfigManager
+            # 2. Get current configuration
             current_policy = CurrentPolicy(
                 agent_weights=config_manager.get("AGENT_WEIGHTS"),
                 risk=CurrentPolicyRisk(
@@ -151,7 +96,7 @@ class LearningAgentClient:
                 strategy_bias=CurrentPolicyStrategyBias(),
             )
 
-            # 3. Construct the request payload for the learning agent
+            # 3. Construct payload
             request_payload = LearningRequest(
                 learning_mode=config_manager.get("LEARNING_MODE"),
                 window_size=config_manager.get("WINDOW_SIZE"),
@@ -161,28 +106,25 @@ class LearningAgentClient:
                 execution_result=execution_result,
             )
 
-            # 4. Make the API call
-            url = f"{self.base_url}/learn"
-            headers = {"X-Correlation-ID": correlation_id}
-            async with httpx.AsyncClient() as client:
-                response = await client.post(
-                    url,
-                    headers=headers,
-                    json=request_payload.model_dump(mode='json'),
-                    timeout=self.timeout,
-                )
-                response.raise_for_status()
-                learning_response = LearningResponse.model_validate(response.json())
+            # 4. Make the call
+            response_data = await self._post(
+                url=LearningEndpoints.LEARN,
+                correlation_id=correlation_id,
+                json_data=request_payload.model_dump(mode='json')
+            )
+
+            standard_resp = self.validate_standard_response(response_data)
+            learning_response = LearningResponse.model_validate(standard_resp.data)
 
             report_logger.info(
                 f"Learning agent returned adjustments: {learning_response.reasoning}",
             )
 
-            # 5. Translate the response into the Orchestrator's internal format
+            # 5. Translate response
             internal_deltas = InternalPolicyDeltas(
                 agent_weights=learning_response.policy_deltas.agent_weights,
                 risk_per_trade=learning_response.policy_deltas.risk.get("risk_per_trade"),
-                asset_biases=learning_response.policy_deltas.asset_biases, # เพิ่ม asset_biases
+                asset_biases=learning_response.policy_deltas.asset_biases,
             )
 
             return LearningResponseBody(
@@ -191,16 +133,6 @@ class LearningAgentClient:
                 policy_deltas=internal_deltas,
             )
 
-        except httpx.TimeoutException:
-            report_logger.warning(
-                f"Timeout while calling Auto-Learning Agent at {self.base_url}/learn"
-            )
-            return None
-        except httpx.RequestError as e:
-            report_logger.warning(
-                f"An error occurred while requesting {e.request.url!r}: {e!r}"
-            )
-            return None
         except Exception as e:
             report_logger.error(
                 f"Failed to process response from Auto-Learning Agent: {e}"
