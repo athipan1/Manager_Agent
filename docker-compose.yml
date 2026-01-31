@@ -1,25 +1,12 @@
 services:
-  base:
-    build:
-      context: .
-      dockerfile: base.Dockerfile
-    image: painaidee-base:latest
-
   manager-agent:
     build:
       context: .
       dockerfile: Dockerfile
-    image: painaidee/manager-agent:latest
-    restart: always
     ports:
-      - "8000:8000"
-    healthcheck:
-      test: ["CMD", "python", "/app/healthcheck.py"]
-      interval: 10s
-      timeout: 3s
-      retries: 5
+      - "8000:80"
     environment:
-      TECHNICAL_AGENT_URL: http://technical-agent:8000
+      TECHNICAL_AGENT_URL: http://technical-agent:8002
       FUNDAMENTAL_AGENT_URL: http://fundamental-agent:8001
       SCANNER_AGENT_URL: http://scanner-agent:8000
       DATABASE_AGENT_URL: http://database-agent:8000
@@ -66,27 +53,22 @@ services:
 
   scanner-agent:
     build:
-      context: ../Scanner_Agent
+      context: ./Scanner_Agent
       dockerfile: Dockerfile
-    image: painaidee/scanner-agent:latest
-    restart: always
-    ports:
-      - "8001:8000"
     healthcheck:
-      test: ["CMD-SHELL", "curl -f http://localhost:8000/health || exit 1"]
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
       interval: 10s
       timeout: 5s
       retries: 5
     environment:
-      PYTHONPATH: /app
+      PYTHONPATH: /code
 
   technical-agent:
-    image: painaidee/technical-agent:latest
-    restart: always
-    expose:
-      - "8000"
+    build:
+      context: ./Technical_Agent
+      dockerfile: Dockerfile
     healthcheck:
-      test: ["CMD-SHELL", "curl -f http://localhost:8000/health || exit 1"]
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8002/health')"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -95,12 +77,11 @@ services:
       PYTHONPATH: /app
 
   fundamental-agent:
-    image: painaidee/fundamental-agent:latest
-    restart: always
-    expose:
-      - "8001"
+    build:
+      context: ./Fundamental_Agent
+      dockerfile: Dockerfile
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://localhost:8001/ || exit 1"]
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8001/health')"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -109,74 +90,47 @@ services:
       PYTHONPATH: /app
 
   database-agent:
-    image: painaidee/database-agent:latest
-    restart: always
-    expose:
-      - "8000"
+    build:
+      context: ./Database_Agent
+      dockerfile: Dockerfile
     healthcheck:
-      test: ["CMD-SHELL", "curl -f http://localhost:8000/health || exit 1"]
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
       interval: 10s
       timeout: 5s
       retries: 5
     environment:
       DATABASE_AGENT_API_KEY: your_database_api_key
-      POSTGRES_USER: user
-      POSTGRES_PASSWORD: password
-      POSTGRES_DB: trading_db
-      POSTGRES_HOST: db
-      POSTGRES_PORT: 5432
+      USE_SQLITE: "true"
     volumes:
-      - ./data:/app/data
-    depends_on:
-      db:
-        condition: service_healthy
+      - ./data:/home/app/code/data
 
   learning-agent:
-    image: painaidee/learning-agent:latest
-    restart: always
-    expose:
-      - "8004"
+    build:
+      context: ./Learning_Agent
+      dockerfile: Dockerfile
     healthcheck:
-      test: ["CMD-SHELL", "curl -f http://localhost:8004/health || exit 1"]
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8004/health')"]
       interval: 10s
       timeout: 5s
       retries: 5
     environment:
       LEARNING_AGENT_API_KEY: your_learning_api_key
-      PYTHONPATH: /app
+      DATABASE_AGENT_URL: http://database-agent:8000
+      DATABASE_AGENT_API_KEY: your_database_api_key
+      PYTHONPATH: /home/app/web
 
   execution-agent:
-    image: painaidee/execution-agent:latest
-    restart: always
-    ports:
-      - "8006:8005"
+    build:
+      context: ./execution-agent
+      dockerfile: Dockerfile
     healthcheck:
-      test: ["CMD-SHELL", "curl -f http://localhost:8005/health || exit 1"]
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8005/health')"]
       interval: 10s
       timeout: 5s
       retries: 5
     environment:
       EXECUTION_AGENT_API_KEY: your_secret_key
-      DB_AGENT_URL: http://database-agent:8000
-      PYTHONPATH: /app
-    depends_on:
-      database-agent:
-        condition: service_healthy
-
-  db:
-    image: postgres:13
-    environment:
-      POSTGRES_USER: user
-      POSTGRES_PASSWORD: password
-      POSTGRES_DB: trading_db
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U user -d trading_db"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-
-volumes:
-  postgres_data:
-
+      DATABASE_AGENT_URL: http://database-agent:8000
+      DATABASE_AGENT_API_KEY: your_database_api_key
+      BROKER_MODE: "SIMULATOR"
+      PYTHONPATH: /home/appuser/src
