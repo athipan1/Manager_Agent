@@ -1,7 +1,6 @@
-#version: '3.8'
+version: "3.8"
 
 services:
-  # This service builds the shared base image that all other Python services will use.
   base:
     build:
       context: .
@@ -73,8 +72,8 @@ services:
       dockerfile: Dockerfile
     image: painaidee/scanner-agent:latest
     restart: always
-    expose:
-      - "8000"
+    ports:
+      - "8001:8000"
     healthcheck:
       test: ["CMD-SHELL", "curl -f http://localhost:8000/health || exit 1"]
       interval: 10s
@@ -84,10 +83,13 @@ services:
       PYTHONPATH: /app
 
   technical-agent:
+    build:
+      context: ./Technical_Agent
+      dockerfile: Dockerfile
     image: painaidee/technical-agent:latest
     restart: always
-    expose:
-      - "8000"
+    ports:
+      - "8002:8000"
     healthcheck:
       test: ["CMD-SHELL", "curl -f http://localhost:8000/health || exit 1"]
       interval: 10s
@@ -98,10 +100,13 @@ services:
       PYTHONPATH: /app
 
   fundamental-agent:
+    build:
+      context: ./Fundamental_Agent
+      dockerfile: Dockerfile
     image: painaidee/fundamental-agent:latest
     restart: always
-    expose:
-      - "8001"
+    ports:
+      - "8003:8001"
     healthcheck:
       test: ["CMD-SHELL", "curl -f http://localhost:8001/health || exit 1"]
       interval: 10s
@@ -112,10 +117,13 @@ services:
       PYTHONPATH: /app
 
   database-agent:
+    build:
+      context: ./Database_Agent
+      dockerfile: Dockerfile
     image: painaidee/database-agent:latest
     restart: always
-    expose:
-      - "8000"
+    ports:
+      - "8004:8000"
     healthcheck:
       test: ["CMD-SHELL", "curl -f http://localhost:8000/health || exit 1"]
       interval: 10s
@@ -134,10 +142,13 @@ services:
       - db
 
   learning-agent:
+    build:
+      context: ./Learning_Agent
+      dockerfile: Dockerfile
     image: painaidee/learning-agent:latest
     restart: always
-    expose:
-      - "8004"
+    ports:
+      - "8005:8004"
     healthcheck:
       test: ["CMD-SHELL", "curl -f http://localhost:8004/health || exit 1"]
       interval: 10s
@@ -148,6 +159,9 @@ services:
       PYTHONPATH: /app
 
   execution-agent:
+    build:
+      context: ./execution-agent
+      dockerfile: Dockerfile
     image: painaidee/execution-agent:latest
     restart: always
     ports:
