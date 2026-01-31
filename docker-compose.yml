@@ -67,20 +67,21 @@ services:
         condition: service_healthy
 
   scanner-agent:
-    build:
-      context: ./Scanner_Agent
-      dockerfile: Dockerfile
-    image: painaidee/scanner-agent:latest
-    restart: always
-    ports:
-      - "8001:8000"
-    healthcheck:
-      test: ["CMD-SHELL", "curl -f http://localhost:8000/health || exit 1"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-    environment:
-      PYTHONPATH: /app
+  build:
+    context: ../Scanner_Agent
+    dockerfile: Dockerfile
+  image: painaidee/scanner-agent:latest
+  restart: always
+  ports:
+    - "8001:8000"
+  healthcheck:
+    test: ["CMD-SHELL", "curl -f http://localhost:8000/health || exit 1"]
+    interval: 10s
+    timeout: 5s
+    retries: 5
+  environment:
+    PYTHONPATH: /app
+
 
   technical-agent:
     build:
