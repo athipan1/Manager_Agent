@@ -1,7 +1,7 @@
 # Stage 1: Base
 # This image is intended to be a shared base for all Python services.
 # It installs the common dependencies from requirements.base.txt.
-FROM python:3.12-slim
+FROM public.ecr.aws/docker/library/python:3.12-slim
 
 # Set working directory
 WORKDIR /app

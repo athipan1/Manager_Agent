@@ -66,12 +66,12 @@ services:
 
   scanner-agent:
     build:
-      context: ../Scanner_Agent
+      context: ./Scanner_Agent
       dockerfile: Dockerfile
     image: painaidee/scanner-agent:latest
     restart: always
     ports:
-      - "8001:8000"
+      - "8004:8000"
     healthcheck:
       test: ["CMD-SHELL", "curl -f http://localhost:8000/health || exit 1"]
       interval: 10s
@@ -81,10 +81,13 @@ services:
       PYTHONPATH: /app
 
   technical-agent:
+    build:
+      context: ./Technical_Agent
+      dockerfile: Dockerfile
     image: painaidee/technical-agent:latest
     restart: always
-    expose:
-      - "8000"
+    ports:
+      - "8002:8000"
     healthcheck:
       test: ["CMD-SHELL", "curl -f http://localhost:8000/health || exit 1"]
       interval: 10s
@@ -95,10 +98,13 @@ services:
       PYTHONPATH: /app
 
   fundamental-agent:
+    build:
+      context: ./Fundamental_Agent
+      dockerfile: Dockerfile
     image: painaidee/fundamental-agent:latest
     restart: always
-    expose:
-      - "8001"
+    ports:
+      - "8003:8001"
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://localhost:8001/ || exit 1"]
       interval: 10s
@@ -109,10 +115,13 @@ services:
       PYTHONPATH: /app
 
   database-agent:
+    build:
+      context: ./Database_Agent
+      dockerfile: Dockerfile
     image: painaidee/database-agent:latest
     restart: always
-    expose:
-      - "8000"
+    ports:
+      - "8001:8000"
     healthcheck:
       test: ["CMD-SHELL", "curl -f http://localhost:8000/health || exit 1"]
       interval: 10s
@@ -132,10 +141,13 @@ services:
         condition: service_healthy
 
   learning-agent:
+    build:
+      context: ./Learning_Agent
+      dockerfile: Dockerfile
     image: painaidee/learning-agent:latest
     restart: always
-    expose:
-      - "8004"
+    ports:
+      - "8005:8004"
     healthcheck:
       test: ["CMD-SHELL", "curl -f http://localhost:8004/health || exit 1"]
       interval: 10s
@@ -146,6 +158,9 @@ services:
       PYTHONPATH: /app
 
   execution-agent:
+    build:
+      context: ./Execution_Agent
+      dockerfile: Dockerfile
     image: painaidee/execution-agent:latest
     restart: always
     ports:
@@ -164,7 +179,7 @@ services:
         condition: service_healthy
 
   db:
-    image: postgres:13
+    image: public.ecr.aws/docker/library/postgres:13
     environment:
       POSTGRES_USER: user
       POSTGRES_PASSWORD: password
