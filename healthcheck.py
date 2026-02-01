@@ -9,7 +9,7 @@ import httpx
 
 try:
     # Use httpx, which is already a project dependency.
-    response = httpx.get("http://localhost:80/health", timeout=3.0)
+    response = httpx.get("http://localhost:8000/health", timeout=3.0)
 
     # Exit with a success code if the health check passes.
     if response.status_code == 200:

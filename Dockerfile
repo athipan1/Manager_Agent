@@ -1,7 +1,7 @@
 # Stage 1: Base
 # This image is intended to be a shared base for all Python services.
 # It installs the common dependencies from requirements.base.txt.
-FROM python:3.12-slim as base
+FROM public.ecr.aws/docker/library/python:3.12-slim as base
 
 # Set working directory
 WORKDIR /app
@@ -56,11 +56,11 @@ RUN chown -R app:app /app
 USER app
 
 # Expose the application port.
-EXPOSE 80
+EXPOSE 8000
 
 # Use the lightweight Python-based healthcheck.
 HEALTHCHECK --interval=10s --timeout=3s --retries=5 \
   CMD ["python", "/app/healthcheck.py"]
 
 # Set the command to run the application.
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "80"]
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
