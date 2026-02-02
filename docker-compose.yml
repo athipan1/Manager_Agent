@@ -66,7 +66,7 @@ services:
 
   scanner-agent:
     build:
-      context: ../Scanner_Agent
+      context: ./Scanner_Agent
       dockerfile: Dockerfile
     image: painaidee/scanner-agent:latest
     restart: always
@@ -81,6 +81,9 @@ services:
       PYTHONPATH: /app
 
   technical-agent:
+    build:
+      context: ./Technical_Agent
+      dockerfile: Dockerfile
     image: painaidee/technical-agent:latest
     restart: always
     expose:
@@ -95,6 +98,9 @@ services:
       PYTHONPATH: /app
 
   fundamental-agent:
+    build:
+      context: ./Fundamental_Agent
+      dockerfile: Dockerfile
     image: painaidee/fundamental-agent:latest
     restart: always
     expose:
@@ -109,6 +115,9 @@ services:
       PYTHONPATH: /app
 
   database-agent:
+    build:
+      context: ./Database_Agent
+      dockerfile: Dockerfile
     image: painaidee/database-agent:latest
     restart: always
     expose:
@@ -120,18 +129,12 @@ services:
       retries: 5
     environment:
       DATABASE_AGENT_API_KEY: your_database_api_key
-      POSTGRES_USER: user
-      POSTGRES_PASSWORD: password
-      POSTGRES_DB: trading_db
-      POSTGRES_HOST: db
-      POSTGRES_PORT: 5432
-    volumes:
-      - ./data:/app/data
-    depends_on:
-      db:
-        condition: service_healthy
+      USE_SQLITE: "true"
 
   learning-agent:
+    build:
+      context: ./Learning_Agent
+      dockerfile: Dockerfile
     image: painaidee/learning-agent:latest
     restart: always
     expose:
@@ -146,6 +149,9 @@ services:
       PYTHONPATH: /app
 
   execution-agent:
+    build:
+      context: ./Execution_Agent
+      dockerfile: Dockerfile
     image: painaidee/execution-agent:latest
     restart: always
     ports:
@@ -163,20 +169,4 @@ services:
       database-agent:
         condition: service_healthy
 
-  db:
-    image: postgres:13
-    environment:
-      POSTGRES_USER: user
-      POSTGRES_PASSWORD: password
-      POSTGRES_DB: trading_db
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U user -d trading_db"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-
-volumes:
-  postgres_data:
 
