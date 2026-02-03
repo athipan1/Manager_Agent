@@ -101,7 +101,7 @@ def test_analyze_multi_endpoint_success(mock_main_cm, mock_high_level_dependenci
 
     response = client.post("/analyze-multi", json={"tickers": ["AAPL", "GOOG", "MSFT"]})
     assert response.status_code == 200
-    data = response.json()
+    data = response.json()["data"]
 
     assert data["execution_summary"]["total_trades_approved"] == 3
     assert data["execution_summary"]["total_trades_executed"] == 3
@@ -126,7 +126,7 @@ def test_position_scaling_on_risk_budget(mock_main_cm, mock_high_level_dependenc
 
     response = client.post("/analyze-multi", json={"tickers": ["AAPL", "MSFT"]})
     assert response.status_code == 200
-    data = response.json()
+    data = response.json()["data"]
 
     assert data["execution_summary"]["total_trades_approved"] == 2
 
@@ -149,7 +149,7 @@ def test_max_exposure_limit(mock_main_cm, mock_high_level_dependencies):
 
     response = client.post("/analyze-multi", json={"tickers": ["AAPL", "MSFT"]})
     assert response.status_code == 200
-    data = response.json()
+    data = response.json()["data"]
 
     assert data["execution_summary"]["total_trades_approved"] == 1
 
