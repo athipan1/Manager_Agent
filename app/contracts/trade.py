@@ -2,6 +2,7 @@ from pydantic import BaseModel, Field
 from typing import Optional, Literal, Dict
 from decimal import Decimal
 from enum import Enum
+import datetime
 
 class OrderSide(str, Enum):
     BUY = "buy"
@@ -58,7 +59,7 @@ class Order(BaseModel):
     quantity: int
     price: Decimal
     status: Literal["pending", "executed", "cancelled", "failed"]
-    timestamp: str
+    timestamp: datetime.datetime
 
 class Trade(BaseModel):
     """Represents a single historical trade."""
@@ -69,7 +70,7 @@ class Trade(BaseModel):
     side: Literal["buy", "sell"]
     quantity: Decimal
     price: Decimal
-    executed_at: str # ISO-8601 timestamp
+    executed_at: datetime.datetime # ISO-8601 timestamp
     agents: Dict[str, str] = Field(default_factory=dict)
     pnl_pct: Optional[Decimal] = None
     entry_price: Optional[Decimal] = None

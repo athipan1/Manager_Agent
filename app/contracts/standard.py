@@ -1,6 +1,14 @@
 from pydantic import BaseModel, Field, field_validator, ConfigDict
-from typing import Literal, Optional, Dict, Any, Union
+from typing import Literal, Optional, Dict, Any, Union, List
 import datetime
+
+# Import other data models for the Union
+from .trade import (
+    AccountBalance, Position, Order, Trade, PortfolioMetrics, CreateOrderResponse
+)
+from .learning import LearningResponse, LearningResponseBody
+from .scanner import ScannerResponseData
+from .manager import OrchestratorResponse, MultiOrchestratorResponse
 
 class StandardAgentData(BaseModel):
     """Standardized data schema for all agents."""
@@ -21,13 +29,43 @@ class StandardAgentResponse(BaseModel):
     agent_type: str
     version: str
     timestamp: datetime.datetime
-    data: Any # Can be StandardAgentData, AccountBalance, Order, etc.
+    data: Union[
+        StandardAgentData,
+        AccountBalance,
+        Position,
+        Order,
+        Trade,
+        PortfolioMetrics,
+        CreateOrderResponse,
+        LearningResponse,
+        LearningResponseBody,
+        ScannerResponseData,
+        OrchestratorResponse,
+        MultiOrchestratorResponse,
+        Dict[str, Any],
+        List[Any],
+        None
+    ] = None
+    metadata: Dict[str, Any] = Field(default_factory=dict)
     error: Optional[Dict[str, Any]] = None
 
     @field_validator('version')
+    @classmethod
     def version_must_be_semantic(cls, v):
         # A simple check for semantic versioning format (e.g., "1.0", "2.1.3")
         parts = v.split('.')
         if not all(part.isdigit() for part in parts):
             raise ValueError('Version must be in semantic format (e.g., "1.0")')
+        return v
+
+    @field_validator('timestamp', mode='before')
+    @classmethod
+    def parse_timestamp(cls, v):
+        if isinstance(v, str):
+            try:
+                # Handle ISO format strings, replacing Z with +00:00 for fromisoformat
+                return datetime.datetime.fromisoformat(v.replace('Z', '+00:00'))
+            except ValueError:
+                # Fallback to current time if parsing fails
+                return datetime.datetime.now(datetime.timezone.utc)
         return v

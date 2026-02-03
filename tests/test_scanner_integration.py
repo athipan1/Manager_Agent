@@ -99,7 +99,7 @@ def test_scan_and_analyze_technical_success(mock_cm, mock_learning, mock_db, moc
     })
 
     assert response.status_code == 200
-    data = response.json()
+    data = response.json()["data"]
     from unittest.mock import ANY
     assert data["results"][0]["analysis"]["ticker"] == "AAPL"
     mock_scanner_instance.scan.assert_called_once()
@@ -127,6 +127,6 @@ def test_scan_and_analyze_no_candidates(mock_cm, mock_scanner):
     })
 
     assert response.status_code == 200
-    data = response.json()
+    data = response.json()["data"]
     assert data["results"] == []
     assert data["execution_summary"]["total_trades_approved"] == 0

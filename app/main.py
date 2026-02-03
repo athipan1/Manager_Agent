@@ -34,7 +34,7 @@ from fastapi.responses import JSONResponse
 app = FastAPI()
 
 
-@app.get("/health")
+@app.get("/health", response_model=StandardAgentResponse)
 async def health_check():
     """
     Health check endpoint for liveness and readiness probes.
@@ -54,29 +54,38 @@ async def health_check():
         downstream_services["database_agent"]["details"] = f"Connection failed: {str(e)}"
         report_logger.warning(f"Health check failed: Database Agent connection error: {e}")
 
-    if is_healthy:
-        return JSONResponse(
-            status_code=status.HTTP_200_OK,
-            content={"status": "ok", "dependencies": downstream_services}
-        )
-    else:
-        return JSONResponse(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            content={"status": "unhealthy", "dependencies": downstream_services}
-        )
+    content = StandardAgentResponse(
+        status="success" if is_healthy else "error",
+        agent_type="manager-agent",
+        version="1.0.0",
+        timestamp=datetime.datetime.now(datetime.UTC),
+        data={"dependencies": downstream_services}
+    )
+
+    return JSONResponse(
+        status_code=status.HTTP_200_OK if is_healthy else status.HTTP_503_SERVICE_UNAVAILABLE,
+        content=content.model_dump(mode='json')
+    )
 
 
 def _process_agent_response(resp: Union[StandardAgentResponse, Dict[str, Any]], agent_type: str) -> ReportDetail | None:
     """Processes a standardized agent response into a ReportDetail."""
     if not isinstance(resp, StandardAgentResponse):
-        return None
+        try:
+            resp = StandardAgentResponse.model_validate(resp)
+        except Exception as e:
+            report_logger.warning(f"Failed to validate StandardAgentResponse for {agent_type}: {e}")
+            return None
 
     # Analysis agents should return StandardAgentData in the 'data' field
-    data_dict = resp.data
+    data_obj = resp.data
     try:
-        data = StandardAgentData.model_validate(data_dict)
+        if isinstance(data_obj, StandardAgentData):
+            data = data_obj
+        else:
+            data = StandardAgentData.model_validate(data_obj)
     except Exception as e:
-        report_logger.warning(f"Failed to validate data for {agent_type} agent: {e}")
+        report_logger.warning(f"Failed to validate StandardAgentData for {agent_type} agent: {e}")
         return None
 
     tech_reason, fund_reason = get_reasons(
@@ -163,7 +172,7 @@ async def _analyze_single_asset(ticker: str, correlation_id: str) -> dict:
     }
 
 
-@app.post("/analyze", response_model=OrchestratorResponse)
+@app.post("/analyze", response_model=StandardAgentResponse)
 async def analyze_ticker(request: AgentRequestBody):
     """
     Analyzes a ticker and executes a trade if approved.
@@ -225,7 +234,7 @@ async def analyze_ticker(request: AgentRequestBody):
             report = OrchestratorResponse(
                 report_id=correlation_id,
                 ticker=ticker.upper(),
-                timestamp=datetime.datetime.now(datetime.UTC).isoformat(),
+                timestamp=datetime.datetime.now(datetime.UTC),
                 final_verdict=final_verdict,
                 status=analysis_result["status"],
                 details=analysis_result["details"]
@@ -245,13 +254,19 @@ async def analyze_ticker(request: AgentRequestBody):
                 if deltas:
                     config_manager.apply_deltas(deltas)
 
-            return report
+            return StandardAgentResponse(
+                status="success",
+                agent_type="manager-agent",
+                version="1.0.0",
+                timestamp=datetime.datetime.now(datetime.UTC),
+                data=report
+            )
 
     except AgentUnavailable as e:
         report_logger.critical(f"An agent is unavailable: {e}")
         raise HTTPException(status_code=503, detail=str(e))
 
-async def _process_multi_asset_analysis(tickers: List[str], account_id: int, correlation_id: str) -> MultiOrchestratorResponse:
+async def _process_multi_asset_analysis(tickers: List[str], account_id: int, correlation_id: str) -> StandardAgentResponse:
     """
     Internal logic for analyzing multiple assets and managing portfolio risk.
     """
@@ -329,9 +344,9 @@ async def _process_multi_asset_analysis(tickers: List[str], account_id: int, cor
                     execution_result=ticker_to_execution.get(most_impactful_trade['symbol'])
                 )
 
-            return MultiOrchestratorResponse(
+            multi_report = MultiOrchestratorResponse(
                 multi_report_id=correlation_id,
-                timestamp=datetime.datetime.now(datetime.UTC).isoformat(),
+                timestamp=datetime.datetime.now(datetime.UTC),
                 execution_summary=ExecutionSummary(
                     total_trades_approved=len(approved_trades),
                     total_trades_executed=total_executed,
@@ -339,12 +354,19 @@ async def _process_multi_asset_analysis(tickers: List[str], account_id: int, cor
                 ),
                 results=asset_responses
             )
+            return StandardAgentResponse(
+                status="success",
+                agent_type="manager-agent",
+                version="1.0.0",
+                timestamp=datetime.datetime.now(datetime.UTC),
+                data=multi_report
+            )
     except AgentUnavailable as e:
         report_logger.critical(f"An agent is unavailable: {e}")
         raise HTTPException(status_code=503, detail=str(e))
 
 
-@app.post("/analyze-multi", response_model=MultiOrchestratorResponse)
+@app.post("/analyze-multi", response_model=StandardAgentResponse)
 async def analyze_tickers_endpoint(request: MultiAgentRequestBody):
     """
     Analyzes multiple tickers and manages portfolio risk.
@@ -354,7 +376,7 @@ async def analyze_tickers_endpoint(request: MultiAgentRequestBody):
     return await _process_multi_asset_analysis(request.tickers, account_id, correlation_id)
 
 
-@app.post("/scan-and-analyze", response_model=MultiOrchestratorResponse)
+@app.post("/scan-and-analyze", response_model=StandardAgentResponse)
 async def scan_and_analyze_endpoint(request: ScanAndAnalyzeRequest):
     """
     Scans for potential candidates and then performs multi-asset analysis on them.
@@ -378,15 +400,22 @@ async def scan_and_analyze_endpoint(request: ScanAndAnalyzeRequest):
 
             if not selected_tickers:
                 report_logger.info(f"No candidates found by scanner for scan_type={request.scan_type}, correlation_id={correlation_id}")
-                return MultiOrchestratorResponse(
+                multi_report = MultiOrchestratorResponse(
                     multi_report_id=correlation_id,
-                    timestamp=datetime.datetime.now(datetime.UTC).isoformat(),
+                    timestamp=datetime.datetime.now(datetime.UTC),
                     execution_summary=ExecutionSummary(
                         total_trades_approved=0,
                         total_trades_executed=0,
                         total_trades_failed=0
                     ),
                     results=[]
+                )
+                return StandardAgentResponse(
+                    status="success",
+                    agent_type="manager-agent",
+                    version="1.0.0",
+                    timestamp=datetime.datetime.now(datetime.UTC),
+                    data=multi_report
                 )
 
             report_logger.info(f"Scanner found {len(selected_tickers)} candidates: {selected_tickers}, correlation_id={correlation_id}")
