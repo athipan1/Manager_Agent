@@ -106,5 +106,5 @@ async def test_database_client_create_order(mock_config):
 
     assert isinstance(response, CreateOrderResponse)
     assert response.status == OrderStatus.PENDING
-    assert response.order_id == mock_order_id
+    assert response.order_id == str(mock_order_id)
     assert response.client_order_id == client_order_id

@@ -1,5 +1,5 @@
-from pydantic import BaseModel, Field
-from typing import Optional, Literal, Dict
+from pydantic import BaseModel, Field, field_validator
+from typing import Optional, Literal, Dict, Union
 from decimal import Decimal
 from enum import Enum
 import datetime
@@ -27,7 +27,7 @@ class OrderStatus(str, Enum):
 
 class CreateOrderRequest(BaseModel):
     client_order_id: str = Field(..., description="Globally unique client order ID")
-    account_id: int
+    account_id: Union[int, str]
     symbol: str
     side: OrderSide
     order_type: OrderType
@@ -35,12 +35,22 @@ class CreateOrderRequest(BaseModel):
     quantity: int
     time_in_force: TimeInForce = TimeInForce.GTC
 
+    @field_validator('account_id', mode='before')
+    @classmethod
+    def convert_account_id_to_str(cls, v):
+        return str(v)
+
 class CreateOrderResponse(BaseModel):
-    order_id: int
+    order_id: Union[int, str]
     client_order_id: str
     status: OrderStatus
     broker_order_id: Optional[str] = None
     reason: Optional[str] = None
+
+    @field_validator('order_id', mode='before')
+    @classmethod
+    def convert_order_id_to_str(cls, v):
+        return str(v)
 
 class AccountBalance(BaseModel):
     cash_balance: Decimal
@@ -52,19 +62,24 @@ class Position(BaseModel):
     current_market_price: Optional[Decimal] = None
 
 class Order(BaseModel):
-    order_id: int
-    account_id: int
+    order_id: Union[int, str]
+    account_id: Union[int, str]
     symbol: str
-    order_type: Literal["BUY", "SELL"]
+    side: Literal["buy", "sell"]
     quantity: int
     price: Decimal
     status: Literal["pending", "executed", "cancelled", "failed"]
     timestamp: datetime.datetime
 
+    @field_validator('order_id', 'account_id', mode='before')
+    @classmethod
+    def convert_to_str(cls, v):
+        return str(v)
+
 class Trade(BaseModel):
     """Represents a single historical trade."""
-    trade_id: str # uuid
-    account_id: str # uuid
+    trade_id: Union[int, str]
+    account_id: Union[int, str]
     asset_id: str
     symbol: str
     side: Literal["buy", "sell"]
@@ -75,6 +90,11 @@ class Trade(BaseModel):
     pnl_pct: Optional[Decimal] = None
     entry_price: Optional[Decimal] = None
     exit_price: Optional[Decimal] = None
+
+    @field_validator('trade_id', 'account_id', mode='before')
+    @classmethod
+    def convert_to_str(cls, v):
+        return str(v)
 
 class PortfolioMetrics(BaseModel):
     """Represents the overall performance metrics of the portfolio."""

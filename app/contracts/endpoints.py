@@ -3,10 +3,10 @@ class DatabaseEndpoints:
     BALANCE = "/accounts/{account_id}/balance"
     POSITIONS = "/accounts/{account_id}/positions"
     ORDERS = "/accounts/{account_id}/orders"
-    EXECUTE_ORDER = "/orders/{order_id}/execute"
+    EXECUTE_ORDER = "/accounts/{account_id}/orders/{order_id}/execute"
     TRADE_HISTORY = "/accounts/{account_id}/trade_history"
     PORTFOLIO_METRICS = "/accounts/{account_id}/portfolio_metrics"
-    PRICE_HISTORY = "/prices/{symbol}"
+    PRICE_HISTORY = "/accounts/{account_id}/prices/{symbol}"
 
 class ExecutionEndpoints:
     EXECUTE = "/execute"

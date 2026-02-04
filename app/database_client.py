@@ -1,5 +1,5 @@
 import os
-from typing import List, Any, Dict
+from typing import List, Any, Dict, Union
 
 from .contracts import (
     AccountBalance,
@@ -30,21 +30,26 @@ class DatabaseAgentClient(ResilientAgentClient):
         return self.validate_standard_response(response_data)
 
     async def get_account_balance(
-        self, account_id: int, correlation_id: str
+        self, account_id: Union[int, str], correlation_id: str
     ) -> AccountBalance:
         url = DatabaseEndpoints.BALANCE.format(account_id=account_id)
         response_data = await self._get(url, correlation_id)
         standard_resp = self.validate_standard_response(response_data)
         return AccountBalance(**standard_resp.data)
 
-    async def get_positions(self, account_id: int, correlation_id: str) -> List[Position]:
+    async def get_positions(
+        self, account_id: Union[int, str], correlation_id: str
+    ) -> List[Position]:
         url = DatabaseEndpoints.POSITIONS.format(account_id=account_id)
         response_data = await self._get(url, correlation_id)
         standard_resp = self.validate_standard_response(response_data)
         return [Position(**p) for p in standard_resp.data]
 
     async def create_order(
-        self, account_id: int, order_body: CreateOrderRequest, correlation_id: str
+        self,
+        account_id: Union[int, str],
+        order_body: CreateOrderRequest,
+        correlation_id: str,
     ) -> CreateOrderResponse:
         url = DatabaseEndpoints.ORDERS.format(account_id=account_id)
         order_payload = order_body.model_dump(mode='json')
@@ -57,14 +62,18 @@ class DatabaseAgentClient(ResilientAgentClient):
         standard_resp = self.validate_standard_response(response_data)
         return CreateOrderResponse(**standard_resp.data)
 
-    async def execute_order(self, order_id: int, correlation_id: str) -> Order:
-        url = DatabaseEndpoints.EXECUTE_ORDER.format(order_id=order_id)
+    async def execute_order(
+        self, account_id: Union[int, str], order_id: Union[int, str], correlation_id: str
+    ) -> Order:
+        url = DatabaseEndpoints.EXECUTE_ORDER.format(
+            account_id=account_id, order_id=order_id
+        )
         response_data = await self._post(url, correlation_id, json_data={})
         standard_resp = self.validate_standard_response(response_data)
         return Order(**standard_resp.data)
 
     async def get_trade_history(
-        self, account_id: int, correlation_id: str
+        self, account_id: Union[int, str], correlation_id: str
     ) -> List[Trade]:
         url = DatabaseEndpoints.TRADE_HISTORY.format(account_id=account_id)
         response_data = await self._get(url, correlation_id)
@@ -72,7 +81,7 @@ class DatabaseAgentClient(ResilientAgentClient):
         return [Trade(**t) for t in standard_resp.data]
 
     async def get_portfolio_metrics(
-        self, account_id: int, correlation_id: str
+        self, account_id: Union[int, str], correlation_id: str
     ) -> PortfolioMetrics:
         url = DatabaseEndpoints.PORTFOLIO_METRICS.format(account_id=account_id)
         response_data = await self._get(url, correlation_id)
@@ -80,9 +89,11 @@ class DatabaseAgentClient(ResilientAgentClient):
         return PortfolioMetrics(**standard_resp.data)
 
     async def get_price_history(
-        self, symbol: str, correlation_id: str
+        self, account_id: Union[int, str], symbol: str, correlation_id: str
     ) -> List[PricePoint]:
-        url = DatabaseEndpoints.PRICE_HISTORY.format(symbol=symbol)
+        url = DatabaseEndpoints.PRICE_HISTORY.format(
+            account_id=account_id, symbol=symbol
+        )
         response_data = await self._get(url, correlation_id)
         standard_resp = self.validate_standard_response(response_data)
         return [PricePoint(**p) for p in standard_resp.data]

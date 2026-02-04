@@ -100,7 +100,7 @@ def _process_agent_response(resp: Union[StandardAgentResponse, Dict[str, Any]], 
     )
 
 
-async def _execute_trade(exec_client: ExecutionAgentClient, trade_decision: dict, account_id: int, correlation_id: str) -> dict:
+async def _execute_trade(exec_client: ExecutionAgentClient, trade_decision: dict, account_id: Union[int, str], correlation_id: str) -> dict:
     """
     Submits a trade to the Execution Agent and returns the outcome.
     """
@@ -266,7 +266,7 @@ async def analyze_ticker(request: AgentRequestBody):
         report_logger.critical(f"An agent is unavailable: {e}")
         raise HTTPException(status_code=503, detail=str(e))
 
-async def _process_multi_asset_analysis(tickers: List[str], account_id: int, correlation_id: str) -> StandardAgentResponse:
+async def _process_multi_asset_analysis(tickers: List[str], account_id: Union[int, str], correlation_id: str) -> StandardAgentResponse:
     """
     Internal logic for analyzing multiple assets and managing portfolio risk.
     """
