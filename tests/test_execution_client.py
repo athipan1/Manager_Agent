@@ -65,7 +65,7 @@ async def test_create_order_success(execution_client: ExecutionAgentClient):
 
     assert isinstance(response, CreateOrderResponse)
     assert response.status == OrderStatus.PENDING
-    assert response.order_id == mock_order_id
+    assert response.order_id == str(mock_order_id)
     assert response.client_order_id == client_order_id
 
 

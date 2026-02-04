@@ -134,6 +134,7 @@ async def test_trigger_learning_cycle_success(
             FAKE_CORRELATION_ID,
         )
         mock_db_client.get_price_history.assert_awaited_once_with(
+            FAKE_ACCOUNT_ID,
             FAKE_SYMBOL,
             FAKE_CORRELATION_ID,
         )

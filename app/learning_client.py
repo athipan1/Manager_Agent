@@ -1,5 +1,5 @@
 import asyncio
-from typing import Dict, Optional, List, Any
+from typing import Dict, Optional, List, Any, Union
 from decimal import Decimal
 import uuid
 
@@ -38,7 +38,7 @@ class LearningAgentClient(ResilientAgentClient):
 
     async def trigger_learning_cycle(
         self,
-        account_id: int,
+        account_id: Union[int, str],
         symbol: str,
         correlation_id: str,
         execution_result: Optional[Dict[str, Any]] = None,
@@ -75,6 +75,7 @@ class LearningAgentClient(ResilientAgentClient):
                 ))
 
             price_history_data = await self.db_client.get_price_history(
+                account_id,
                 symbol,
                 correlation_id,
             )
