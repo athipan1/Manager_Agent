@@ -108,8 +108,8 @@ def assess_portfolio_trades(
     final_decisions = []
 
     # --- 1. Separate and Sort Verdicts ---
-    sell_verdicts = [res for res in analysis_results if res["final_verdict"] == "sell"]
-    buy_verdicts = [res for res in analysis_results if res["final_verdict"] == "buy"]
+    sell_verdicts = [res for res in analysis_results if res["final_verdict"] in ["sell", "strong_sell"]]
+    buy_verdicts = [res for res in analysis_results if res["final_verdict"] in ["buy", "strong_buy"]]
 
     def get_synthesized_score(result):
         tech_score = result["details"].technical.score if result["details"].technical else 0
@@ -133,7 +133,7 @@ def assess_portfolio_trades(
             enable_technical_stop=enable_technical_stop,
             max_position_pct=max_position_pct,
             symbol=ticker,
-            action="sell",
+            action="sell", # standardized to buy/sell/hold for risk manager
             entry_price=Decimal("0"),
             current_position_size=current_position.quantity if current_position else 0,
         )
@@ -167,7 +167,7 @@ def assess_portfolio_trades(
             enable_technical_stop=enable_technical_stop,
             max_position_pct=max_position_pct,
             symbol=ticker,
-            action="buy",
+            action="buy", # standardized
             entry_price=Decimal(entry_price_raw),
             technical_stop_loss=Decimal(technical_stop_loss_raw) if technical_stop_loss_raw is not None else None,
             current_position_size=current_position.quantity if current_position else 0,

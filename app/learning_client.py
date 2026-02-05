@@ -99,6 +99,7 @@ class LearningAgentClient(ResilientAgentClient):
 
             # 3. Construct payload
             request_payload = LearningRequest(
+                account_id=account_id,
                 learning_mode=config_manager.get("LEARNING_MODE"),
                 window_size=config_manager.get("WINDOW_SIZE"),
                 trade_history=trade_history,

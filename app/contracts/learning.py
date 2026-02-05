@@ -1,5 +1,5 @@
 from pydantic import BaseModel, Field
-from typing import Dict, List, Optional, Any
+from typing import Dict, List, Optional, Any, Union
 from decimal import Decimal
 from .trade import Trade
 from .price import PricePoint
@@ -19,6 +19,7 @@ class CurrentPolicy(BaseModel):
 
 class LearningRequest(BaseModel):
     """The complete input data structure for the /learn endpoint."""
+    account_id: Union[int, str]
     learning_mode: str
     window_size: int
     trade_history: List[Trade]
