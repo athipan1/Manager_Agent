@@ -105,14 +105,15 @@ async def _execute_trade(exec_client: ExecutionAgentClient, trade_decision: dict
     Submits a trade to the Execution Agent and returns the outcome.
     """
     ticker = trade_decision['symbol']
-    final_verdict = trade_decision['action']
+    side = trade_decision['action'] # Guaranteed to be 'buy' or 'sell' from risk manager
     quantity = trade_decision['position_size']
     entry_price = trade_decision.get('entry_price', 0)
 
     try:
         order_request = CreateOrderRequest(
             symbol=ticker,
-            side=final_verdict,
+            side=side,
+            order_type="market",
             quantity=quantity,
             price=float(entry_price),
             client_order_id=str(uuid.uuid4()),
@@ -388,15 +389,28 @@ async def scan_and_analyze_endpoint(request: ScanAndAnalyzeRequest):
         async with ScannerAgentClient() as scanner_client:
             if request.scan_type == "technical":
                 scan_response = await scanner_client.scan(request.symbols, correlation_id)
-                candidates = scan_response.data.get("candidates", []) if scan_response.data else []
+                if hasattr(scan_response.data, "candidates"):
+                    candidates = scan_response.data.candidates
+                else:
+                    candidates = scan_response.data.get("candidates", []) if scan_response.data else []
+
                 # Simple ranking: STRONG_BUY first, then BUY
-                candidates.sort(key=lambda x: 2 if x.get("recommendation") == "STRONG_BUY" else 1, reverse=True)
+                def sort_key(x):
+                    rec = x.recommendation if hasattr(x, "recommendation") else x.get("recommendation")
+                    return 2 if rec == "STRONG_BUY" else 1
+                candidates.sort(key=sort_key, reverse=True)
             else:
                 scan_response = await scanner_client.scan_fundamental(request.symbols, correlation_id)
-                candidates = scan_response.data.get("candidates", []) if scan_response.data else []
+                if hasattr(scan_response.data, "candidates"):
+                    candidates = scan_response.data.candidates
+                else:
+                    candidates = scan_response.data.get("candidates", []) if scan_response.data else []
                 # Already ranked by fundamental_score in Scanner_Agent
 
-            selected_tickers = [c["symbol"] for c in candidates[:request.max_candidates]]
+            selected_tickers = [
+                (c.symbol if hasattr(c, "symbol") else c.get("symbol"))
+                for c in candidates[:request.max_candidates]
+            ]
 
             if not selected_tickers:
                 report_logger.info(f"No candidates found by scanner for scan_type={request.scan_type}, correlation_id={correlation_id}")
