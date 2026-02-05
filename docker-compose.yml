@@ -81,6 +81,9 @@ services:
       PYTHONPATH: /app
 
   technical-agent:
+    build:
+      context: ./Technical_Agent
+      dockerfile: Dockerfile
     image: painaidee/technical-agent:latest
     restart: always
     expose:
@@ -95,6 +98,9 @@ services:
       PYTHONPATH: /app
 
   fundamental-agent:
+    build:
+      context: ./Fundamental_Agent
+      dockerfile: Dockerfile
     image: painaidee/fundamental-agent:latest
     restart: always
     expose:
@@ -109,6 +115,9 @@ services:
       PYTHONPATH: /app
 
   database-agent:
+    build:
+      context: ./Database_Agent
+      dockerfile: Dockerfile
     image: painaidee/database-agent:latest
     restart: always
     expose:
@@ -132,6 +141,9 @@ services:
         condition: service_healthy
 
   learning-agent:
+    build:
+      context: ./Learning_Agent
+      dockerfile: Dockerfile
     image: painaidee/learning-agent:latest
     restart: always
     expose:
@@ -146,6 +158,9 @@ services:
       PYTHONPATH: /app
 
   execution-agent:
+    build:
+      context: ./execution-agent
+      dockerfile: Dockerfile
     image: painaidee/execution-agent:latest
     restart: always
     ports:
@@ -164,7 +179,7 @@ services:
         condition: service_healthy
 
   db:
-    image: postgres:13
+    image: public.ecr.aws/docker/library/postgres:13-alpine
     environment:
       POSTGRES_USER: user
       POSTGRES_PASSWORD: password
