@@ -34,6 +34,10 @@ class ExecutionAgentClient(ResilientAgentClient):
         try:
             # Serialize payload (Decimal-safe)
             payload = order_details.model_dump(mode="json")
+            # Map client_order_id to trade_id for Execution Agent
+            if "client_order_id" in payload and "trade_id" not in payload:
+                payload["trade_id"] = payload.pop("client_order_id")
+
             idempotency_key = order_details.client_order_id
 
             report_logger.info(
