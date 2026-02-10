@@ -1,85 +1,78 @@
-# รายงานสรุปการทดสอบระบบ Multi-Agent Trading System (End-to-End)
+# End-to-End Test Report: Multi-Agent Trading System
 
-## 🎯 สถานะการทดสอบ: ✅ สำเร็จ (PASS)
-สามารถดำเนินการตั้งแต่การสแกนหุ้น, วิเคราะห์, ตรวจสอบความเสี่ยง, ส่งคำสั่งซื้อขายไปยังโบรกเกอร์ (Simulator), และบันทึกบัญชี (Balance/Positions) ได้ครบวงจร
+## 1. Agent URLs & Status
+- **Manager Agent**: http://localhost:8000 (HEALTHY)
+- **Database Agent**: http://localhost:8001 (HEALTHY)
+- **Fundamental Agent**: http://localhost:8002 (HEALTHY)
+- **Technical Agent**: http://localhost:8003 (HEALTHY)
+- **Learning Agent**: http://localhost:8004 (HEALTHY)
+- **Execution Agent**: http://localhost:8005 (HEALTHY)
+- **Scanner Agent**: http://localhost:8006 (HEALTHY)
 
----
+## 2. Test Execution Flow (Success Case: CPALL)
 
-## 📡 สรุป URL ของแต่ละ Agent
-- **Manager Agent**: `http://localhost:8000`
-- **Database Agent**: `http://localhost:8001`
-- **Fundamental Agent**: `http://localhost:8002`
-- **Technical Agent**: `http://localhost:8003`
-- **Learning Agent**: `http://localhost:8004`
-- **Execution Agent**: `http://localhost:8005`
-- **Scanner Agent**: `http://localhost:8006`
-
----
-
-## 🛠 รายการแก้ไขที่จำเป็นแยกตาม Repository
-
-### 1. Manager_Agent (Main Repo)
-- **จุดที่แก้**: `app/main.py`
-    - เพิ่มการรองรับ verdict `strong_buy` และ `strong_sell` ในการสั่งเทรด
-    - เพิ่ม `order_type="market"` ใน `CreateOrderRequest` เพื่อให้ตรงกับ Schema ของ Execution Agent
-    - แปลงสัญลักษณ์จากผลการวิเคราะห์ (เช่น strong_buy) เป็นคำสั่งพื้นฐาน (buy/sell) สำหรับ Risk Manager
-- **จุดที่แก้**: `app/contracts/learning.py` และ `app/learning_client.py`
-    - เพิ่มฟิลด์ `account_id` ใน `LearningRequest` เพื่อให้ Learning Agent สามารถดึงข้อมูลประวัติการเทรดได้ถูกต้อง
-
-### 2. Database_Agent
-- **จุดที่แก้**: `trading_db.py`
-    - เพิ่มฟิลด์ `broker_order_id` และ `executed_quantity` ในตาราง `orders`
-    - แก้ไข `status` CHECK constraint ให้รองรับสถานะ `placed` และ `partially_filled`
-    - เพิ่มเมธอด `update_order` สำหรับอัปเดตข้อมูลจาก Execution Agent
-    - **สำคัญ**: เพิ่ม Logic การบันทึกบัญชีอัตโนมัติ (`_perform_accounting_in_txn`) เมื่อ Order ถูกเปลี่ยนสถานะเป็น `executed` ผ่าน PATCH
-- **จุดที่แก้**: `main.py`
-    - เพิ่ม Endpoint `GET /orders/{id}`, `GET /orders/client/{client_id}` และ `PATCH /orders/{id}`
-    - แก้ไขความล้มเหลวในการ Start กรณีไม่พบ Alpaca Key (ให้ใช้ Dummy แทน)
-
-### 3. Execution_Agent
-- **จุดที่แก้**: `src/app/models.py`
-    - เปลี่ยนชื่อฟิลด์จาก `trade_id` เป็น `client_order_id` และใช้ `validation_alias` เพื่อความยืดหยุ่นในการรับข้อมูลจาก Manager
-    - เพิ่มฟิลด์ `version` ใน `StandardAgentResponse`
-- **จุดที่แก้**: `src/app/db_client.py`
-    - แก้ไขการดึงข้อมูลจาก Database Agent ให้แกะโครงสร้าง `data` จาก Standard Response
-    - รองรับการใช้ `DB_AGENT_API_KEY` แยกต่างหาก
-
-### 4. Technical_Agent
-- **จุดที่แก้**: `app/main.py`
-    - เปลี่ยนเป็นการใช้ Relative Import (`from .service ...`) เพื่อให้รันแบบ Module ได้ถูกต้อง
-
----
-
-## 📝 ตัวอย่าง Request/Response การทดสอบจริง
-
-### 1. เรียกการวิเคราะห์ผ่าน Manager
-**Request:**
-```bash
-curl -X POST http://localhost:8000/analyze \
-     -H "Content-Type: application/json" \
-     -d '{"ticker": "AAPL", "account_id": "1"}'
+### 2.1 Market Scan
+**Request:** `POST http://localhost:8006/scan`
+```json
+{"symbols": ["PTT", "CPALL"]}
 ```
+**Response:** Success - CPALL found as STRONG_BUY.
 
+### 2.2 Analysis & Execution
+**Request:** `POST http://localhost:8000/analyze`
+```json
+{"ticker": "CPALL", "account_id": 1}
+```
 **Response:**
 ```json
 {
   "status": "success",
+  "agent_type": "manager-agent",
   "data": {
     "report_id": "...",
-    "ticker": "AAPL",
-    "final_verdict": "strong_buy",
+    "ticker": "CPALL",
+    "final_verdict": "buy",
     "status": "complete",
     "details": {
-      "technical": { "action": "buy", "score": 0.8, ... },
-      "fundamental": { "action": "buy", "score": 0.85, ... }
+      "technical": {"action": "buy", "score": 0.75, "reason": "..."},
+      "fundamental": {"action": "hold", "score": 0.55, "reason": "..."}
     }
   }
 }
 ```
 
----
+### 2.3 Verification in Database
+**Trade History:** `GET http://localhost:8001/accounts/1/trade_history`
+**Result:** 1 trade found for CPALL, quantity 4000, price 50.0, status EXECUTED.
 
-## 🚩 Blocker และข้อเสนอแนะที่พบระหว่างการทดสอบ
-1.  **Rate Limit (yfinance)**: การดึงข้อมูลจริงจาก yfinance บ่อยครั้งจะติด Error 429 (Too Many Requests) ในการทดสอบนี้จึงใช้ข้อมูล Mock สำหรับหุ้น AAPL แนะนำให้ใช้ Provider อื่นสำหรับการใช้งานจริง
-2.  **Schema Consistency**: ควรมีการทำ Shared Library สำหรับ Pydantic Models เพื่อให้ทุก Agent ใช้โครงสร้างข้อมูลเดียวกัน 100%
-3.  **Security**: ทุกการสื่อสารควรมี API Key และมีการทำ TLS สำหรับสภาพแวดล้อม Production
+**Balance:** `GET http://localhost:8001/accounts/1/balance`
+**Result:** Cash balance reduced from 1,000,000.00 to 800,000.00.
+
+**Positions:** `GET http://localhost:8001/accounts/1/positions`
+**Result:** Position for CPALL created with quantity 4000.
+
+## 3. Issues Identified & Fixed
+
+### ⚙️ Technical Agent
+- **Issue:** ModuleNotFoundError for relative imports.
+- **Fix:** Updated `app/main.py` to use `.service` and `.models`.
+
+### 🔍 Scanner Agent
+- **Issue:** Schema mismatch with Manager Agent (returned list of strings instead of objects).
+- **Fix:** Refactored `main.py` and `trading_contracts/scan.py` to return `CandidateResult` objects.
+
+### 💾 Database Agent
+- **Issue:** Missing critical endpoints for Execution Agent (`/orders/trade/{id}`, `PATCH /orders/{id}`).
+- **Issue:** Missing fields in Pydantic models (`time_in_force`, `broker_order_id`).
+- **Issue:** CHECK constraint on `status` did not include 'placed' or 'partially_filled'.
+- **Fix:** Added missing endpoints, updated SQL schema, and expanded Pydantic models.
+
+### ⚡ Execution Agent
+- **Issue:** Did not handle `StandardAgentResponse` wrapper from Database Agent.
+- **Issue:** Missing `DB_AGENT_API_KEY` configuration.
+- **Fix:** Updated `db_client.py` to extract `.data` and pass API Key.
+
+## 4. Conclusion
+ระบบ Multi-Agent Trading System สามารถทำงานร่วมกันได้แบบ End-to-End ตั้งแต่การ Scan, วิเคราะห์, ตรวจสอบความเสี่ยง, ส่งคำสั่งซื้อขายไปยัง Simulator และบันทึกลง Database ได้สำเร็จจริง
+
+**สถานะ:** ✅ ผ่านการทดสอบ (ด้วย Mock Data สำหรับ yfinance)
