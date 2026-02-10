@@ -19,6 +19,7 @@ class CurrentPolicy(BaseModel):
 
 class LearningRequest(BaseModel):
     """The complete input data structure for the /learn endpoint."""
+    account_id: str
     learning_mode: str
     window_size: int
     trade_history: List[Trade]

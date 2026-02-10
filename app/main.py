@@ -113,6 +113,7 @@ async def _execute_trade(exec_client: ExecutionAgentClient, trade_decision: dict
         order_request = CreateOrderRequest(
             symbol=ticker,
             side=final_verdict,
+            order_type="market",
             quantity=quantity,
             price=float(entry_price),
             client_order_id=str(uuid.uuid4()),
@@ -195,7 +196,7 @@ async def analyze_ticker(request: AgentRequestBody):
             fund_detail = analysis_result["details"].fundamental
 
             execution_result = None
-            if final_verdict in ["buy", "sell"]:
+            if final_verdict in ["buy", "sell", "strong_buy", "strong_sell"]:
                 portfolio_value = balance.cash_balance if balance else 0
                 current_position = next((p for p in positions if p.symbol == ticker), None)
                 current_position_size = current_position.quantity if current_position else 0
@@ -212,6 +213,9 @@ async def analyze_ticker(request: AgentRequestBody):
                     except Exception:
                         pass
 
+                # Map verdict to action for risk manager
+                risk_action = "buy" if "buy" in final_verdict else "sell"
+
                 trade_decision = assess_trade(
                     portfolio_value=Decimal(portfolio_value),
                     risk_per_trade=Decimal(config_manager.get('RISK_PER_TRADE')),
@@ -219,7 +223,7 @@ async def analyze_ticker(request: AgentRequestBody):
                     enable_technical_stop=config_manager.get('ENABLE_TECHNICAL_STOP'),
                     max_position_pct=Decimal(config_manager.get('MAX_POSITION_PERCENTAGE')),
                     symbol=ticker,
-                    action=final_verdict,
+                    action=risk_action,
                     entry_price=Decimal(entry_price),
                     technical_stop_loss=Decimal(technical_stop) if technical_stop is not None else None,
                     current_position_size=current_position_size

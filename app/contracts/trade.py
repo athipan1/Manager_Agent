@@ -1,4 +1,4 @@
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, AliasChoices
 from typing import Optional, Literal, Dict, Union
 from decimal import Decimal
 from enum import Enum
@@ -42,7 +42,7 @@ class CreateOrderRequest(BaseModel):
 
 class CreateOrderResponse(BaseModel):
     order_id: Union[int, str]
-    client_order_id: str
+    client_order_id: str = Field(..., validation_alias=AliasChoices("client_order_id", "trade_id"))
     status: OrderStatus
     broker_order_id: Optional[str] = None
     reason: Optional[str] = None
