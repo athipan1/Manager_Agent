@@ -87,10 +87,10 @@ def assess_trade(
         return _prepare_and_log_result(reason="Input validation failed: risk_per_trade must be between 0 and 1.", symbol=symbol, action=action, position_size=0)
     if not Decimal("0") < max_position_pct <= Decimal("1"):
         return _prepare_and_log_result(reason="Input validation failed: max_position_pct must be between 0 and 1.", symbol=symbol, action=action, position_size=0)
-    if entry_price <= Decimal("0") and action_lower in ["buy", "short"]:
+    if entry_price <= Decimal("0") and action_lower in ["buy", "strong_buy", "short"]:
         return _prepare_and_log_result(reason="Input validation failed: entry_price must be greater than 0 for buy/short actions.", symbol=symbol, action=action, position_size=0)
 
-    if action_lower == "sell":
+    if action_lower in ["sell", "strong_sell"]:
         if current_position_size > 0:
             return _prepare_and_log_result(approved=True, reason="Approval to sell existing position.", symbol=symbol, action=action_lower, position_size=int(current_position_size), risk_amount=Decimal("0.0"))
         else:
@@ -102,15 +102,15 @@ def assess_trade(
         else:
             return _prepare_and_log_result(reason="Cover rejected. No existing short position to cover.", symbol=symbol, action=action_lower, position_size=0, risk_amount=Decimal("0.0"))
 
-    allowed_actions = ["buy", "sell", "short", "cover"]
+    allowed_actions = ["buy", "strong_buy", "sell", "strong_sell", "short", "cover"]
     if action_lower not in allowed_actions:
         return _prepare_and_log_result(reason=f"Invalid action '{action}'. Allowed actions are: {', '.join(allowed_actions)}.", symbol=symbol, action=action, position_size=0)
 
-    if action_lower not in ["buy", "short"]:
+    if action_lower not in ["buy", "strong_buy", "short"]:
         return _prepare_and_log_result(reason=f"Action '{action}' is for closing positions, but no open position was found.", symbol=symbol, action=action_lower, position_size=0)
 
     final_stop_loss = Decimal("0.0")
-    if action_lower == "buy":
+    if action_lower in ["buy", "strong_buy"]:
         stop_loss_candidates = [entry_price * (Decimal("1") - fixed_stop_loss_pct)]
         if enable_technical_stop and technical_stop_loss is not None:
             stop_loss_candidates.append(technical_stop_loss)
@@ -147,6 +147,7 @@ def assess_trade(
         if min_risk_reward_ratio is not None and risk_reward_ratio < min_risk_reward_ratio:
             return _prepare_and_log_result(reason=f"Risk/Reward ratio ({risk_reward_ratio:.2f}) is below the minimum required ({min_risk_reward_ratio}).", symbol=symbol, action=action_lower, position_size=0, stop_loss=final_stop_loss, take_profit=final_take_profit, risk_reward_ratio=risk_reward_ratio, risk_amount=Decimal("0"), entry_price=entry_price)
 
+    # Higher risk for strong buy signals? (Optional, but let's keep it consistent for now as per user request)
     risk_amount_per_trade = portfolio_value * risk_per_trade
     position_size = floor(risk_amount_per_trade / risk_per_share)
 
