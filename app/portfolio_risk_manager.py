@@ -27,7 +27,7 @@ class PortfolioRiskManager:
 
     def evaluate_sell(self, sell_decision: Dict[str, Any]):
         """Updates portfolio exposure based on an approved sell decision."""
-        if not (sell_decision.get("approved") and sell_decision.get("action") == "sell"):
+        if not (sell_decision.get("approved") and sell_decision.get("action") in ["sell", "strong_sell"]):
             return
 
         position_to_sell = next(
@@ -42,7 +42,7 @@ class PortfolioRiskManager:
 
     def evaluate_buy(self, buy_decision: Dict[str, Any]) -> Dict[str, Any]:
         """Evaluates a buy decision against the portfolio's budget and exposure limits."""
-        if not buy_decision.get("approved"):
+        if not (buy_decision.get("approved") and buy_decision.get("action") in ["buy", "strong_buy"]):
             return buy_decision
 
         decision = buy_decision.copy()
@@ -108,8 +108,8 @@ def assess_portfolio_trades(
     final_decisions = []
 
     # --- 1. Separate and Sort Verdicts ---
-    sell_verdicts = [res for res in analysis_results if res["final_verdict"] == "sell"]
-    buy_verdicts = [res for res in analysis_results if res["final_verdict"] == "buy"]
+    sell_verdicts = [res for res in analysis_results if res["final_verdict"] in ["sell", "strong_sell"]]
+    buy_verdicts = [res for res in analysis_results if res["final_verdict"] in ["buy", "strong_buy"]]
 
     def get_synthesized_score(result):
         tech_score = result["details"].technical.score if result["details"].technical else 0
@@ -133,7 +133,7 @@ def assess_portfolio_trades(
             enable_technical_stop=enable_technical_stop,
             max_position_pct=max_position_pct,
             symbol=ticker,
-            action="sell",
+            action=result["final_verdict"],
             entry_price=Decimal("0"),
             current_position_size=current_position.quantity if current_position else 0,
         )
@@ -167,7 +167,7 @@ def assess_portfolio_trades(
             enable_technical_stop=enable_technical_stop,
             max_position_pct=max_position_pct,
             symbol=ticker,
-            action="buy",
+            action=result["final_verdict"],
             entry_price=Decimal(entry_price_raw),
             technical_stop_loss=Decimal(technical_stop_loss_raw) if technical_stop_loss_raw is not None else None,
             current_position_size=current_position.quantity if current_position else 0,

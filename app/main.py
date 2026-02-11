@@ -110,9 +110,11 @@ async def _execute_trade(exec_client: ExecutionAgentClient, trade_decision: dict
     entry_price = trade_decision.get('entry_price', 0)
 
     try:
+        # Map strong_buy/strong_sell to buy/sell for the execution agent
+        side = "buy" if "buy" in final_verdict.lower() else "sell"
         order_request = CreateOrderRequest(
             symbol=ticker,
-            side=final_verdict,
+            side=side,
             order_type="market",
             quantity=quantity,
             price=float(entry_price),
@@ -213,8 +215,8 @@ async def analyze_ticker(request: AgentRequestBody):
                     except Exception:
                         pass
 
-                # Map verdict to action for risk manager
-                risk_action = "buy" if "buy" in final_verdict else "sell"
+                # Pass the original verdict to the risk manager (it now supports strong variants)
+                risk_action = final_verdict
 
                 trade_decision = assess_trade(
                     portfolio_value=Decimal(portfolio_value),

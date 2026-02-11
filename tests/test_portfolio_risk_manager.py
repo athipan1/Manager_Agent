@@ -44,6 +44,7 @@ def test_evaluate_buy_approved(manager: PortfolioRiskManager):
     """Test a standard buy approval."""
     buy_decision = {
         "approved": True,
+        "action": "buy",
         "risk_amount": 1000,
         "position_size": 50,
         "entry_price": 100,
@@ -61,6 +62,7 @@ def test_evaluate_buy_rejected_due_to_exposure(manager: PortfolioRiskManager):
     # 15200 + 40000 > 50000, so it should be rejected.
     buy_decision = {
         "approved": True,
+        "action": "buy",
         "risk_amount": 1500,
         "position_size": 40,
         "entry_price": 1000,
@@ -80,6 +82,7 @@ def test_evaluate_buy_scaled_down_due_to_budget(manager: PortfolioRiskManager):
     # Original size is 60. Scaled size should be int(60 * 0.666...) = 40.
     buy_decision = {
         "approved": True,
+        "action": "buy",
         "risk_amount": 3000,
         "position_size": 60,
         "entry_price": 200,
@@ -103,6 +106,7 @@ def test_evaluate_buy_scaled_down_and_rejected_by_min_value(manager: PortfolioRi
     # Min position value is 500, so it should be rejected.
     buy_decision = {
         "approved": True,
+        "action": "buy",
         "risk_amount": 4000,
         "position_size": 10,
         "entry_price": 80,
@@ -125,3 +129,29 @@ def test_evaluate_unapproved_buy(manager: PortfolioRiskManager):
     assert final_decision == buy_decision
     assert manager.remaining_budget == 2000
     assert manager.approved_buys_value == 0
+
+def test_evaluate_strong_sell(manager: PortfolioRiskManager):
+    """Test that a strong_sell also reduces the current exposure."""
+    sell_decision = {
+        "approved": True,
+        "action": "strong_sell",
+        "symbol": "AAPL",
+        "position_size": 5,
+    }
+    manager.evaluate_sell(sell_decision)
+    assert manager.current_exposure == 14350
+
+def test_evaluate_strong_buy_approved(manager: PortfolioRiskManager):
+    """Test a strong_buy approval."""
+    buy_decision = {
+        "approved": True,
+        "action": "strong_buy",
+        "risk_amount": 1000,
+        "position_size": 50,
+        "entry_price": 100,
+    }
+    final_decision = manager.evaluate_buy(buy_decision)
+
+    assert final_decision["approved"]
+    assert manager.remaining_budget == 1000
+    assert manager.approved_buys_value == 5000
