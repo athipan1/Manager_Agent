@@ -394,15 +394,15 @@ async def scan_and_analyze_endpoint(request: ScanAndAnalyzeRequest):
         async with ScannerAgentClient() as scanner_client:
             if request.scan_type == "technical":
                 scan_response = await scanner_client.scan(request.symbols, correlation_id)
-                candidates = scan_response.data.get("candidates", []) if scan_response.data else []
+                candidates = scan_response.data.candidates if scan_response.data else []
                 # Simple ranking: STRONG_BUY first, then BUY
-                candidates.sort(key=lambda x: 2 if x.get("recommendation") == "STRONG_BUY" else 1, reverse=True)
+                candidates.sort(key=lambda x: 2 if x.recommendation == "STRONG_BUY" else 1, reverse=True)
             else:
                 scan_response = await scanner_client.scan_fundamental(request.symbols, correlation_id)
-                candidates = scan_response.data.get("candidates", []) if scan_response.data else []
+                candidates = scan_response.data.candidates if scan_response.data else []
                 # Already ranked by fundamental_score in Scanner_Agent
 
-            selected_tickers = [c["symbol"] for c in candidates[:request.max_candidates]]
+            selected_tickers = [c.symbol for c in candidates[:request.max_candidates]]
 
             if not selected_tickers:
                 report_logger.info(f"No candidates found by scanner for scan_type={request.scan_type}, correlation_id={correlation_id}")

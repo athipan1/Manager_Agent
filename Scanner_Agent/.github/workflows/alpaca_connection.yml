@@ -1,0 +1,61 @@
+name: Alpaca Paper Connection Test
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:   # กดรันทดสอบเองได้
+
+jobs:
+  alpaca-paper-test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.9"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install alpaca-py
+
+      # 🔍 Debug แบบปลอดภัย (ไม่โชว์ค่า secret)
+      - name: Verify secrets exist
+        env:
+          APCA_API_KEY_ID: ${{ secrets.APCA_API_KEY_ID }}
+          APCA_API_SECRET_KEY: ${{ secrets.APCA_API_SECRET_KEY }}
+        run: |
+          if [ -z "$APCA_API_KEY_ID" ] || [ -z "$APCA_API_SECRET_KEY" ]; then
+            echo "❌ Alpaca secrets are missing"
+            exit 1
+          fi
+          echo "✅ Alpaca secrets detected"
+
+      - name: Test Alpaca Paper Connection
+        env:
+          APCA_API_KEY_ID: ${{ secrets.APCA_API_KEY_ID }}
+          APCA_API_SECRET_KEY: ${{ secrets.APCA_API_SECRET_KEY }}
+        run: |
+          python - << 'EOF'
+          import os
+          from alpaca.trading.client import TradingClient
+
+          try:
+              client = TradingClient(
+                  os.environ["APCA_API_KEY_ID"],
+                  os.environ["APCA_API_SECRET_KEY"],
+                  paper=True
+              )
+              account = client.get_account()
+              print("✅ Connected to Alpaca Paper Trading")
+              print("Account Status:", account.status)
+              print("Buying Power:", account.buying_power)
+          except Exception as e:
+              print("❌ Failed to connect to Alpaca Paper API")
+              print(e)
+              raise
+          EOF

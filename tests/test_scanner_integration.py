@@ -10,7 +10,7 @@ with patch('os.makedirs', return_value=None):
     from app.models import (
         AccountBalance, Position, ReportDetails, ReportDetail
     )
-    from app.contracts import StandardAgentResponse, StandardAgentData
+    from app.contracts import StandardAgentResponse, StandardAgentData, ScannerResponseData, ScannerCandidate
 
 client = TestClient(app)
 
@@ -74,12 +74,14 @@ def test_scan_and_analyze_technical_success(mock_cm, mock_learning, mock_db, moc
         agent_type="Scanner_Agent",
         version="1.0.0",
         timestamp=datetime.datetime.now(),
-        data={
-            "candidates": [
-                {"symbol": "AAPL", "recommendation": "STRONG_BUY"},
-                {"symbol": "MSFT", "recommendation": "BUY"}
+        data=ScannerResponseData(
+            scan_type="technical",
+            count=2,
+            candidates=[
+                ScannerCandidate(symbol="AAPL", recommendation="STRONG_BUY"),
+                ScannerCandidate(symbol="MSFT", recommendation="BUY")
             ]
-        }
+        )
     )
 
     # Mock Database
@@ -118,7 +120,7 @@ def test_scan_and_analyze_no_candidates(mock_cm, mock_scanner):
         agent_type="Scanner_Agent",
         version="1.0.0",
         timestamp=datetime.datetime.now(),
-        data={"candidates": []}
+        data=ScannerResponseData(scan_type="technical", count=0, candidates=[])
     )
 
     response = client.post("/scan-and-analyze", json={
