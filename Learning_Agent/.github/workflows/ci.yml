@@ -1,0 +1,28 @@
+name: CI Pipeline
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Create .env file
+        run: |
+          echo "POSTGRES_USER=user" >> .env
+          echo "POSTGRES_PASSWORD=password" >> .env
+          echo "POSTGRES_DB=trading_db_test" >> .env
+          echo "DB_AGENT_URL=http://db-agent:8001" >> .env
+
+      - name: Run tests
+        run: docker compose run --rm learning-agent-ci
+
+      - name: Clean up containers
+        if: always()
+        run: docker compose down

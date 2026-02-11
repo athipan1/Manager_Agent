@@ -108,8 +108,10 @@ def assess_portfolio_trades(
     final_decisions = []
 
     # --- 1. Separate and Sort Verdicts ---
-    sell_verdicts = [res for res in analysis_results if res["final_verdict"] == "sell"]
-    buy_verdicts = [res for res in analysis_results if res["final_verdict"] == "buy"]
+    sell_verdicts = [res for res in analysis_results if res["final_verdict"] in ["sell", "strong_sell"]]
+    buy_verdicts = [res for res in analysis_results if res["final_verdict"] in ["buy", "strong_buy"]]
+
+    report_logger.info(f"Portfolio assessment: {len(sell_verdicts)} sells, {len(buy_verdicts)} buys. Analysis results tickers: {[r['ticker'] for r in analysis_results]}")
 
     def get_synthesized_score(result):
         tech_score = result["details"].technical.score if result["details"].technical else 0
@@ -160,20 +162,24 @@ def assess_portfolio_trades(
             else None
         )
 
-        initial_buy_decision = assess_trade(
-            portfolio_value=cash_balance,
-            risk_per_trade=risk_per_trade,
-            fixed_stop_loss_pct=fixed_stop_loss_pct,
-            enable_technical_stop=enable_technical_stop,
-            max_position_pct=max_position_pct,
-            symbol=ticker,
-            action="buy",
-            entry_price=Decimal(entry_price_raw),
-            technical_stop_loss=Decimal(technical_stop_loss_raw) if technical_stop_loss_raw is not None else None,
-            current_position_size=current_position.quantity if current_position else 0,
-        )
+        try:
+            initial_buy_decision = assess_trade(
+                portfolio_value=cash_balance,
+                risk_per_trade=risk_per_trade,
+                fixed_stop_loss_pct=fixed_stop_loss_pct,
+                enable_technical_stop=enable_technical_stop,
+                max_position_pct=max_position_pct,
+                symbol=ticker,
+                action="buy",
+                entry_price=Decimal(str(entry_price_raw)),
+                technical_stop_loss=Decimal(str(technical_stop_loss_raw)) if technical_stop_loss_raw is not None else None,
+                current_position_size=current_position.quantity if current_position else 0,
+            )
 
-        final_buy_decision = manager.evaluate_buy(initial_buy_decision)
+            final_buy_decision = manager.evaluate_buy(initial_buy_decision)
+        except Exception as e:
+            report_logger.error(f"Error assessing trade for {ticker}: {e}")
+            final_buy_decision = {"symbol": ticker, "approved": False, "reason": f"Internal error during risk assessment: {e}"}
         final_decisions.append(final_buy_decision)
 
     return final_decisions
