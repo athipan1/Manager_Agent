@@ -1,4 +1,5 @@
 import logging
+import sys
 import json
 from logging.handlers import RotatingFileHandler
 
@@ -31,9 +32,14 @@ def setup_logger():
     formatter = JsonFormatter()
     handler.setFormatter(formatter)
 
+    # Add a StreamHandler to output logs to stdout
+    stream_handler = logging.StreamHandler(sys.stdout)
+    stream_handler.setFormatter(formatter)
+
     # Avoid adding handlers multiple times
     if not logger.handlers:
         logger.addHandler(handler)
+        logger.addHandler(stream_handler)
 
     return logger
 
