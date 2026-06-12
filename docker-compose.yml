@@ -19,14 +19,14 @@ services:
       timeout: 3s
       retries: 5
     environment:
-      TECHNICAL_AGENT_URL: http://technical-agent:8000
+      TECHNICAL_AGENT_URL: http://technical-agent:8002
       FUNDAMENTAL_AGENT_URL: http://fundamental-agent:8001
-      SCANNER_AGENT_URL: http://scanner-agent:8000
-      DATABASE_AGENT_URL: http://database-agent:8000
-      DATABASE_AGENT_API_KEY: your_database_api_key
-      AUTO_LEARNING_AGENT_URL: http://learning-agent:8004
-      EXECUTION_AGENT_URL: http://execution-agent:8005
-      EXECUTION_API_KEY: your_secret_key
+      SCANNER_AGENT_URL: http://scanner-agent:8003
+      DATABASE_AGENT_URL: http://database-agent:8004
+      DATABASE_AGENT_API_KEY: dev_database_key
+      AUTO_LEARNING_AGENT_URL: http://learning-agent:8005
+      EXECUTION_AGENT_URL: http://execution-agent:8006
+      EXECUTION_API_KEY: dev_execution_key
       DEFAULT_ACCOUNT_ID: 1
       RISK_PER_TRADE: 0.01
       STOP_LOSS_PERCENTAGE: 0.03
@@ -71,60 +71,76 @@ services:
     image: painaidee/scanner-agent:latest
     restart: always
     ports:
-      - "8001:8000"
+      - "8003:8003"
     healthcheck:
-      test: ["CMD-SHELL", "curl -f http://localhost:8000/health || exit 1"]
+      test: ["CMD-SHELL", "curl -f http://localhost:8003/health || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 5
     environment:
+      PORT: 8003
+      SCANNER_DEV_MODE: "true"
       PYTHONPATH: /app
 
   technical-agent:
+    build:
+      context: ../Technical_Agent
+      dockerfile: Dockerfile
     image: painaidee/technical-agent:latest
     restart: always
-    expose:
-      - "8000"
+    ports:
+      - "8002:8002"
     healthcheck:
-      test: ["CMD-SHELL", "curl -f http://localhost:8000/health || exit 1"]
+      test: ["CMD-SHELL", "curl -f http://localhost:8002/health || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 5
     environment:
-      TECHNICAL_AGENT_API_KEY: your_technical_api_key
+      PORT: 8002
+      TECHNICAL_AGENT_API_KEY: dev_technical_key
       PYTHONPATH: /app
 
   fundamental-agent:
+    build:
+      context: ../Fundamental_Agent
+      dockerfile: Dockerfile
     image: painaidee/fundamental-agent:latest
     restart: always
-    expose:
-      - "8001"
+    ports:
+      - "8001:8001"
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://localhost:8001/ || exit 1"]
+      test: ["CMD-SHELL", "curl -f http://localhost:8001/health || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 5
     environment:
-      FUNDAMENTAL_AGENT_API_KEY: your_fundamental_api_key
+      PORT: 8001
+      FUNDAMENTAL_AGENT_API_KEY: dev_fundamental_key
       PYTHONPATH: /app
 
   database-agent:
+    build:
+      context: ../Database_Agent
+      dockerfile: Dockerfile
     image: painaidee/database-agent:latest
     restart: always
-    expose:
-      - "8000"
+    ports:
+      - "8004:8004"
     healthcheck:
-      test: ["CMD-SHELL", "curl -f http://localhost:8000/health || exit 1"]
+      test: ["CMD-SHELL", "curl -f http://localhost:8004/health || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 5
     environment:
-      DATABASE_AGENT_API_KEY: your_database_api_key
+      PORT: 8004
+      DATABASE_AGENT_API_KEY: dev_database_key
+      DATABASE_DEV_MODE: "true"
       POSTGRES_USER: user
       POSTGRES_PASSWORD: password
       POSTGRES_DB: trading_db
       POSTGRES_HOST: db
       POSTGRES_PORT: 5432
+      DATABASE_URL: postgresql://user:password@db:5432/trading_db
     volumes:
       - ./data:/app/data
     depends_on:
@@ -132,32 +148,43 @@ services:
         condition: service_healthy
 
   learning-agent:
+    build:
+      context: ../Learning_Agent
+      dockerfile: Dockerfile
     image: painaidee/learning-agent:latest
     restart: always
-    expose:
-      - "8004"
-    healthcheck:
-      test: ["CMD-SHELL", "curl -f http://localhost:8004/health || exit 1"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-    environment:
-      LEARNING_AGENT_API_KEY: your_learning_api_key
-      PYTHONPATH: /app
-
-  execution-agent:
-    image: painaidee/execution-agent:latest
-    restart: always
     ports:
-      - "8006:8005"
+      - "8005:8005"
     healthcheck:
       test: ["CMD-SHELL", "curl -f http://localhost:8005/health || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 5
     environment:
-      EXECUTION_AGENT_API_KEY: your_secret_key
-      DB_AGENT_URL: http://database-agent:8000
+      PORT: 8005
+      LEARNING_AGENT_API_KEY: dev_learning_key
+      LEARNING_DEV_MODE: "true"
+      PYTHONPATH: /app
+
+  execution-agent:
+    build:
+      context: ../Execution_Agent
+      dockerfile: Dockerfile
+    image: painaidee/execution-agent:latest
+    restart: always
+    ports:
+      - "8006:8006"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8006/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    environment:
+      PORT: 8006
+      EXECUTION_AGENT_API_KEY: dev_execution_key
+      API_KEY: dev_execution_key
+      DB_AGENT_URL: http://database-agent:8004
+      BROKER_MODE: SIMULATOR
       PYTHONPATH: /app
     depends_on:
       database-agent:
@@ -165,6 +192,8 @@ services:
 
   db:
     image: postgres:13
+    ports:
+      - "5432:5432"
     environment:
       POSTGRES_USER: user
       POSTGRES_PASSWORD: password
@@ -179,4 +208,3 @@ services:
 
 volumes:
   postgres_data:
-
