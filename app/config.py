@@ -9,13 +9,13 @@ load_dotenv()
 DEFAULT_ACCOUNT_ID = int(os.getenv("DEFAULT_ACCOUNT_ID", 1))
 
 # Agent URLs (use Docker Compose service names as defaults)
-TECHNICAL_AGENT_URL = os.getenv("TECHNICAL_AGENT_URL", "http://technical-agent:8000")
+TECHNICAL_AGENT_URL = os.getenv("TECHNICAL_AGENT_URL", "http://technical-agent:8002")
 FUNDAMENTAL_AGENT_URL = os.getenv("FUNDAMENTAL_AGENT_URL", "http://fundamental-agent:8001")
-SCANNER_AGENT_URL = os.getenv("SCANNER_AGENT_URL", "http://scanner-agent:8000")
-DATABASE_AGENT_URL = os.getenv("DATABASE_AGENT_URL", "http://database-agent:8000")
-AUTO_LEARNING_AGENT_URL = os.getenv("AUTO_LEARNING_AGENT_URL", "http://learning-agent:8004")
-EXECUTION_AGENT_URL = os.getenv("EXECUTION_AGENT_URL", "http://execution-agent:8005")
-EXECUTION_API_KEY = os.getenv("EXECUTION_API_KEY", "your_secret_key")
+SCANNER_AGENT_URL = os.getenv("SCANNER_AGENT_URL", "http://scanner-agent:8003")
+DATABASE_AGENT_URL = os.getenv("DATABASE_AGENT_URL", "http://database-agent:8004")
+AUTO_LEARNING_AGENT_URL = os.getenv("AUTO_LEARNING_AGENT_URL", "http://learning-agent:8005")
+EXECUTION_AGENT_URL = os.getenv("EXECUTION_AGENT_URL", "http://execution-agent:8006")
+EXECUTION_API_KEY = os.getenv("EXECUTION_API_KEY", os.getenv("EXECUTION_AGENT_API_KEY", "dev_execution_key"))
 
 
 # Resilient Agent Client Parameters
@@ -52,6 +52,7 @@ MAX_ASSET_BIAS = float(os.getenv("MAX_ASSET_BIAS", 1.0))
 # Auto-Learning Parameters
 LEARNING_MODE = os.getenv("LEARNING_MODE", "conservative")
 WINDOW_SIZE = int(os.getenv("WINDOW_SIZE", 50))
+PREFERRED_REGIME = os.getenv("PREFERRED_REGIME", "neutral")
 
 # Database Agent Client Parameters
 DB_CLIENT_TIMEOUT = int(os.getenv("DB_CLIENT_TIMEOUT", 10))

@@ -94,7 +94,9 @@ class LearningAgentClient(ResilientAgentClient):
                     max_position_pct=Decimal(config_manager.get("MAX_POSITION_PERCENTAGE")),
                     stop_loss_pct=Decimal(config_manager.get("STOP_LOSS_PERCENTAGE")),
                 ),
-                strategy_bias=CurrentPolicyStrategyBias(),
+                strategy_bias=CurrentPolicyStrategyBias(
+                    preferred_regime=config_manager.get("PREFERRED_REGIME", "neutral")
+                ),
             )
 
             # 3. Construct payload
