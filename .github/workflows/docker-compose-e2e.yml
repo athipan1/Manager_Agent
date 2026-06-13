@@ -69,8 +69,19 @@ jobs:
       - name: Build and start stack
         working-directory: Manager_Agent
         run: |
-          set -o pipefail
+          set +e
           docker compose up --build -d 2>&1 | tee compose-up.log
+          status=${PIPESTATUS[0]}
+          if [ "$status" != "0" ]; then
+            echo "docker compose up failed with status $status"
+            echo "---- docker compose ps ----"
+            docker compose ps || true
+            echo "---- database-agent logs tail ----"
+            docker compose logs --tail=200 database-agent || true
+            echo "---- db logs tail ----"
+            docker compose logs --tail=100 db || true
+            exit "$status"
+          fi
 
       - name: Wait for services to become healthy
         working-directory: Manager_Agent
@@ -80,7 +91,9 @@ jobs:
             exited=$(docker compose ps --status exited -q | wc -l | tr -d ' ')
             if [ "$exited" != "0" ]; then
               echo "One or more containers exited."
-              docker compose logs
+              docker compose logs --tail=200 database-agent || true
+              docker compose logs --tail=200 execution-agent || true
+              docker compose logs --tail=200 manager-agent || true
               exit 1
             fi
 
@@ -101,7 +114,9 @@ jobs:
           done
           echo "Services did not become reachable in time."
           docker compose ps
-          docker compose logs
+          docker compose logs --tail=200 database-agent || true
+          docker compose logs --tail=200 execution-agent || true
+          docker compose logs --tail=200 manager-agent || true
           exit 1
 
       - name: Check health endpoints
@@ -141,8 +156,10 @@ jobs:
         working-directory: Manager_Agent
         run: |
           docker compose ps || true
-          docker compose logs || true
-          if [ -f compose-up.log ]; then cat compose-up.log; fi
+          docker compose logs --tail=200 database-agent || true
+          docker compose logs --tail=200 execution-agent || true
+          docker compose logs --tail=200 manager-agent || true
+          if [ -f compose-up.log ]; then tail -200 compose-up.log; fi
 
       - name: Stop stack
         if: always()
