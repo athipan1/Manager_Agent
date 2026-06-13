@@ -1,0 +1,137 @@
+name: Docker Compose E2E
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  docker-compose-e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+
+    steps:
+      - name: Checkout Manager_Agent
+        uses: actions/checkout@v4
+        with:
+          path: Manager_Agent
+
+      - name: Checkout Scanner_Agent
+        uses: actions/checkout@v4
+        with:
+          repository: athipan1/Scanner_Agent
+          path: Scanner_Agent
+
+      - name: Checkout Technical_Agent
+        uses: actions/checkout@v4
+        with:
+          repository: athipan1/Technical_Agent
+          path: Technical_Agent
+
+      - name: Checkout Fundamental_Agent
+        uses: actions/checkout@v4
+        with:
+          repository: athipan1/Fundamental_Agent
+          path: Fundamental_Agent
+
+      - name: Checkout Database_Agent
+        uses: actions/checkout@v4
+        with:
+          repository: athipan1/Database_Agent
+          path: Database_Agent
+
+      - name: Checkout Learning_Agent
+        uses: actions/checkout@v4
+        with:
+          repository: athipan1/Learning_Agent
+          path: Learning_Agent
+
+      - name: Checkout Execution_Agent
+        uses: actions/checkout@v4
+        with:
+          repository: athipan1/Execution_Agent
+          path: Execution_Agent
+
+      - name: Show Docker versions
+        run: |
+          docker --version
+          docker compose version
+
+      - name: Build and start stack
+        working-directory: Manager_Agent
+        run: |
+          docker compose up --build -d
+
+      - name: Wait for services to become healthy
+        working-directory: Manager_Agent
+        run: |
+          for i in {1..36}; do
+            docker compose ps
+            unhealthy=$(docker compose ps --format json | python -c 'import json,sys; rows=[json.loads(l) for l in sys.stdin if l.strip()]; print(sum(1 for r in rows if "unhealthy" in str(r).lower() or "exited" in str(r).lower()))')
+            if [ "$unhealthy" = "0" ]; then
+              echo "No unhealthy/exited containers detected."
+              sleep 5
+              exit 0
+            fi
+            echo "Waiting for containers to become healthy... attempt $i"
+            sleep 5
+          done
+          echo "Containers did not become healthy in time."
+          docker compose ps
+          exit 1
+
+      - name: Check health endpoints
+        run: |
+          curl -f http://localhost:8000/health
+          curl -f http://localhost:8001/health
+          curl -f http://localhost:8002/health
+          curl -f http://localhost:8003/health
+          curl -f http://localhost:8004/health
+          curl -f http://localhost:8005/health
+          curl -f http://localhost:8006/health
+
+      - name: Test Scanner Agent
+        run: |
+          curl -f -X POST http://localhost:8003/scan \
+            -H "Content-Type: application/json" \
+            -d '{"symbols":["AAPL","MSFT"],"screener":"default","exchange":"NASDAQ"}'
+
+      - name: Test Execution Agent Simulator
+        run: |
+          curl -f -X POST http://localhost:8006/execute \
+            -H "Content-Type: application/json" \
+            -H "X-API-KEY: dev_execution_key" \
+            -H "Idempotency-Key: github-actions-e2e-test" \
+            -d '{
+              "account_id": 1,
+              "symbol": "AAPL",
+              "side": "buy",
+              "quantity": 1,
+              "order_type": "market",
+              "time_in_force": "day",
+              "trade_id": "github-actions-e2e-test"
+            }'
+
+      - name: Show logs on failure
+        if: failure()
+        working-directory: Manager_Agent
+        run: |
+          docker compose ps
+          docker compose logs manager-agent
+          docker compose logs scanner-agent
+          docker compose logs technical-agent
+          docker compose logs fundamental-agent
+          docker compose logs database-agent
+          docker compose logs learning-agent
+          docker compose logs execution-agent
+          docker compose logs db
+
+      - name: Stop stack
+        if: always()
+        working-directory: Manager_Agent
+        run: |
+          docker compose down -v
