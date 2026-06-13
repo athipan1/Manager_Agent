@@ -18,6 +18,7 @@ services:
       interval: 10s
       timeout: 3s
       retries: 5
+      start_period: 30s
     environment:
       TECHNICAL_AGENT_URL: http://technical-agent:8002
       FUNDAMENTAL_AGENT_URL: http://fundamental-agent:8001
@@ -77,6 +78,7 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+      start_period: 30s
     environment:
       PORT: 8003
       SCANNER_DEV_MODE: "true"
@@ -95,6 +97,7 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+      start_period: 30s
     environment:
       PORT: 8002
       TECHNICAL_AGENT_API_KEY: dev_technical_key
@@ -113,6 +116,7 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+      start_period: 30s
     environment:
       PORT: 8001
       FUNDAMENTAL_AGENT_API_KEY: dev_fundamental_key
@@ -129,8 +133,9 @@ services:
     healthcheck:
       test: ["CMD-SHELL", "curl -f http://localhost:8004/health || exit 1"]
       interval: 10s
-      timeout: 5s
-      retries: 5
+      timeout: 10s
+      retries: 12
+      start_period: 90s
     environment:
       PORT: 8004
       DATABASE_AGENT_API_KEY: dev_database_key
@@ -160,6 +165,7 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+      start_period: 30s
     environment:
       PORT: 8005
       LEARNING_AGENT_API_KEY: dev_learning_key
@@ -179,11 +185,13 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+      start_period: 30s
     environment:
       PORT: 8006
       EXECUTION_AGENT_API_KEY: dev_execution_key
       API_KEY: dev_execution_key
       DB_AGENT_URL: http://database-agent:8004
+      DATABASE_AGENT_API_KEY: dev_database_key
       BROKER_MODE: SIMULATOR
       PYTHONPATH: /app
     depends_on:
@@ -205,6 +213,7 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+      start_period: 30s
 
 volumes:
   postgres_data:
