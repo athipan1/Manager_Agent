@@ -82,7 +82,7 @@ services:
     environment:
       PORT: 8003
       SCANNER_DEV_MODE: "true"
-      PYTHONPATH: /app
+      PYTHONPATH: /code
 
   technical-agent:
     build:
@@ -102,6 +102,7 @@ services:
       PORT: 8002
       TECHNICAL_AGENT_API_KEY: dev_technical_key
       PYTHONPATH: /app
+      NUMBA_DISABLE_JIT: "1"
 
   fundamental-agent:
     build:
@@ -164,7 +165,8 @@ services:
       PORT: 8005
       LEARNING_AGENT_API_KEY: dev_learning_key
       LEARNING_DEV_MODE: "true"
-      PYTHONPATH: /app
+      USE_SQLITE: "true"
+      PYTHONPATH: /home/app/web
 
   execution-agent:
     build:
@@ -187,7 +189,7 @@ services:
       DB_AGENT_URL: http://database-agent:8004
       DATABASE_AGENT_API_KEY: dev_database_key
       BROKER_MODE: SIMULATOR
-      PYTHONPATH: /app
+      PYTHONPATH: /home/appuser:/home/appuser/src
     depends_on:
       database-agent:
         condition: service_healthy
