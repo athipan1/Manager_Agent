@@ -87,6 +87,7 @@ class LearningAgentClient(ResilientAgentClient):
             }
 
             # 2. Get current configuration
+            preferred_regime = config_manager.get("PREFERRED_REGIME") or "neutral"
             current_policy = CurrentPolicy(
                 agent_weights=config_manager.get("AGENT_WEIGHTS"),
                 risk=CurrentPolicyRisk(
@@ -95,7 +96,7 @@ class LearningAgentClient(ResilientAgentClient):
                     stop_loss_pct=Decimal(config_manager.get("STOP_LOSS_PERCENTAGE")),
                 ),
                 strategy_bias=CurrentPolicyStrategyBias(
-                    preferred_regime=config_manager.get("PREFERRED_REGIME", "neutral")
+                    preferred_regime=preferred_regime
                 ),
             )
 
