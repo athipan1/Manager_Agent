@@ -61,27 +61,47 @@ jobs:
           docker --version
           docker compose version
 
+      - name: Validate compose file
+        working-directory: Manager_Agent
+        run: |
+          docker compose config
+
       - name: Build and start stack
         working-directory: Manager_Agent
         run: |
-          docker compose up --build -d
+          set -o pipefail
+          docker compose up --build -d 2>&1 | tee compose-up.log
 
       - name: Wait for services to become healthy
         working-directory: Manager_Agent
         run: |
-          for i in {1..36}; do
+          for i in {1..60}; do
             docker compose ps
-            unhealthy=$(docker compose ps --format json | python -c 'import json,sys; rows=[json.loads(l) for l in sys.stdin if l.strip()]; print(sum(1 for r in rows if "unhealthy" in str(r).lower() or "exited" in str(r).lower()))')
-            if [ "$unhealthy" = "0" ]; then
-              echo "No unhealthy/exited containers detected."
-              sleep 5
+            exited=$(docker compose ps --status exited -q | wc -l | tr -d ' ')
+            if [ "$exited" != "0" ]; then
+              echo "One or more containers exited."
+              docker compose logs
+              exit 1
+            fi
+
+            manager=$(curl -fsS http://localhost:8000/health >/dev/null && echo ok || echo wait)
+            fundamental=$(curl -fsS http://localhost:8001/health >/dev/null && echo ok || echo wait)
+            technical=$(curl -fsS http://localhost:8002/health >/dev/null && echo ok || echo wait)
+            scanner=$(curl -fsS http://localhost:8003/health >/dev/null && echo ok || echo wait)
+            database=$(curl -fsS http://localhost:8004/health >/dev/null && echo ok || echo wait)
+            learning=$(curl -fsS http://localhost:8005/health >/dev/null && echo ok || echo wait)
+            execution=$(curl -fsS http://localhost:8006/health >/dev/null && echo ok || echo wait)
+
+            echo "health: manager=$manager fundamental=$fundamental technical=$technical scanner=$scanner database=$database learning=$learning execution=$execution"
+            if [ "$manager$fundamental$technical$scanner$database$learning$execution" = "okokokokokokok" ]; then
+              echo "All services are reachable."
               exit 0
             fi
-            echo "Waiting for containers to become healthy... attempt $i"
             sleep 5
           done
-          echo "Containers did not become healthy in time."
+          echo "Services did not become reachable in time."
           docker compose ps
+          docker compose logs
           exit 1
 
       - name: Check health endpoints
@@ -120,18 +140,12 @@ jobs:
         if: failure()
         working-directory: Manager_Agent
         run: |
-          docker compose ps
-          docker compose logs manager-agent
-          docker compose logs scanner-agent
-          docker compose logs technical-agent
-          docker compose logs fundamental-agent
-          docker compose logs database-agent
-          docker compose logs learning-agent
-          docker compose logs execution-agent
-          docker compose logs db
+          docker compose ps || true
+          docker compose logs || true
+          if [ -f compose-up.log ]; then cat compose-up.log; fi
 
       - name: Stop stack
         if: always()
         working-directory: Manager_Agent
         run: |
-          docker compose down -v
+          docker compose down -v || true
