@@ -99,7 +99,7 @@ jobs:
               exit 1
             fi
 
-            manager=$(curl -fsS http://localhost:8000/health >/dev/null && echo ok || echo wait)
+            manager=$(docker compose exec -T manager-agent python /app/healthcheck.py >/dev/null && echo ok || echo wait)
             fundamental=$(curl -fsS http://localhost:8001/health >/dev/null && echo ok || echo wait)
             technical=$(curl -fsS http://localhost:8002/health >/dev/null && echo ok || echo wait)
             scanner=$(curl -fsS http://localhost:8003/health >/dev/null && echo ok || echo wait)
@@ -123,8 +123,9 @@ jobs:
           exit 1
 
       - name: Check health endpoints
+        working-directory: Manager_Agent
         run: |
-          curl -f http://localhost:8000/health
+          docker compose exec -T manager-agent python /app/healthcheck.py
           curl -f http://localhost:8001/health
           curl -f http://localhost:8002/health
           curl -f http://localhost:8003/health
