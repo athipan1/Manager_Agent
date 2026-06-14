@@ -1,5 +1,6 @@
 import os
-from typing import List, Any, Dict, Union
+from typing import List, Any, Dict, Union, Type, TypeVar
+from pydantic import BaseModel
 
 from .contracts import (
     AccountBalance,
@@ -15,6 +16,17 @@ from .contracts import (
 )
 from .config import DATABASE_AGENT_URL
 from .resilient_client import ResilientAgentClient, AgentUnavailable
+
+T = TypeVar("T", bound=BaseModel)
+
+
+def _coerce_model(model_cls: Type[T], value: Any) -> T:
+    if isinstance(value, model_cls):
+        return value
+    if isinstance(value, BaseModel):
+        return model_cls.model_validate(value.model_dump(mode="json"))
+    return model_cls.model_validate(value)
+
 
 class DatabaseAgentClient(ResilientAgentClient):
     """
@@ -35,7 +47,7 @@ class DatabaseAgentClient(ResilientAgentClient):
         url = DatabaseEndpoints.BALANCE.format(account_id=account_id)
         response_data = await self._get(url, correlation_id)
         standard_resp = self.validate_standard_response(response_data)
-        return AccountBalance(**standard_resp.data)
+        return _coerce_model(AccountBalance, standard_resp.data)
 
     async def get_positions(
         self, account_id: Union[int, str], correlation_id: str
@@ -43,7 +55,7 @@ class DatabaseAgentClient(ResilientAgentClient):
         url = DatabaseEndpoints.POSITIONS.format(account_id=account_id)
         response_data = await self._get(url, correlation_id)
         standard_resp = self.validate_standard_response(response_data)
-        return [Position(**p) for p in standard_resp.data]
+        return [_coerce_model(Position, p) for p in standard_resp.data]
 
     async def create_order(
         self,
@@ -60,7 +72,7 @@ class DatabaseAgentClient(ResilientAgentClient):
             json_data=order_payload,
         )
         standard_resp = self.validate_standard_response(response_data)
-        return CreateOrderResponse(**standard_resp.data)
+        return _coerce_model(CreateOrderResponse, standard_resp.data)
 
     async def execute_order(
         self, account_id: Union[int, str], order_id: Union[int, str], correlation_id: str
@@ -70,7 +82,7 @@ class DatabaseAgentClient(ResilientAgentClient):
         )
         response_data = await self._post(url, correlation_id, json_data={})
         standard_resp = self.validate_standard_response(response_data)
-        return Order(**standard_resp.data)
+        return _coerce_model(Order, standard_resp.data)
 
     async def get_trade_history(
         self, account_id: Union[int, str], correlation_id: str
@@ -78,7 +90,7 @@ class DatabaseAgentClient(ResilientAgentClient):
         url = DatabaseEndpoints.TRADE_HISTORY.format(account_id=account_id)
         response_data = await self._get(url, correlation_id)
         standard_resp = self.validate_standard_response(response_data)
-        return [Trade(**t) for t in standard_resp.data]
+        return [_coerce_model(Trade, t) for t in standard_resp.data]
 
     async def get_portfolio_metrics(
         self, account_id: Union[int, str], correlation_id: str
@@ -86,7 +98,7 @@ class DatabaseAgentClient(ResilientAgentClient):
         url = DatabaseEndpoints.PORTFOLIO_METRICS.format(account_id=account_id)
         response_data = await self._get(url, correlation_id)
         standard_resp = self.validate_standard_response(response_data)
-        return PortfolioMetrics(**standard_resp.data)
+        return _coerce_model(PortfolioMetrics, standard_resp.data)
 
     async def get_price_history(
         self, account_id: Union[int, str], symbol: str, correlation_id: str
@@ -96,4 +108,4 @@ class DatabaseAgentClient(ResilientAgentClient):
         )
         response_data = await self._get(url, correlation_id)
         standard_resp = self.validate_standard_response(response_data)
-        return [PricePoint(**p) for p in standard_resp.data]
+        return [_coerce_model(PricePoint, p) for p in standard_resp.data]
