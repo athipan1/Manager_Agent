@@ -1,0 +1,146 @@
+name: Daily Automatic Stock Scan
+
+on:
+  schedule:
+    # Run every day at 08:00 Thailand time (01:00 UTC)
+    - cron: "0 1 * * *"
+  workflow_dispatch:
+
+jobs:
+  daily-auto-scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+
+    steps:
+      - name: Checkout Manager_Agent
+        uses: actions/checkout@v4
+        with:
+          path: Manager_Agent
+
+      - name: Checkout Scanner_Agent
+        uses: actions/checkout@v4
+        with:
+          repository: athipan1/Scanner_Agent
+          path: Scanner_Agent
+
+      - name: Checkout Technical_Agent
+        uses: actions/checkout@v4
+        with:
+          repository: athipan1/Technical_Agent
+          path: Technical_Agent
+
+      - name: Checkout Fundamental_Agent
+        uses: actions/checkout@v4
+        with:
+          repository: athipan1/Fundamental_Agent
+          path: Fundamental_Agent
+
+      - name: Checkout Database_Agent
+        uses: actions/checkout@v4
+        with:
+          repository: athipan1/Database_Agent
+          path: Database_Agent
+
+      - name: Checkout Learning_Agent
+        uses: actions/checkout@v4
+        with:
+          repository: athipan1/Learning_Agent
+          path: Learning_Agent
+
+      - name: Checkout Execution_Agent
+        uses: actions/checkout@v4
+        with:
+          repository: athipan1/Execution_Agent
+          path: Execution_Agent
+
+      - name: Build and start stack
+        working-directory: Manager_Agent
+        run: |
+          docker compose up --build -d
+
+      - name: Wait for services
+        working-directory: Manager_Agent
+        run: |
+          runtime_services="database-agent technical-agent scanner-agent fundamental-agent learning-agent execution-agent manager-agent db"
+          for i in {1..60}; do
+            docker compose ps
+            exited=$(docker compose ps --status exited -q $runtime_services | wc -l | tr -d ' ')
+            if [ "$exited" != "0" ]; then
+              echo "One or more runtime containers exited."
+              for service in $runtime_services; do
+                echo "---- ${service} logs tail ----"
+                docker compose logs --tail=160 "$service" || true
+              done
+              exit 1
+            fi
+
+            manager=$(docker compose exec -T manager-agent python /app/healthcheck.py >/dev/null && echo ok || echo wait)
+            fundamental=$(curl -fsS http://localhost:8001/health >/dev/null && echo ok || echo wait)
+            technical=$(curl -fsS http://localhost:8002/health >/dev/null && echo ok || echo wait)
+            scanner=$(curl -fsS http://localhost:8003/health >/dev/null && echo ok || echo wait)
+            database=$(curl -fsS http://localhost:8004/health >/dev/null && echo ok || echo wait)
+            learning=$(curl -fsS http://localhost:8005/health >/dev/null && echo ok || echo wait)
+            execution=$(curl -fsS http://localhost:8006/health >/dev/null && echo ok || echo wait)
+
+            echo "health: manager=$manager fundamental=$fundamental technical=$technical scanner=$scanner database=$database learning=$learning execution=$execution"
+            if [ "$manager$fundamental$technical$scanner$database$learning$execution" = "okokokokokokok" ]; then
+              echo "All services are reachable."
+              exit 0
+            fi
+            sleep 5
+          done
+
+          echo "Services did not become reachable in time."
+          docker compose ps
+          for service in $runtime_services; do
+            echo "---- ${service} logs tail ----"
+            docker compose logs --tail=160 "$service" || true
+          done
+          exit 1
+
+      - name: Auto technical scan and analyze
+        run: |
+          curl -f -X POST http://localhost:8000/scan-and-analyze \
+            -H "Content-Type: application/json" \
+            -d '{
+              "scan_type": "technical",
+              "symbols": [],
+              "max_candidates": 10,
+              "account_id": 1
+            }'
+
+      - name: Auto fundamental scan and analyze
+        run: |
+          curl -f -X POST http://localhost:8000/scan-and-analyze \
+            -H "Content-Type: application/json" \
+            -d '{
+              "scan_type": "fundamental",
+              "symbols": [],
+              "max_candidates": 10,
+              "account_id": 1
+            }'
+
+      - name: Check current portfolio strategy
+        run: |
+          curl -f -X POST http://localhost:8000/analyze-multi \
+            -H "Content-Type: application/json" \
+            -d '{
+              "tickers": ["AAPL", "MSFT", "NVDA"],
+              "account_id": 1
+            }'
+
+      - name: Show logs on failure
+        if: failure()
+        working-directory: Manager_Agent
+        run: |
+          docker compose ps || true
+          for service in database-agent technical-agent scanner-agent fundamental-agent learning-agent execution-agent manager-agent db; do
+            echo "---- ${service} logs tail ----"
+            docker compose logs --tail=160 "$service" || true
+          done
+
+      - name: Stop stack
+        if: always()
+        working-directory: Manager_Agent
+        run: |
+          docker compose down -v || true
