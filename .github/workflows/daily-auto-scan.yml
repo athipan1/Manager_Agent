@@ -98,87 +98,175 @@ jobs:
           done
           exit 1
 
-      - name: Auto technical scan and analyze
+      - name: Run daily scans and build report
         working-directory: Manager_Agent
         run: |
-          docker compose exec -T manager-agent python - <<'PY'
+          mkdir -p reports
+          docker compose exec -T manager-agent python - <<'PY' > reports/daily-trading-report.json
           import json
           import urllib.request
           import urllib.error
+          from datetime import datetime, timezone
 
-          payload = {
+          def post_json(path, payload):
+              req = urllib.request.Request(
+                  f"http://localhost{path}",
+                  data=json.dumps(payload).encode("utf-8"),
+                  headers={"Content-Type": "application/json"},
+                  method="POST",
+              )
+              try:
+                  with urllib.request.urlopen(req, timeout=300) as resp:
+                      body = resp.read().decode("utf-8")
+                      return json.loads(body)
+              except urllib.error.HTTPError as exc:
+                  body = exc.read().decode("utf-8")
+                  return {"status": "error", "http_status": exc.code, "body": body}
+
+          technical_payload = {
               "scan_type": "technical",
               "symbols": [],
               "max_candidates": 10,
               "account_id": 1,
           }
-          req = urllib.request.Request(
-              "http://localhost/scan-and-analyze",
-              data=json.dumps(payload).encode("utf-8"),
-              headers={"Content-Type": "application/json"},
-              method="POST",
-          )
-          try:
-              with urllib.request.urlopen(req, timeout=300) as resp:
-                  print(resp.read().decode("utf-8"))
-          except urllib.error.HTTPError as exc:
-              print(exc.read().decode("utf-8"))
-              raise
-          PY
-
-      - name: Auto fundamental scan and analyze
-        working-directory: Manager_Agent
-        run: |
-          docker compose exec -T manager-agent python - <<'PY'
-          import json
-          import urllib.request
-          import urllib.error
-
-          payload = {
+          fundamental_payload = {
               "scan_type": "fundamental",
               "symbols": [],
               "max_candidates": 10,
               "account_id": 1,
           }
-          req = urllib.request.Request(
-              "http://localhost/scan-and-analyze",
-              data=json.dumps(payload).encode("utf-8"),
-              headers={"Content-Type": "application/json"},
-              method="POST",
-          )
-          try:
-              with urllib.request.urlopen(req, timeout=300) as resp:
-                  print(resp.read().decode("utf-8"))
-          except urllib.error.HTTPError as exc:
-              print(exc.read().decode("utf-8"))
-              raise
-          PY
-
-      - name: Check current portfolio strategy
-        working-directory: Manager_Agent
-        run: |
-          docker compose exec -T manager-agent python - <<'PY'
-          import json
-          import urllib.request
-          import urllib.error
-
-          payload = {
+          portfolio_payload = {
               "tickers": ["AAPL", "MSFT", "NVDA"],
               "account_id": 1,
           }
-          req = urllib.request.Request(
-              "http://localhost/analyze-multi",
-              data=json.dumps(payload).encode("utf-8"),
-              headers={"Content-Type": "application/json"},
-              method="POST",
-          )
-          try:
-              with urllib.request.urlopen(req, timeout=300) as resp:
-                  print(resp.read().decode("utf-8"))
-          except urllib.error.HTTPError as exc:
-              print(exc.read().decode("utf-8"))
-              raise
+
+          report = {
+              "generated_at": datetime.now(timezone.utc).isoformat(),
+              "requests": {
+                  "technical_scan": technical_payload,
+                  "fundamental_scan": fundamental_payload,
+                  "portfolio_check": portfolio_payload,
+              },
+              "technical_scan": post_json("/scan-and-analyze", technical_payload),
+              "fundamental_scan": post_json("/scan-and-analyze", fundamental_payload),
+              "portfolio_check": post_json("/analyze-multi", portfolio_payload),
+          }
+          print(json.dumps(report, ensure_ascii=False, indent=2, default=str))
           PY
+
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          report_path = Path("reports/daily-trading-report.json")
+          report = json.loads(report_path.read_text())
+
+          def data_section(response):
+              if not isinstance(response, dict):
+                  return {}
+              return response.get("data") or {}
+
+          def results(response):
+              data = data_section(response)
+              if isinstance(data, dict):
+                  return data.get("results") or []
+              return []
+
+          def safe_get(obj, *keys, default=None):
+              current = obj
+              for key in keys:
+                  if isinstance(current, dict):
+                      current = current.get(key)
+                  else:
+                      return default
+              return default if current is None else current
+
+          def summarize_result(item):
+              ticker = safe_get(item, "analysis", "ticker", default="UNKNOWN")
+              verdict = safe_get(item, "analysis", "final_verdict", default="unknown")
+              status = safe_get(item, "analysis", "status", default="unknown")
+              tech_action = safe_get(item, "analysis", "details", "technical", "action", default="n/a")
+              tech_score = safe_get(item, "analysis", "details", "technical", "score", default="n/a")
+              tech_reason = safe_get(item, "analysis", "details", "technical", "reason", default="")
+              fund_action = safe_get(item, "analysis", "details", "fundamental", "action", default="n/a")
+              fund_score = safe_get(item, "analysis", "details", "fundamental", "score", default="n/a")
+              fund_reason = safe_get(item, "analysis", "details", "fundamental", "reason", default="")
+              exec_status = safe_get(item, "execution", "status", default="unknown")
+              exec_reason = safe_get(item, "execution", "reason", default="")
+              order_id = safe_get(item, "execution", "details", "order_id", default="")
+              return {
+                  "ticker": ticker,
+                  "verdict": verdict,
+                  "analysis_status": status,
+                  "technical": f"{tech_action} / {tech_score}",
+                  "technical_reason": tech_reason,
+                  "fundamental": f"{fund_action} / {fund_score}",
+                  "fundamental_reason": fund_reason,
+                  "execution_status": exec_status,
+                  "execution_reason": exec_reason,
+                  "order_id": order_id,
+              }
+
+          sections = [
+              ("Technical Auto Scan", report.get("technical_scan")),
+              ("Fundamental Auto Scan", report.get("fundamental_scan")),
+              ("Portfolio Strategy Check", report.get("portfolio_check")),
+          ]
+
+          lines = []
+          lines.append("# Daily Trading Report")
+          lines.append("")
+          lines.append(f"Generated at: `{report.get('generated_at')}`")
+          lines.append("")
+
+          for title, response in sections:
+              lines.append(f"## {title}")
+              lines.append("")
+              if isinstance(response, dict) and response.get("status") == "error":
+                  lines.append(f"**ERROR:** HTTP {response.get('http_status')}")
+                  lines.append("")
+                  lines.append("```json")
+                  lines.append(str(response.get("body")))
+                  lines.append("```")
+                  lines.append("")
+                  continue
+
+              section_results = [summarize_result(item) for item in results(response)]
+              if not section_results:
+                  lines.append("No selected candidates or no actionable results.")
+                  lines.append("")
+                  continue
+
+              lines.append("| Ticker | Verdict | Technical | Fundamental | Execution | Order ID |")
+              lines.append("|---|---|---|---|---|---|")
+              for row in section_results:
+                  lines.append(
+                      f"| {row['ticker']} | {row['verdict']} | {row['technical']} | {row['fundamental']} | {row['execution_status']} | {row['order_id']} |"
+                  )
+              lines.append("")
+
+              lines.append("### Why these symbols?")
+              for row in section_results:
+                  lines.append(f"#### {row['ticker']}")
+                  lines.append(f"- Final verdict: `{row['verdict']}`")
+                  lines.append(f"- Technical reason: {row['technical_reason'] or 'n/a'}")
+                  lines.append(f"- Fundamental reason: {row['fundamental_reason'] or 'n/a'}")
+                  lines.append(f"- Execution: `{row['execution_status']}` — {row['execution_reason'] or 'n/a'}")
+                  if row["order_id"]:
+                      lines.append(f"- Order ID: `{row['order_id']}`")
+                  lines.append("")
+
+          Path("reports/daily-trading-report.md").write_text("\n".join(lines), encoding="utf-8")
+          print("\n".join(lines))
+          PY
+
+      - name: Upload daily trading report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: daily-trading-report
+          path: Manager_Agent/reports/
+          if-no-files-found: warn
 
       - name: Show logs on failure
         if: failure()
