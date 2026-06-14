@@ -99,8 +99,9 @@ jobs:
           exit 1
 
       - name: Auto technical scan and analyze
+        working-directory: Manager_Agent
         run: |
-          curl -f -X POST http://localhost:8000/scan-and-analyze \
+          docker compose exec -T manager-agent curl -f -X POST http://localhost/scan-and-analyze \
             -H "Content-Type: application/json" \
             -d '{
               "scan_type": "technical",
@@ -110,8 +111,9 @@ jobs:
             }'
 
       - name: Auto fundamental scan and analyze
+        working-directory: Manager_Agent
         run: |
-          curl -f -X POST http://localhost:8000/scan-and-analyze \
+          docker compose exec -T manager-agent curl -f -X POST http://localhost/scan-and-analyze \
             -H "Content-Type: application/json" \
             -d '{
               "scan_type": "fundamental",
@@ -121,8 +123,9 @@ jobs:
             }'
 
       - name: Check current portfolio strategy
+        working-directory: Manager_Agent
         run: |
-          curl -f -X POST http://localhost:8000/analyze-multi \
+          docker compose exec -T manager-agent curl -f -X POST http://localhost/analyze-multi \
             -H "Content-Type: application/json" \
             -d '{
               "tickers": ["AAPL", "MSFT", "NVDA"],
