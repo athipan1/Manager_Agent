@@ -101,36 +101,84 @@ jobs:
       - name: Auto technical scan and analyze
         working-directory: Manager_Agent
         run: |
-          docker compose exec -T manager-agent curl -f -X POST http://localhost/scan-and-analyze \
-            -H "Content-Type: application/json" \
-            -d '{
+          docker compose exec -T manager-agent python - <<'PY'
+          import json
+          import urllib.request
+          import urllib.error
+
+          payload = {
               "scan_type": "technical",
               "symbols": [],
               "max_candidates": 10,
-              "account_id": 1
-            }'
+              "account_id": 1,
+          }
+          req = urllib.request.Request(
+              "http://localhost/scan-and-analyze",
+              data=json.dumps(payload).encode("utf-8"),
+              headers={"Content-Type": "application/json"},
+              method="POST",
+          )
+          try:
+              with urllib.request.urlopen(req, timeout=300) as resp:
+                  print(resp.read().decode("utf-8"))
+          except urllib.error.HTTPError as exc:
+              print(exc.read().decode("utf-8"))
+              raise
+          PY
 
       - name: Auto fundamental scan and analyze
         working-directory: Manager_Agent
         run: |
-          docker compose exec -T manager-agent curl -f -X POST http://localhost/scan-and-analyze \
-            -H "Content-Type: application/json" \
-            -d '{
+          docker compose exec -T manager-agent python - <<'PY'
+          import json
+          import urllib.request
+          import urllib.error
+
+          payload = {
               "scan_type": "fundamental",
               "symbols": [],
               "max_candidates": 10,
-              "account_id": 1
-            }'
+              "account_id": 1,
+          }
+          req = urllib.request.Request(
+              "http://localhost/scan-and-analyze",
+              data=json.dumps(payload).encode("utf-8"),
+              headers={"Content-Type": "application/json"},
+              method="POST",
+          )
+          try:
+              with urllib.request.urlopen(req, timeout=300) as resp:
+                  print(resp.read().decode("utf-8"))
+          except urllib.error.HTTPError as exc:
+              print(exc.read().decode("utf-8"))
+              raise
+          PY
 
       - name: Check current portfolio strategy
         working-directory: Manager_Agent
         run: |
-          docker compose exec -T manager-agent curl -f -X POST http://localhost/analyze-multi \
-            -H "Content-Type: application/json" \
-            -d '{
+          docker compose exec -T manager-agent python - <<'PY'
+          import json
+          import urllib.request
+          import urllib.error
+
+          payload = {
               "tickers": ["AAPL", "MSFT", "NVDA"],
-              "account_id": 1
-            }'
+              "account_id": 1,
+          }
+          req = urllib.request.Request(
+              "http://localhost/analyze-multi",
+              data=json.dumps(payload).encode("utf-8"),
+              headers={"Content-Type": "application/json"},
+              method="POST",
+          )
+          try:
+              with urllib.request.urlopen(req, timeout=300) as resp:
+                  print(resp.read().decode("utf-8"))
+          except urllib.error.HTTPError as exc:
+              print(exc.read().decode("utf-8"))
+              raise
+          PY
 
       - name: Show logs on failure
         if: failure()
