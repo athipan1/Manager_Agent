@@ -181,6 +181,32 @@ jobs:
                       return default
               return default if current is None else current
 
+          def th_verdict(value):
+              mapping = {
+                  "strong_buy": "ซื้อแรง",
+                  "buy": "ซื้อ",
+                  "hold": "ถือ/รอดู",
+                  "sell": "ขาย",
+                  "strong_sell": "ขายแรง",
+                  "unknown": "ไม่ทราบผล",
+              }
+              return mapping.get(str(value).lower(), str(value))
+
+          def th_execution(value):
+              mapping = {
+                  "submitted": "ส่งออเดอร์แล้ว",
+                  "rejected": "ไม่ส่งออเดอร์ / ถูกปฏิเสธ",
+                  "failed": "ส่งออเดอร์ไม่สำเร็จ",
+                  "not_attempted": "ยังไม่ส่งออเดอร์",
+                  "unknown": "ไม่ทราบสถานะ",
+              }
+              return mapping.get(str(value).lower(), str(value))
+
+          def fmt_score(value):
+              if isinstance(value, (int, float)):
+                  return f"{value:.2f}"
+              return str(value)
+
           def summarize_result(item):
               ticker = safe_get(item, "analysis", "ticker", default="UNKNOWN")
               verdict = safe_get(item, "analysis", "final_verdict", default="unknown")
@@ -197,33 +223,37 @@ jobs:
               return {
                   "ticker": ticker,
                   "verdict": verdict,
+                  "verdict_th": th_verdict(verdict),
                   "analysis_status": status,
-                  "technical": f"{tech_action} / {tech_score}",
+                  "technical": f"{th_verdict(tech_action)} / คะแนน {fmt_score(tech_score)}",
                   "technical_reason": tech_reason,
-                  "fundamental": f"{fund_action} / {fund_score}",
+                  "fundamental": f"{th_verdict(fund_action)} / คะแนน {fmt_score(fund_score)}",
                   "fundamental_reason": fund_reason,
                   "execution_status": exec_status,
+                  "execution_status_th": th_execution(exec_status),
                   "execution_reason": exec_reason,
                   "order_id": order_id,
               }
 
           sections = [
-              ("Technical Auto Scan", report.get("technical_scan")),
-              ("Fundamental Auto Scan", report.get("fundamental_scan")),
-              ("Portfolio Strategy Check", report.get("portfolio_check")),
+              ("สแกนหุ้นด้วยเทคนิค", report.get("technical_scan")),
+              ("สแกนหุ้นด้วยพื้นฐาน", report.get("fundamental_scan")),
+              ("ตรวจสอบหุ้นในพอร์ตและปรับกลยุทธ์", report.get("portfolio_check")),
           ]
 
           lines = []
-          lines.append("# Daily Trading Report")
+          lines.append("# รายงานคัดเลือกหุ้นประจำวัน")
           lines.append("")
-          lines.append(f"Generated at: `{report.get('generated_at')}`")
+          lines.append(f"เวลาที่สร้างรายงาน (UTC): `{report.get('generated_at')}`")
+          lines.append("")
+          lines.append("รายงานนี้สรุปว่า ระบบเลือกหุ้นตัวไหน เหตุผลที่เลือกคืออะไร ส่งออเดอร์หรือไม่ และเหตุผลของการส่ง/ไม่ส่งออเดอร์")
           lines.append("")
 
           for title, response in sections:
               lines.append(f"## {title}")
               lines.append("")
               if isinstance(response, dict) and response.get("status") == "error":
-                  lines.append(f"**ERROR:** HTTP {response.get('http_status')}")
+                  lines.append(f"**เกิดข้อผิดพลาด:** HTTP {response.get('http_status')}")
                   lines.append("")
                   lines.append("```json")
                   lines.append(str(response.get("body")))
@@ -233,27 +263,39 @@ jobs:
 
               section_results = [summarize_result(item) for item in results(response)]
               if not section_results:
-                  lines.append("No selected candidates or no actionable results.")
+                  lines.append("ไม่พบหุ้นที่ถูกเลือก หรือยังไม่มีผลลัพธ์ที่ควรดำเนินการ")
                   lines.append("")
                   continue
 
-              lines.append("| Ticker | Verdict | Technical | Fundamental | Execution | Order ID |")
+              selected = [row["ticker"] for row in section_results]
+              ordered = [row["ticker"] for row in section_results if row["execution_status"] == "submitted"]
+              rejected = [row["ticker"] for row in section_results if row["execution_status"] != "submitted"]
+
+              lines.append(f"**หุ้นที่ระบบเลือก:** {', '.join(selected) if selected else '-'}")
+              lines.append(f"**หุ้นที่ส่งออเดอร์:** {', '.join(ordered) if ordered else 'ไม่มี'}")
+              lines.append(f"**หุ้นที่ไม่ส่งออเดอร์/ถูกปฏิเสธ:** {', '.join(rejected) if rejected else 'ไม่มี'}")
+              lines.append("")
+
+              lines.append("| หุ้น | คำตัดสินสุดท้าย | วิเคราะห์เทคนิค | วิเคราะห์พื้นฐาน | สถานะออเดอร์ | Order ID |")
               lines.append("|---|---|---|---|---|---|")
               for row in section_results:
                   lines.append(
-                      f"| {row['ticker']} | {row['verdict']} | {row['technical']} | {row['fundamental']} | {row['execution_status']} | {row['order_id']} |"
+                      f"| {row['ticker']} | {row['verdict_th']} | {row['technical']} | {row['fundamental']} | {row['execution_status_th']} | {row['order_id'] or '-'} |"
                   )
               lines.append("")
 
-              lines.append("### Why these symbols?")
+              lines.append("### เหตุผลรายตัว")
               for row in section_results:
                   lines.append(f"#### {row['ticker']}")
-                  lines.append(f"- Final verdict: `{row['verdict']}`")
-                  lines.append(f"- Technical reason: {row['technical_reason'] or 'n/a'}")
-                  lines.append(f"- Fundamental reason: {row['fundamental_reason'] or 'n/a'}")
-                  lines.append(f"- Execution: `{row['execution_status']}` — {row['execution_reason'] or 'n/a'}")
+                  lines.append(f"- **เลือกหุ้นตัวนี้เพราะ:** คำตัดสินสุดท้ายคือ `{row['verdict_th']}` จากการรวมคะแนนเทคนิคและพื้นฐาน")
+                  lines.append(f"- **เหตุผลทางเทคนิค:** {row['technical_reason'] or 'ไม่มีรายละเอียดจาก Technical Agent'}")
+                  lines.append(f"- **เหตุผลทางพื้นฐาน:** {row['fundamental_reason'] or 'ไม่มีรายละเอียดจาก Fundamental Agent'}")
+                  if row["execution_status"] == "submitted":
+                      lines.append(f"- **การส่งออเดอร์:** ส่งออเดอร์แล้ว เพราะผ่านเงื่อนไขสัญญาณและผ่าน Risk Manager")
+                  else:
+                      lines.append(f"- **การส่งออเดอร์:** {row['execution_status_th']} เพราะ {row['execution_reason'] or 'ระบบไม่ได้ส่งเหตุผลกลับมา'}")
                   if row["order_id"]:
-                      lines.append(f"- Order ID: `{row['order_id']}`")
+                      lines.append(f"- **Order ID:** `{row['order_id']}`")
                   lines.append("")
 
           Path("reports/daily-trading-report.md").write_text("\n".join(lines), encoding="utf-8")
