@@ -7,6 +7,8 @@ class DatabaseEndpoints:
     TRADE_HISTORY = "/accounts/{account_id}/trade_history"
     PORTFOLIO_METRICS = "/accounts/{account_id}/portfolio_metrics"
     PRICE_HISTORY = "/accounts/{account_id}/prices/{symbol}"
+    SIGNALS = "/signals"
+    PERFORMANCE_METRICS = "/performance_metrics"
 
 class ExecutionEndpoints:
     EXECUTE = "/execute"
