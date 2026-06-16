@@ -102,6 +102,30 @@ def _process_agent_response(resp: Union[StandardAgentResponse, Dict[str, Any]], 
     )
 
 
+async def _persist_signal(db_client: DatabaseAgentClient, account_id: Union[int, str], analysis_result: dict, correlation_id: str, extra_metadata: Dict[str, Any] | None = None) -> None:
+    """Persist Manager decision context to Database_Agent without blocking trade flow."""
+    try:
+        details = analysis_result.get("details")
+        tech_detail = details.technical if details else None
+        fund_detail = details.fundamental if details else None
+        await db_client.save_signal(
+            account_id=account_id,
+            symbol=analysis_result.get("ticker"),
+            correlation_id=correlation_id,
+            technical_score=tech_detail.score if tech_detail else None,
+            fundamental_score=fund_detail.score if fund_detail else None,
+            final_verdict=analysis_result.get("final_verdict"),
+            metadata={
+                "analysis_status": analysis_result.get("status"),
+                "technical_action": tech_detail.action if tech_detail else None,
+                "fundamental_action": fund_detail.action if fund_detail else None,
+                **(extra_metadata or {}),
+            },
+        )
+    except Exception as e:
+        report_logger.warning(f"Failed to persist signal for {analysis_result.get('ticker')}: {e}, correlation_id={correlation_id}")
+
+
 async def _execute_trade(exec_client: ExecutionAgentClient, trade_decision: dict, account_id: Union[int, str], correlation_id: str) -> dict:
     """
     Submits a trade to the Execution Agent and returns the outcome.
@@ -199,6 +223,8 @@ async def analyze_ticker(request: AgentRequestBody):
             tech_detail = analysis_result["details"].technical
             fund_detail = analysis_result["details"].fundamental
 
+            await _persist_signal(db_client, account_id, analysis_result, correlation_id)
+
             execution_result = None
             if final_verdict in ["buy", "sell", "strong_buy", "strong_sell"]:
                 portfolio_value = balance.cash_balance if balance else 0
@@ -290,6 +316,9 @@ async def _process_multi_asset_analysis(tickers: List[str], account_id: Union[in
             analysis_tasks = [_analyze_single_asset(ticker, correlation_id) for ticker in tickers]
             analysis_results = await asyncio.gather(*analysis_tasks)
             valid_results = [res for res in analysis_results if "error" not in res]
+
+            for result in valid_results:
+                await _persist_signal(db_client, account_id, result, correlation_id, extra_metadata={"batch": True})
 
             trade_decisions = assess_portfolio_trades(
                 analysis_results=valid_results,
