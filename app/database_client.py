@@ -1,5 +1,5 @@
 import os
-from typing import List, Any, Dict, Union, Type, TypeVar
+from typing import List, Any, Dict, Union, Type, TypeVar, Optional
 from pydantic import BaseModel
 
 from .contracts import (
@@ -109,3 +109,93 @@ class DatabaseAgentClient(ResilientAgentClient):
         response_data = await self._get(url, correlation_id)
         standard_resp = self.validate_standard_response(response_data)
         return [_coerce_model(PricePoint, p) for p in standard_resp.data]
+
+    async def save_signal(
+        self,
+        account_id: Union[int, str],
+        symbol: str,
+        correlation_id: str,
+        candidate_score: Optional[float] = None,
+        technical_score: Optional[float] = None,
+        fundamental_score: Optional[float] = None,
+        final_verdict: Optional[str] = None,
+        market_regime: Optional[str] = None,
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        payload = {
+            "account_id": account_id,
+            "symbol": symbol,
+            "source_agent": "manager-agent",
+            "candidate_score": candidate_score,
+            "technical_score": technical_score,
+            "fundamental_score": fundamental_score,
+            "final_verdict": final_verdict,
+            "market_regime": market_regime,
+            "metadata": metadata or {},
+        }
+        response_data = await self._post(DatabaseEndpoints.SIGNALS, correlation_id, json_data=payload)
+        standard_resp = self.validate_standard_response(response_data)
+        return standard_resp.data or {}
+
+    async def get_signals(
+        self,
+        correlation_id: str,
+        account_id: Optional[Union[int, str]] = None,
+        symbol: Optional[str] = None,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> List[Dict[str, Any]]:
+        params = {"limit": limit, "offset": offset}
+        if account_id is not None:
+            params["account_id"] = account_id
+        if symbol:
+            params["symbol"] = symbol
+        response_data = await self._get(DatabaseEndpoints.SIGNALS, correlation_id, params=params)
+        standard_resp = self.validate_standard_response(response_data)
+        return standard_resp.data or []
+
+    async def save_performance_metric(
+        self,
+        account_id: Union[int, str],
+        symbol: str,
+        correlation_id: str,
+        entry_price: Optional[float] = None,
+        exit_price: Optional[float] = None,
+        current_price: Optional[float] = None,
+        return_pct: Optional[float] = None,
+        holding_days: Optional[int] = None,
+        outcome: Optional[str] = None,
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        payload = {
+            "account_id": account_id,
+            "symbol": symbol,
+            "source_agent": "manager-agent",
+            "entry_price": entry_price,
+            "exit_price": exit_price,
+            "current_price": current_price,
+            "return_pct": return_pct,
+            "holding_days": holding_days,
+            "outcome": outcome,
+            "metadata": metadata or {},
+        }
+        response_data = await self._post(DatabaseEndpoints.PERFORMANCE_METRICS, correlation_id, json_data=payload)
+        standard_resp = self.validate_standard_response(response_data)
+        return standard_resp.data or {}
+
+    async def get_performance_metrics(
+        self,
+        correlation_id: str,
+        account_id: Optional[Union[int, str]] = None,
+        symbol: Optional[str] = None,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> List[Dict[str, Any]]:
+        params = {"limit": limit, "offset": offset}
+        if account_id is not None:
+            params["account_id"] = account_id
+        if symbol:
+            params["symbol"] = symbol
+        response_data = await self._get(DatabaseEndpoints.PERFORMANCE_METRICS, correlation_id, params=params)
+        standard_resp = self.validate_standard_response(response_data)
+        return standard_resp.data or []
