@@ -19,6 +19,7 @@ class AnalysisEndpoints:
 class ScannerEndpoints:
     SCAN = "/scan"
     SCAN_FUNDAMENTAL = "/scan/fundamental"
+    DISCOVER_BEST_FUNDAMENTALS = "/discover-best-fundamentals"
     HEALTH = "/health"
 
 class LearningEndpoints:
