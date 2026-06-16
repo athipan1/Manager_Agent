@@ -1,0 +1,292 @@
+name: Hourly Auto Trading
+
+on:
+  workflow_dispatch:
+    inputs:
+      scan_type:
+        description: "Scan type: technical or fundamental"
+        required: false
+        default: "fundamental"
+      max_candidates:
+        description: "Maximum candidates to analyze/trade"
+        required: false
+        default: "10"
+      dry_run:
+        description: "Keep execution in simulator/safety mode"
+        required: false
+        default: "true"
+  schedule:
+    # Run every hour at minute 5.
+    - cron: "5 * * * *"
+
+concurrency:
+  group: hourly-auto-trading
+  cancel-in-progress: false
+
+jobs:
+  hourly-auto-trading:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    env:
+      SCAN_TYPE: ${{ github.event.inputs.scan_type || 'fundamental' }}
+      MAX_CANDIDATES: ${{ github.event.inputs.max_candidates || '10' }}
+      DRY_RUN: ${{ github.event.inputs.dry_run || 'true' }}
+
+    steps:
+      - name: Checkout Manager_Agent
+        uses: actions/checkout@v4
+        with:
+          path: Manager_Agent
+
+      - name: Checkout Scanner_Agent
+        uses: actions/checkout@v4
+        with:
+          repository: athipan1/Scanner_Agent
+          path: Scanner_Agent
+
+      - name: Checkout Technical_Agent
+        uses: actions/checkout@v4
+        with:
+          repository: athipan1/Technical_Agent
+          path: Technical_Agent
+
+      - name: Checkout Fundamental_Agent
+        uses: actions/checkout@v4
+        with:
+          repository: athipan1/Fundamental_Agent
+          path: Fundamental_Agent
+
+      - name: Checkout Database_Agent
+        uses: actions/checkout@v4
+        with:
+          repository: athipan1/Database_Agent
+          path: Database_Agent
+
+      - name: Checkout Learning_Agent
+        uses: actions/checkout@v4
+        with:
+          repository: athipan1/Learning_Agent
+          path: Learning_Agent
+
+      - name: Checkout Execution_Agent
+        uses: actions/checkout@v4
+        with:
+          repository: athipan1/Execution_Agent
+          path: Execution_Agent
+
+      - name: Build and start trading stack
+        working-directory: Manager_Agent
+        run: |
+          echo "Starting stack. DRY_RUN=${DRY_RUN}"
+          docker compose up --build -d
+
+      - name: Wait for all services
+        working-directory: Manager_Agent
+        run: |
+          runtime_services="database-agent technical-agent scanner-agent fundamental-agent learning-agent execution-agent manager-agent db"
+          for i in {1..60}; do
+            docker compose ps
+
+            exited=$(docker compose ps --status exited -q $runtime_services | wc -l | tr -d ' ')
+            if [ "$exited" != "0" ]; then
+              echo "One or more runtime containers exited."
+              for service in $runtime_services; do
+                echo "---- ${service} logs tail ----"
+                docker compose logs --tail=160 "$service" || true
+              done
+              exit 1
+            fi
+
+            manager=$(docker compose exec -T manager-agent python /app/healthcheck.py >/dev/null && echo ok || echo wait)
+            fundamental=$(curl -fsS http://localhost:8001/health >/dev/null && echo ok || echo wait)
+            technical=$(curl -fsS http://localhost:8002/health >/dev/null && echo ok || echo wait)
+            scanner=$(curl -fsS http://localhost:8003/health >/dev/null && echo ok || echo wait)
+            database=$(curl -fsS http://localhost:8004/health >/dev/null && echo ok || echo wait)
+            learning=$(curl -fsS http://localhost:8005/health >/dev/null && echo ok || echo wait)
+            execution=$(curl -fsS http://localhost:8006/health >/dev/null && echo ok || echo wait)
+
+            echo "health: manager=$manager fundamental=$fundamental technical=$technical scanner=$scanner database=$database learning=$learning execution=$execution"
+            if [ "$manager$fundamental$technical$scanner$database$learning$execution" = "okokokokokokok" ]; then
+              echo "All services are reachable."
+              exit 0
+            fi
+            sleep 5
+          done
+
+          echo "Services did not become reachable in time."
+          docker compose ps
+          for service in $runtime_services; do
+            echo "---- ${service} logs tail ----"
+            docker compose logs --tail=160 "$service" || true
+          done
+          exit 1
+
+      - name: Run hourly scan, analysis, risk check, and execution
+        working-directory: Manager_Agent
+        run: |
+          mkdir -p reports
+
+          docker compose exec -T manager-agent python - <<'PY' > reports/hourly-auto-trading-report.json
+          import json
+          import os
+          import urllib.request
+          import urllib.error
+          from datetime import datetime, timezone
+
+          scan_type = os.getenv("SCAN_TYPE", "fundamental")
+          max_candidates = int(os.getenv("MAX_CANDIDATES", "10"))
+          dry_run = os.getenv("DRY_RUN", "true").lower() != "false"
+
+          def post_json(path, payload):
+              req = urllib.request.Request(
+                  f"http://localhost{path}",
+                  data=json.dumps(payload).encode("utf-8"),
+                  headers={"Content-Type": "application/json"},
+                  method="POST",
+              )
+              try:
+                  with urllib.request.urlopen(req, timeout=360) as resp:
+                      body = resp.read().decode("utf-8")
+                      return json.loads(body)
+              except urllib.error.HTTPError as exc:
+                  body = exc.read().decode("utf-8")
+                  return {"status": "error", "http_status": exc.code, "body": body}
+              except Exception as exc:
+                  return {"status": "error", "error": str(exc)}
+
+          # Empty symbols tells Scanner_Agent to use its configured universe/default symbols.
+          payload = {
+              "scan_type": scan_type,
+              "symbols": [],
+              "max_candidates": max_candidates,
+              "account_id": 1,
+          }
+
+          response = post_json("/scan-and-analyze", payload)
+
+          report = {
+              "generated_at": datetime.now(timezone.utc).isoformat(),
+              "mode": "SIMULATOR" if dry_run else "CONFIGURED_STACK_MODE",
+              "warning": "This GitHub Action stack currently uses docker-compose settings. Execution_Agent is SIMULATOR unless docker-compose/secrets are intentionally changed.",
+              "request": payload,
+              "response": response,
+          }
+          print(json.dumps(report, ensure_ascii=False, indent=2, default=str))
+          PY
+
+          python - <<'PY'
+          import json
+          import sys
+          from pathlib import Path
+
+          report_path = Path("reports/hourly-auto-trading-report.json")
+          report = json.loads(report_path.read_text())
+          response = report.get("response") or {}
+          data = response.get("data") if isinstance(response, dict) else {}
+          results = data.get("results") if isinstance(data, dict) else []
+          execution_summary = data.get("execution_summary") if isinstance(data, dict) else {}
+
+          def safe_get(obj, *keys, default=None):
+              current = obj
+              for key in keys:
+                  if isinstance(current, dict):
+                      current = current.get(key)
+                  else:
+                      return default
+              return current if current is not None else default
+
+          def th_verdict(value):
+              mapping = {
+                  "strong_buy": "ซื้อแรง",
+                  "buy": "ซื้อ",
+                  "hold": "ถือ/รอดู",
+                  "sell": "ขาย",
+                  "strong_sell": "ขายแรง",
+                  "unknown": "ไม่ทราบผล",
+              }
+              return mapping.get(str(value).lower(), str(value))
+
+          def th_execution(value):
+              mapping = {
+                  "submitted": "ส่งออเดอร์แล้ว",
+                  "rejected": "ไม่ส่งออเดอร์ / ถูกปฏิเสธ",
+                  "failed": "ส่งออเดอร์ไม่สำเร็จ",
+                  "not_attempted": "ยังไม่ส่งออเดอร์",
+                  "unknown": "ไม่ทราบสถานะ",
+              }
+              return mapping.get(str(value).lower(), str(value))
+
+          lines = []
+          lines.append("# Hourly Auto Trading Report")
+          lines.append("")
+          lines.append(f"Generated at UTC: `{report.get('generated_at')}`")
+          lines.append(f"Mode: `{report.get('mode')}`")
+          lines.append("")
+          lines.append("## Request")
+          lines.append("```json")
+          lines.append(json.dumps(report.get("request"), ensure_ascii=False, indent=2))
+          lines.append("```")
+          lines.append("")
+
+          if response.get("status") == "error":
+              lines.append("## Error")
+              lines.append("```json")
+              lines.append(json.dumps(response, ensure_ascii=False, indent=2))
+              lines.append("```")
+          else:
+              lines.append("## Execution Summary")
+              lines.append(f"- Approved: {execution_summary.get('total_trades_approved', 0)}")
+              lines.append(f"- Executed/submitted: {execution_summary.get('total_trades_executed', 0)}")
+              lines.append(f"- Failed: {execution_summary.get('total_trades_failed', 0)}")
+              lines.append("")
+              lines.append("## Results")
+              if not results:
+                  lines.append("No candidates/results returned by Manager_Agent.")
+              else:
+                  lines.append("| Symbol | Verdict | Technical | Fundamental | Execution | Order ID | Reason |")
+                  lines.append("|---|---|---|---|---|---|---|")
+                  for item in results:
+                      symbol = safe_get(item, "analysis", "ticker", default="UNKNOWN")
+                      verdict = safe_get(item, "analysis", "final_verdict", default="unknown")
+                      tech = safe_get(item, "analysis", "details", "technical", "action", default="n/a")
+                      fund = safe_get(item, "analysis", "details", "fundamental", "action", default="n/a")
+                      exec_status = safe_get(item, "execution", "status", default="unknown")
+                      order_id = safe_get(item, "execution", "details", "order_id", default="-")
+                      reason = safe_get(item, "execution", "reason", default="")
+                      lines.append(
+                          f"| {symbol} | {th_verdict(verdict)} | {th_verdict(tech)} | {th_verdict(fund)} | "
+                          f"{th_execution(exec_status)} | {order_id or '-'} | {str(reason).replace('|', '/')} |"
+                      )
+
+          Path("reports/hourly-auto-trading-report.md").write_text("\n".join(lines), encoding="utf-8")
+          print("\n".join(lines))
+
+          # Fail the workflow when the API itself errors. Do not fail only because no trade was approved.
+          if response.get("status") == "error":
+              sys.exit(1)
+          PY
+
+      - name: Upload hourly trading report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: hourly-auto-trading-report
+          path: Manager_Agent/reports/
+          if-no-files-found: warn
+
+      - name: Show logs on failure
+        if: failure()
+        working-directory: Manager_Agent
+        run: |
+          docker compose ps || true
+          for service in database-agent technical-agent scanner-agent fundamental-agent learning-agent execution-agent manager-agent db; do
+            echo "---- ${service} logs tail ----"
+            docker compose logs --tail=180 "$service" || true
+          done
+
+      - name: Stop stack
+        if: always()
+        working-directory: Manager_Agent
+        run: |
+          docker compose down -v || true
