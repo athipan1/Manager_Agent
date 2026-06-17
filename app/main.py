@@ -8,7 +8,7 @@ from .models import (
     AgentRequestBody, OrchestratorResponse, ReportDetail, ReportDetails,
     MultiAgentRequestBody, MultiOrchestratorResponse,
     AssetResult, ExecutionSummary, AnalysisResult, ExecutionResult,
-    ScanAndAnalyzeRequest
+    ScanAndAnalyzeRequest, DiscoverAnalyzeTradeRequest
 )
 from .agent_client import call_agents
 from .scanner_client import ScannerAgentClient
@@ -201,6 +201,101 @@ async def _analyze_single_asset(ticker: str, correlation_id: str) -> dict:
     }
 
 
+def _scanner_candidate_symbol(candidate: Any) -> str | None:
+    if isinstance(candidate, dict):
+        return candidate.get("symbol")
+    return getattr(candidate, "symbol", None)
+
+
+def _scanner_candidate_score(candidate: Any) -> float:
+    if isinstance(candidate, dict):
+        value = candidate.get("candidate_score")
+        raw_scores = candidate.get("raw_scores") or {}
+        if value is None:
+            value = raw_scores.get("fundamental_score")
+    else:
+        value = getattr(candidate, "candidate_score", None)
+        raw_scores = getattr(candidate, "raw_scores", {}) or {}
+        if value is None:
+            value = raw_scores.get("fundamental_score")
+    try:
+        value = float(value or 0.0)
+        return value / 100.0 if value > 1.0 else max(0.0, min(1.0, value))
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _scanner_candidate_metadata(candidate: Any) -> Dict[str, Any]:
+    if isinstance(candidate, dict):
+        return {
+            "candidate_score": candidate.get("candidate_score"),
+            "discovery_rank": candidate.get("discovery_rank"),
+            "recommendation_hint": candidate.get("recommendation_hint"),
+            "exchange": candidate.get("exchange"),
+            "tags": candidate.get("tags"),
+            "reasons": candidate.get("reasons"),
+            "raw_scores": candidate.get("raw_scores"),
+            "metadata": candidate.get("metadata"),
+        }
+    return {
+        "candidate_score": getattr(candidate, "candidate_score", None),
+        "discovery_rank": getattr(candidate, "discovery_rank", None),
+        "recommendation_hint": getattr(candidate, "recommendation_hint", None),
+        "exchange": getattr(candidate, "exchange", None),
+        "tags": getattr(candidate, "tags", None),
+        "reasons": getattr(candidate, "reasons", None),
+        "raw_scores": getattr(candidate, "raw_scores", None),
+        "metadata": getattr(candidate, "metadata", None),
+    }
+
+
+def _extract_current_price_and_stop(analysis_result: Dict[str, Any]) -> tuple[float, Any]:
+    tech_raw = analysis_result.get("raw_data", {}).get("technical")
+    entry_price = 0.0
+    technical_stop = None
+    if isinstance(tech_raw, StandardAgentResponse):
+        try:
+            tech_data = StandardAgentData.model_validate(tech_raw.data)
+            entry_price = float(tech_data.current_price or 0)
+            technical_stop = tech_data.indicators.get("stop_loss") if tech_data.indicators else None
+        except Exception:
+            pass
+    elif isinstance(tech_raw, dict):
+        try:
+            data = tech_raw.get("data") or {}
+            entry_price = float(data.get("current_price") or 0)
+            indicators = data.get("indicators") or {}
+            technical_stop = indicators.get("stop_loss")
+        except Exception:
+            pass
+    return entry_price, technical_stop
+
+
+def _score_deep_analysis(analysis_result: Dict[str, Any], scanner_score: float) -> Dict[str, Any]:
+    details = analysis_result.get("details")
+    tech_detail = details.technical if details else None
+    fund_detail = details.fundamental if details else None
+    tech_score = float(tech_detail.score or 0.0) if tech_detail else 0.0
+    fund_score = float(fund_detail.score or 0.0) if fund_detail else 0.0
+    verdict = analysis_result.get("final_verdict", "hold")
+    verdict_score_map = {
+        "strong_buy": 1.00,
+        "buy": 0.80,
+        "hold": 0.45,
+        "sell": 0.10,
+        "strong_sell": 0.00,
+    }
+    verdict_score = verdict_score_map.get(str(verdict).lower(), 0.45)
+    final_score = (scanner_score * 0.30) + (fund_score * 0.30) + (tech_score * 0.30) + (verdict_score * 0.10)
+    return {
+        "scanner_score": round(scanner_score, 4),
+        "technical_score": round(tech_score, 4),
+        "fundamental_score": round(fund_score, 4),
+        "verdict_score": round(verdict_score, 4),
+        "final_opportunity_score": round(final_score, 4),
+    }
+
+
 @app.post("/analyze", response_model=StandardAgentResponse)
 async def analyze_ticker(request: AgentRequestBody):
     """
@@ -231,19 +326,7 @@ async def analyze_ticker(request: AgentRequestBody):
                 current_position = next((p for p in positions if p.symbol == ticker), None)
                 current_position_size = current_position.quantity if current_position else 0
 
-                # Extract extra info from technical agent if available
-                tech_raw = analysis_result["raw_data"]["technical"]
-                entry_price = 0
-                technical_stop = None
-                if isinstance(tech_raw, StandardAgentResponse):
-                    try:
-                        tech_data = StandardAgentData.model_validate(tech_raw.data)
-                        entry_price = tech_data.current_price or 0
-                        technical_stop = tech_data.indicators.get("stop_loss") if tech_data.indicators else None
-                    except Exception:
-                        pass
-
-                # Pass the original verdict to the risk manager (it now supports strong variants)
+                entry_price, technical_stop = _extract_current_price_and_stop(analysis_result)
                 risk_action = final_verdict
 
                 trade_decision = assess_trade(
@@ -411,6 +494,210 @@ async def analyze_tickers_endpoint(request: MultiAgentRequestBody):
     correlation_id = str(uuid.uuid4())
     account_id = request.account_id if request.account_id is not None else config_manager.get('DEFAULT_ACCOUNT_ID')
     return await _process_multi_asset_analysis(request.tickers, account_id, correlation_id)
+
+
+@app.post("/discover-analyze-trade", response_model=StandardAgentResponse)
+async def discover_analyze_trade_endpoint(request: DiscoverAnalyzeTradeRequest):
+    """
+    Manager-led end-to-end trading flow:
+    Scanner discovers Top N fundamentally strong stocks from a broad market universe,
+    Technical/Fundamental Agents analyze them deeply, Manager selects one winner,
+    then Risk Manager + Execution Agent handle the single order.
+    """
+    correlation_id = str(uuid.uuid4())
+    account_id = request.account_id if request.account_id is not None else config_manager.get('DEFAULT_ACCOUNT_ID')
+
+    try:
+        async with ScannerAgentClient() as scanner_client:
+            scan_response = await scanner_client.discover_best_fundamentals(
+                correlation_id=correlation_id,
+                max_universe=request.max_universe,
+                top_n=request.top_n,
+                exchange=request.exchange,
+                max_workers=request.max_workers,
+            )
+
+        scan_data = scan_response.data
+        if hasattr(scan_data, "model_dump"):
+            scan_payload = scan_data.model_dump()
+        elif isinstance(scan_data, dict):
+            scan_payload = scan_data
+        else:
+            scan_payload = {}
+
+        candidates = scan_payload.get("candidates", [])
+        if not candidates:
+            return StandardAgentResponse(
+                status="error",
+                agent_type="manager-agent",
+                version="1.0.0",
+                timestamp=datetime.datetime.now(datetime.UTC),
+                data={
+                    "report_id": correlation_id,
+                    "stage": "scanner_discovery",
+                    "message": "Scanner returned zero candidates.",
+                    "scanner_error": scan_response.error,
+                    "scanner_data": scan_payload,
+                },
+                error={"code": "NO_SCANNER_CANDIDATES", "message": "Scanner returned zero candidates."},
+            )
+
+        ticker_to_scanner_candidate: Dict[str, Any] = {}
+        selected_tickers = []
+        for candidate in candidates:
+            symbol = _scanner_candidate_symbol(candidate)
+            if symbol and symbol not in ticker_to_scanner_candidate:
+                ticker_to_scanner_candidate[symbol] = candidate
+                selected_tickers.append(symbol)
+
+        analysis_results = await asyncio.gather(*[_analyze_single_asset(ticker, correlation_id) for ticker in selected_tickers])
+        valid_results = [result for result in analysis_results if "error" not in result]
+
+        if not valid_results:
+            return StandardAgentResponse(
+                status="error",
+                agent_type="manager-agent",
+                version="1.0.0",
+                timestamp=datetime.datetime.now(datetime.UTC),
+                data={
+                    "report_id": correlation_id,
+                    "stage": "deep_analysis",
+                    "scanner_candidates": selected_tickers,
+                    "analysis_results": analysis_results,
+                },
+                error={"code": "NO_VALID_ANALYSIS", "message": "Technical/Fundamental agents returned no valid analysis."},
+            )
+
+        ranked = []
+        for result in valid_results:
+            symbol = result["ticker"]
+            scanner_candidate = ticker_to_scanner_candidate.get(symbol)
+            scanner_score = _scanner_candidate_score(scanner_candidate)
+            score_breakdown = _score_deep_analysis(result, scanner_score)
+            ranked.append({
+                "symbol": symbol,
+                "analysis": result,
+                "scanner_candidate": _scanner_candidate_metadata(scanner_candidate),
+                "score_breakdown": score_breakdown,
+            })
+
+        ranked.sort(key=lambda item: item["score_breakdown"]["final_opportunity_score"], reverse=True)
+        winner = ranked[0]
+        winner_analysis = winner["analysis"]
+        winner_symbol = winner["symbol"]
+        winner_score = winner["score_breakdown"]["final_opportunity_score"]
+
+        execution_result = {"status": "not_attempted", "reason": "Execution disabled or score/verdict did not qualify."}
+        trade_decision = None
+
+        async with DatabaseAgentClient() as db_client:
+            for item in ranked:
+                await _persist_signal(
+                    db_client,
+                    account_id,
+                    item["analysis"],
+                    correlation_id,
+                    extra_metadata={
+                        "flow": "discover_analyze_trade",
+                        "scanner_candidate": item["scanner_candidate"],
+                        "score_breakdown": item["score_breakdown"],
+                        "selected_winner": item["symbol"] == winner_symbol,
+                    },
+                )
+
+            balance = await db_client.get_account_balance(account_id, correlation_id)
+            positions = await db_client.get_positions(account_id, correlation_id)
+            portfolio_value = balance.cash_balance if balance else 0
+            current_position = next((p for p in positions if p.symbol == winner_symbol), None)
+            current_position_size = current_position.quantity if current_position else 0
+            entry_price, technical_stop = _extract_current_price_and_stop(winner_analysis)
+            final_verdict = winner_analysis.get("final_verdict", "hold")
+
+            eligible_verdict = final_verdict in ["buy", "strong_buy"]
+            eligible_score = winner_score >= request.min_final_score
+
+            if request.execute and eligible_verdict and eligible_score:
+                trade_decision = assess_trade(
+                    portfolio_value=Decimal(portfolio_value),
+                    risk_per_trade=Decimal(config_manager.get('RISK_PER_TRADE')),
+                    fixed_stop_loss_pct=Decimal(config_manager.get('STOP_LOSS_PERCENTAGE')),
+                    enable_technical_stop=config_manager.get('ENABLE_TECHNICAL_STOP'),
+                    max_position_pct=Decimal(config_manager.get('MAX_POSITION_PERCENTAGE')),
+                    symbol=winner_symbol,
+                    action=final_verdict,
+                    entry_price=Decimal(entry_price),
+                    technical_stop_loss=Decimal(technical_stop) if technical_stop is not None else None,
+                    current_position_size=current_position_size,
+                )
+
+                if trade_decision.get("approved"):
+                    async with ExecutionAgentClient() as exec_client:
+                        execution_result = await _execute_trade(exec_client, trade_decision, account_id, correlation_id)
+                else:
+                    execution_result = {"status": "rejected", "reason": trade_decision.get("reason")}
+            else:
+                reason_parts = []
+                if not request.execute:
+                    reason_parts.append("request.execute=false")
+                if not eligible_verdict:
+                    reason_parts.append(f"winner verdict is {final_verdict}, not buy/strong_buy")
+                if not eligible_score:
+                    reason_parts.append(f"winner score {winner_score:.4f} below threshold {request.min_final_score:.4f}")
+                execution_result = {"status": "not_attempted", "reason": "; ".join(reason_parts)}
+
+            learning_client = LearningAgentClient(db_client=db_client)
+            learning_response = await learning_client.trigger_learning_cycle(
+                account_id=account_id,
+                symbol=winner_symbol,
+                correlation_id=correlation_id,
+                execution_result=execution_result,
+            )
+
+            if learning_response and learning_response.learning_state != "warmup":
+                deltas = learning_response.policy_deltas.model_dump(exclude_none=True)
+                if deltas:
+                    config_manager.apply_deltas(deltas)
+
+        return StandardAgentResponse(
+            status="success",
+            agent_type="manager-agent",
+            version="1.0.0",
+            timestamp=datetime.datetime.now(datetime.UTC),
+            data={
+                "report_id": correlation_id,
+                "flow": "discover_analyze_trade",
+                "scanner_metadata": scan_payload.get("metadata", {}),
+                "scanner_count": len(candidates),
+                "deep_analysis_count": len(valid_results),
+                "top_10_symbols": selected_tickers,
+                "winner": {
+                    "symbol": winner_symbol,
+                    "final_verdict": winner_analysis.get("final_verdict"),
+                    "analysis_status": winner_analysis.get("status"),
+                    "score_breakdown": winner["score_breakdown"],
+                    "scanner_candidate": winner["scanner_candidate"],
+                },
+                "ranked_candidates": [
+                    {
+                        "rank": index + 1,
+                        "symbol": item["symbol"],
+                        "final_verdict": item["analysis"].get("final_verdict"),
+                        "analysis_status": item["analysis"].get("status"),
+                        "score_breakdown": item["score_breakdown"],
+                    }
+                    for index, item in enumerate(ranked)
+                ],
+                "trade_decision": trade_decision,
+                "execution": execution_result,
+            },
+        )
+
+    except AgentUnavailable as e:
+        report_logger.critical(f"An agent is unavailable: {e}")
+        raise HTTPException(status_code=503, detail=str(e))
+    except Exception as e:
+        report_logger.exception(f"Discover analyze trade failed: {e}, correlation_id={correlation_id}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.post("/scan-and-analyze", response_model=StandardAgentResponse)
