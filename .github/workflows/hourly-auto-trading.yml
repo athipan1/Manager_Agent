@@ -48,7 +48,9 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: athipan1/Scanner_Agent
+          ref: main
           path: Scanner_Agent
+          fetch-depth: 1
 
       - name: Checkout Technical_Agent
         uses: actions/checkout@v4
@@ -79,6 +81,16 @@ jobs:
         with:
           repository: athipan1/Execution_Agent
           path: Execution_Agent
+
+      - name: Show checked out agent commits
+        run: |
+          echo "Manager_Agent=$(git -C Manager_Agent rev-parse HEAD)"
+          echo "Scanner_Agent=$(git -C Scanner_Agent rev-parse HEAD)"
+          echo "Technical_Agent=$(git -C Technical_Agent rev-parse HEAD)"
+          echo "Fundamental_Agent=$(git -C Fundamental_Agent rev-parse HEAD)"
+          echo "Database_Agent=$(git -C Database_Agent rev-parse HEAD)"
+          echo "Learning_Agent=$(git -C Learning_Agent rev-parse HEAD)"
+          echo "Execution_Agent=$(git -C Execution_Agent rev-parse HEAD)"
 
       - name: Build and start trading stack
         working-directory: Manager_Agent
