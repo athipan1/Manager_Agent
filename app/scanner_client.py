@@ -4,6 +4,31 @@ from .config import SCANNER_AGENT_URL
 from .resilient_client import ResilientAgentClient
 
 
+SCANNER_PREFETCH_CACHE: Dict[str, Dict[str, Any]] = {}
+
+
+def _to_dict(value: Any) -> Dict[str, Any]:
+    if isinstance(value, dict):
+        return value
+    if hasattr(value, "model_dump"):
+        return value.model_dump(mode="json")
+    return {}
+
+
+def get_scanner_prefetch(symbol: str) -> Optional[Dict[str, Any]]:
+    return SCANNER_PREFETCH_CACHE.get(symbol.upper())
+
+
+def _cache_scanner_candidates(response: StandardAgentResponse) -> None:
+    data = _to_dict(response.data)
+    candidates = data.get("candidates") or []
+    for candidate in candidates:
+        payload = _to_dict(candidate)
+        symbol = payload.get("symbol")
+        if symbol:
+            SCANNER_PREFETCH_CACHE[str(symbol).upper()] = payload
+
+
 class ScannerAgentClient(ResilientAgentClient):
     """
     A client for the Scanner Agent service, built on top of ResilientAgentClient.
@@ -21,7 +46,9 @@ class ScannerAgentClient(ResilientAgentClient):
         """
         payload = {"symbols": symbols}
         response_data = await self._post(ScannerEndpoints.SCAN, correlation_id, json_data=payload)
-        return self.validate_standard_response(response_data)
+        response = self.validate_standard_response(response_data)
+        _cache_scanner_candidates(response)
+        return response
 
     async def scan_fundamental(self, symbols: Optional[List[str]], correlation_id: str) -> StandardAgentResponse:
         """
@@ -29,7 +56,9 @@ class ScannerAgentClient(ResilientAgentClient):
         """
         payload = {"symbols": symbols}
         response_data = await self._post(ScannerEndpoints.SCAN_FUNDAMENTAL, correlation_id, json_data=payload)
-        return self.validate_standard_response(response_data)
+        response = self.validate_standard_response(response_data)
+        _cache_scanner_candidates(response)
+        return response
 
     async def discover_best_fundamentals(
         self,
@@ -42,11 +71,6 @@ class ScannerAgentClient(ResilientAgentClient):
         """
         Calls Scanner_Agent's broad-market fundamental discovery endpoint.
         Returns Top N candidates for Manager_Agent to analyze deeply.
-
-        This endpoint can legitimately take several minutes when max_universe
-        is large because it gathers market/fundamental data for many symbols.
-        Use a per-request timeout so the generic 10-second agent timeout does
-        not incorrectly surface as a connection failure.
         """
         payload = {
             "universe": "NASDAQ_SP500",
@@ -61,4 +85,6 @@ class ScannerAgentClient(ResilientAgentClient):
             json_data=payload,
             timeout=900,
         )
-        return self.validate_standard_response(response_data)
+        response = self.validate_standard_response(response_data)
+        _cache_scanner_candidates(response)
+        return response
