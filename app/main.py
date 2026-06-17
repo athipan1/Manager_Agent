@@ -70,35 +70,60 @@ async def health_check():
     )
 
 
-def _process_agent_response(resp: Union[StandardAgentResponse, Dict[str, Any]], agent_type: str) -> ReportDetail | None:
-    """Processes a standardized agent response into a ReportDetail."""
-    if not isinstance(resp, StandardAgentResponse):
-        try:
-            resp = StandardAgentResponse.model_validate(resp)
-        except Exception as e:
-            report_logger.warning(f"Failed to validate StandardAgentResponse for {agent_type}: {e}")
-            return None
+def _response_to_dict(resp: Union[StandardAgentResponse, Dict[str, Any], Any]) -> Dict[str, Any]:
+    if isinstance(resp, StandardAgentResponse):
+        return resp.model_dump(mode="json")
+    if isinstance(resp, dict):
+        return resp
+    if hasattr(resp, "model_dump"):
+        return resp.model_dump(mode="json")
+    return {}
 
-    # Analysis agents should return StandardAgentData in the 'data' field
-    data_obj = resp.data
-    try:
-        if isinstance(data_obj, StandardAgentData):
-            data = data_obj
-        else:
-            data = StandardAgentData.model_validate(data_obj)
-    except Exception as e:
-        report_logger.warning(f"Failed to validate StandardAgentData for {agent_type} agent: {e}")
+
+def _process_agent_response(resp: Union[StandardAgentResponse, Dict[str, Any]], agent_type: str) -> ReportDetail | None:
+    """
+    Processes a child-agent response into ReportDetail.
+
+    This parser is intentionally tolerant because Technical_Agent and
+    Fundamental_Agent use slightly different Pydantic models but share the
+    same practical payload fields: action, confidence_score, and reason.
+    """
+    resp_dict = _response_to_dict(resp)
+    if not resp_dict:
+        report_logger.warning(f"Empty or unsupported response for {agent_type}: {resp}")
         return None
 
+    if resp_dict.get("status") != "success":
+        report_logger.warning(f"{agent_type} returned non-success response: {resp_dict.get('error') or resp_dict}")
+        return None
+
+    data_obj = resp_dict.get("data") or {}
+    if hasattr(data_obj, "model_dump"):
+        data_obj = data_obj.model_dump(mode="json")
+    if not isinstance(data_obj, dict):
+        report_logger.warning(f"Invalid data payload for {agent_type}: {data_obj}")
+        return None
+
+    action = str(data_obj.get("action") or "hold").lower()
+    if action not in {"buy", "sell", "hold"}:
+        action = "hold"
+
+    try:
+        score = float(data_obj.get("confidence_score", 0.0) or 0.0)
+    except (TypeError, ValueError):
+        score = 0.0
+    score = max(0.0, min(1.0, score))
+
+    reason = data_obj.get("reason")
     tech_reason, fund_reason = get_reasons(
-        data.action if agent_type == "technical" else "hold",
-        data.action if agent_type == "fundamental" else "hold"
+        action if agent_type == "technical" else "hold",
+        action if agent_type == "fundamental" else "hold"
     )
 
     return ReportDetail(
-        action=data.action,
-        score=data.confidence_score,
-        reason=data.reason or (tech_reason if agent_type == "technical" else fund_reason)
+        action=action,
+        score=score,
+        reason=reason or (tech_reason if agent_type == "technical" else fund_reason)
     )
 
 
@@ -180,7 +205,7 @@ async def _analyze_single_asset(ticker: str, correlation_id: str) -> dict:
 
     if not tech_detail and not fund_detail:
         report_logger.error(f"Both agents failed for {ticker}, correlation_id={correlation_id}")
-        return {"ticker": ticker, "error": "All agents failed"}
+        return {"ticker": ticker, "error": "All agents failed", "raw_data": {"technical": _response_to_dict(tech_response), "fundamental": _response_to_dict(fund_response)}}
 
     status = "complete" if tech_detail and fund_detail else "partial"
 
@@ -253,21 +278,14 @@ def _extract_current_price_and_stop(analysis_result: Dict[str, Any]) -> tuple[fl
     tech_raw = analysis_result.get("raw_data", {}).get("technical")
     entry_price = 0.0
     technical_stop = None
-    if isinstance(tech_raw, StandardAgentResponse):
-        try:
-            tech_data = StandardAgentData.model_validate(tech_raw.data)
-            entry_price = float(tech_data.current_price or 0)
-            technical_stop = tech_data.indicators.get("stop_loss") if tech_data.indicators else None
-        except Exception:
-            pass
-    elif isinstance(tech_raw, dict):
-        try:
-            data = tech_raw.get("data") or {}
-            entry_price = float(data.get("current_price") or 0)
-            indicators = data.get("indicators") or {}
-            technical_stop = indicators.get("stop_loss")
-        except Exception:
-            pass
+    tech_dict = _response_to_dict(tech_raw)
+    try:
+        data = tech_dict.get("data") or {}
+        entry_price = float(data.get("current_price") or 0)
+        indicators = data.get("indicators") or {}
+        technical_stop = indicators.get("stop_loss")
+    except Exception:
+        pass
     return entry_price, technical_stop
 
 
@@ -315,8 +333,6 @@ async def analyze_ticker(request: AgentRequestBody):
                 raise HTTPException(status_code=500, detail=analysis_result["error"])
 
             final_verdict = analysis_result["final_verdict"]
-            tech_detail = analysis_result["details"].technical
-            fund_detail = analysis_result["details"].fundamental
 
             await _persist_signal(db_client, account_id, analysis_result, correlation_id)
 
