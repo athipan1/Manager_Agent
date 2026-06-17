@@ -40,7 +40,6 @@ RUN pip install --no-cache-dir -r requirements.prod.txt
 
 # Stage 3: Runner
 # This is the final, lean production image.
-# It starts from our shared base image, which contains the common venv.
 FROM base as runner
 
 # Copy the venv with the service-specific dependencies from the builder stage.
@@ -49,9 +48,11 @@ COPY --from=builder /opt/venv /opt/venv
 # Copy the application code and the healthcheck script.
 COPY ./app /app/app
 COPY ./healthcheck.py /app/healthcheck.py
+COPY ./patches /app/patches
 
-# Ensure the app user owns the copied files.
+# Apply runtime source compatibility patches before dropping privileges.
 USER root
+RUN python /app/patches/enable_fundamental_prefetch.py
 RUN chown -R app:app /app
 USER app
 
