@@ -80,6 +80,15 @@ def _response_to_dict(resp: Union[StandardAgentResponse, Dict[str, Any], Any]) -
     return {}
 
 
+def _normalize_score(value: Any) -> float:
+    try:
+        score = float(value or 0.0)
+        score = score / 100.0 if score > 1.0 else score
+        return max(0.0, min(1.0, score))
+    except (TypeError, ValueError):
+        return 0.0
+
+
 def _process_agent_response(resp: Union[StandardAgentResponse, Dict[str, Any]], agent_type: str) -> ReportDetail | None:
     """
     Processes a child-agent response into ReportDetail.
@@ -108,11 +117,7 @@ def _process_agent_response(resp: Union[StandardAgentResponse, Dict[str, Any]], 
     if action not in {"buy", "sell", "hold"}:
         action = "hold"
 
-    try:
-        score = float(data_obj.get("confidence_score", 0.0) or 0.0)
-    except (TypeError, ValueError):
-        score = 0.0
-    score = max(0.0, min(1.0, score))
+    score = _normalize_score(data_obj.get("confidence_score", 0.0))
 
     reason = data_obj.get("reason")
     tech_reason, fund_reason = get_reasons(
@@ -226,51 +231,74 @@ async def _analyze_single_asset(ticker: str, correlation_id: str) -> dict:
     }
 
 
-def _scanner_candidate_symbol(candidate: Any) -> str | None:
+def _candidate_to_dict(candidate: Any) -> Dict[str, Any]:
     if isinstance(candidate, dict):
-        return candidate.get("symbol")
-    return getattr(candidate, "symbol", None)
+        return candidate
+    if hasattr(candidate, "model_dump"):
+        return candidate.model_dump(mode="json")
+
+    result: Dict[str, Any] = {}
+    for key in [
+        "symbol", "candidate_score", "confidence_score", "fundamental_score",
+        "technical_score", "discovery_rank", "recommendation", "recommendation_hint",
+        "exchange", "screener", "tags", "reasons", "raw_scores", "metadata",
+    ]:
+        if hasattr(candidate, key):
+            result[key] = getattr(candidate, key)
+    return result
+
+
+def _scanner_candidate_symbol(candidate: Any) -> str | None:
+    data = _candidate_to_dict(candidate)
+    return data.get("symbol")
 
 
 def _scanner_candidate_score(candidate: Any) -> float:
-    if isinstance(candidate, dict):
-        value = candidate.get("candidate_score")
-        raw_scores = candidate.get("raw_scores") or {}
-        if value is None:
-            value = raw_scores.get("fundamental_score")
-    else:
-        value = getattr(candidate, "candidate_score", None)
-        raw_scores = getattr(candidate, "raw_scores", {}) or {}
-        if value is None:
-            value = raw_scores.get("fundamental_score")
+    data = _candidate_to_dict(candidate)
+    metadata = data.get("metadata") or {}
+    raw_scores = data.get("raw_scores") or metadata.get("raw_scores") or {}
+
+    score_candidates = [
+        data.get("candidate_score"),
+        data.get("confidence_score"),
+        data.get("fundamental_score"),
+        raw_scores.get("fundamental_score") if isinstance(raw_scores, dict) else None,
+        raw_scores.get("quality_score") if isinstance(raw_scores, dict) else None,
+    ]
+    for value in score_candidates:
+        score = _normalize_score(value)
+        if score > 0:
+            return score
+
+    rank = data.get("discovery_rank") or metadata.get("discovery_rank")
     try:
-        value = float(value or 0.0)
-        return value / 100.0 if value > 1.0 else max(0.0, min(1.0, value))
+        rank = int(rank)
+        if rank > 0:
+            return max(0.1, min(1.0, 1.0 - ((rank - 1) * 0.08)))
     except (TypeError, ValueError):
-        return 0.0
+        pass
+
+    return 0.0
 
 
 def _scanner_candidate_metadata(candidate: Any) -> Dict[str, Any]:
-    if isinstance(candidate, dict):
-        return {
-            "candidate_score": candidate.get("candidate_score"),
-            "discovery_rank": candidate.get("discovery_rank"),
-            "recommendation_hint": candidate.get("recommendation_hint"),
-            "exchange": candidate.get("exchange"),
-            "tags": candidate.get("tags"),
-            "reasons": candidate.get("reasons"),
-            "raw_scores": candidate.get("raw_scores"),
-            "metadata": candidate.get("metadata"),
-        }
+    data = _candidate_to_dict(candidate)
+    metadata = data.get("metadata") or {}
+    raw_scores = data.get("raw_scores") or metadata.get("raw_scores")
     return {
-        "candidate_score": getattr(candidate, "candidate_score", None),
-        "discovery_rank": getattr(candidate, "discovery_rank", None),
-        "recommendation_hint": getattr(candidate, "recommendation_hint", None),
-        "exchange": getattr(candidate, "exchange", None),
-        "tags": getattr(candidate, "tags", None),
-        "reasons": getattr(candidate, "reasons", None),
-        "raw_scores": getattr(candidate, "raw_scores", None),
-        "metadata": getattr(candidate, "metadata", None),
+        "candidate_score": data.get("candidate_score"),
+        "confidence_score": data.get("confidence_score"),
+        "fundamental_score": data.get("fundamental_score"),
+        "technical_score": data.get("technical_score"),
+        "discovery_rank": data.get("discovery_rank") or metadata.get("discovery_rank"),
+        "recommendation": data.get("recommendation"),
+        "recommendation_hint": data.get("recommendation_hint"),
+        "exchange": data.get("exchange") or metadata.get("exchange"),
+        "screener": data.get("screener") or metadata.get("screener"),
+        "tags": data.get("tags") or metadata.get("tags"),
+        "reasons": data.get("reasons") or metadata.get("reasons"),
+        "raw_scores": raw_scores,
+        "metadata": metadata,
     }
 
 
@@ -294,7 +322,13 @@ def _score_deep_analysis(analysis_result: Dict[str, Any], scanner_score: float) 
     tech_detail = details.technical if details else None
     fund_detail = details.fundamental if details else None
     tech_score = float(tech_detail.score or 0.0) if tech_detail else 0.0
-    fund_score = float(fund_detail.score or 0.0) if fund_detail else 0.0
+    raw_fund_score = float(fund_detail.score or 0.0) if fund_detail else 0.0
+
+    # Scanner_Agent already performs broad fundamental discovery. If the deeper
+    # Fundamental_Agent is sparse/unavailable for a candidate, use Scanner score
+    # as the fundamental fallback so ranking still reflects discovery quality.
+    fund_score = raw_fund_score if raw_fund_score > 0 else scanner_score
+
     verdict = analysis_result.get("final_verdict", "hold")
     verdict_score_map = {
         "strong_buy": 1.00,
@@ -309,6 +343,8 @@ def _score_deep_analysis(analysis_result: Dict[str, Any], scanner_score: float) 
         "scanner_score": round(scanner_score, 4),
         "technical_score": round(tech_score, 4),
         "fundamental_score": round(fund_score, 4),
+        "raw_fundamental_score": round(raw_fund_score, 4),
+        "fundamental_score_source": "fundamental_agent" if raw_fund_score > 0 else "scanner_fallback",
         "verdict_score": round(verdict_score, 4),
         "final_opportunity_score": round(final_score, 4),
     }
