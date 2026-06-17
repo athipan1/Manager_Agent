@@ -110,10 +110,15 @@ jobs:
             database=$(curl -fsS http://localhost:8004/health >/dev/null && echo ok || echo wait)
             learning=$(curl -fsS http://localhost:8005/health >/dev/null && echo ok || echo wait)
             execution=$(curl -fsS http://localhost:8006/health >/dev/null && echo ok || echo wait)
+            manager_to_scanner=$(docker compose exec -T manager-agent python - <<'PY' >/dev/null 2>&1 && echo ok || echo wait
+          import urllib.request
+          urllib.request.urlopen("http://scanner-agent:8003/health", timeout=5).read()
+          PY
+          )
 
-            echo "health: manager=$manager fundamental=$fundamental technical=$technical scanner=$scanner database=$database learning=$learning execution=$execution"
-            if [ "$manager$fundamental$technical$scanner$database$learning$execution" = "okokokokokokok" ]; then
-              echo "All services are reachable."
+            echo "health: manager=$manager fundamental=$fundamental technical=$technical scanner=$scanner database=$database learning=$learning execution=$execution manager_to_scanner=$manager_to_scanner"
+            if [ "$manager$fundamental$technical$scanner$database$learning$execution$manager_to_scanner" = "okokokokokokokok" ]; then
+              echo "All services are reachable, including manager-agent -> scanner-agent."
               exit 0
             fi
             sleep 5
