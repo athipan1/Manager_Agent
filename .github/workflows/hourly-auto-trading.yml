@@ -3,14 +3,18 @@ name: Hourly Auto Trading
 on:
   workflow_dispatch:
     inputs:
-      scan_type:
-        description: "Scan type: technical or fundamental"
+      max_universe:
+        description: "Maximum symbols Scanner_Agent should analyze from NASDAQ/S&P500 universe"
         required: false
-        default: "fundamental"
-      max_candidates:
-        description: "Maximum candidates to analyze/trade"
+        default: "1000"
+      top_n:
+        description: "Number of fundamentally strong candidates Scanner_Agent returns to Manager_Agent"
         required: false
         default: "10"
+      min_final_score:
+        description: "Minimum final opportunity score required before Manager sends to Execution_Agent"
+        required: false
+        default: "0.55"
       dry_run:
         description: "Keep execution in simulator/safety mode"
         required: false
@@ -26,11 +30,12 @@ concurrency:
 jobs:
   hourly-auto-trading:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 60
 
     env:
-      SCAN_TYPE: ${{ github.event.inputs.scan_type || 'fundamental' }}
-      MAX_CANDIDATES: ${{ github.event.inputs.max_candidates || '10' }}
+      MAX_UNIVERSE: ${{ github.event.inputs.max_universe || '1000' }}
+      TOP_N: ${{ github.event.inputs.top_n || '10' }}
+      MIN_FINAL_SCORE: ${{ github.event.inputs.min_final_score || '0.55' }}
       DRY_RUN: ${{ github.event.inputs.dry_run || 'true' }}
 
     steps:
@@ -122,7 +127,7 @@ jobs:
           done
           exit 1
 
-      - name: Run hourly scan, analysis, risk check, and execution
+      - name: Run hourly discover, deep analysis, winner selection, risk check, and execution
         working-directory: Manager_Agent
         run: |
           mkdir -p reports
@@ -134,8 +139,9 @@ jobs:
           import urllib.error
           from datetime import datetime, timezone
 
-          scan_type = os.getenv("SCAN_TYPE", "fundamental")
-          max_candidates = int(os.getenv("MAX_CANDIDATES", "10"))
+          max_universe = int(os.getenv("MAX_UNIVERSE", "1000"))
+          top_n = int(os.getenv("TOP_N", "10"))
+          min_final_score = float(os.getenv("MIN_FINAL_SCORE", "0.55"))
           dry_run = os.getenv("DRY_RUN", "true").lower() != "false"
 
           def post_json(path, payload):
@@ -146,7 +152,7 @@ jobs:
                   method="POST",
               )
               try:
-                  with urllib.request.urlopen(req, timeout=360) as resp:
+                  with urllib.request.urlopen(req, timeout=900) as resp:
                       body = resp.read().decode("utf-8")
                       return json.loads(body)
               except urllib.error.HTTPError as exc:
@@ -155,19 +161,22 @@ jobs:
               except Exception as exc:
                   return {"status": "error", "error": str(exc)}
 
-          # Empty symbols tells Scanner_Agent to use its configured universe/default symbols.
           payload = {
-              "scan_type": scan_type,
-              "symbols": [],
-              "max_candidates": max_candidates,
               "account_id": 1,
+              "max_universe": max_universe,
+              "top_n": top_n,
+              "exchange": "NASDAQ",
+              "max_workers": 10,
+              "min_final_score": min_final_score,
+              "execute": True,
           }
 
-          response = post_json("/scan-and-analyze", payload)
+          response = post_json("/discover-analyze-trade", payload)
 
           report = {
               "generated_at": datetime.now(timezone.utc).isoformat(),
               "mode": "SIMULATOR" if dry_run else "CONFIGURED_STACK_MODE",
+              "flow": "discover_analyze_trade",
               "warning": "This GitHub Action stack currently uses docker-compose settings. Execution_Agent is SIMULATOR unless docker-compose/secrets are intentionally changed.",
               "request": payload,
               "response": response,
@@ -184,17 +193,6 @@ jobs:
           report = json.loads(report_path.read_text())
           response = report.get("response") or {}
           data = response.get("data") if isinstance(response, dict) else {}
-          results = data.get("results") if isinstance(data, dict) else []
-          execution_summary = data.get("execution_summary") if isinstance(data, dict) else {}
-
-          def safe_get(obj, *keys, default=None):
-              current = obj
-              for key in keys:
-                  if isinstance(current, dict):
-                      current = current.get(key)
-                  else:
-                      return default
-              return current if current is not None else default
 
           def th_verdict(value):
               mapping = {
@@ -222,6 +220,7 @@ jobs:
           lines.append("")
           lines.append(f"Generated at UTC: `{report.get('generated_at')}`")
           lines.append(f"Mode: `{report.get('mode')}`")
+          lines.append(f"Flow: `{report.get('flow')}`")
           lines.append("")
           lines.append("## Request")
           lines.append("```json")
@@ -235,34 +234,42 @@ jobs:
               lines.append(json.dumps(response, ensure_ascii=False, indent=2))
               lines.append("```")
           else:
-              lines.append("## Execution Summary")
-              lines.append(f"- Approved: {execution_summary.get('total_trades_approved', 0)}")
-              lines.append(f"- Executed/submitted: {execution_summary.get('total_trades_executed', 0)}")
-              lines.append(f"- Failed: {execution_summary.get('total_trades_failed', 0)}")
+              winner = data.get("winner") or {}
+              execution = data.get("execution") or {}
+              trade_decision = data.get("trade_decision")
+              ranked = data.get("ranked_candidates") or []
+
+              lines.append("## Winner")
+              lines.append(f"- Symbol: `{winner.get('symbol', '-')}`")
+              lines.append(f"- Verdict: {th_verdict(winner.get('final_verdict', 'unknown'))}")
+              score = (winner.get("score_breakdown") or {}).get("final_opportunity_score")
+              lines.append(f"- Final Opportunity Score: `{score}`")
+              lines.append(f"- Execution: {th_execution(execution.get('status', 'unknown'))}")
+              lines.append(f"- Execution Reason: {execution.get('reason', '-')}")
               lines.append("")
-              lines.append("## Results")
-              if not results:
-                  lines.append("No candidates/results returned by Manager_Agent.")
+
+              lines.append("## Ranked Candidates")
+              if not ranked:
+                  lines.append("No ranked candidates returned by Manager_Agent.")
               else:
-                  lines.append("| Symbol | Verdict | Technical | Fundamental | Execution | Order ID | Reason |")
-                  lines.append("|---|---|---|---|---|---|---|")
-                  for item in results:
-                      symbol = safe_get(item, "analysis", "ticker", default="UNKNOWN")
-                      verdict = safe_get(item, "analysis", "final_verdict", default="unknown")
-                      tech = safe_get(item, "analysis", "details", "technical", "action", default="n/a")
-                      fund = safe_get(item, "analysis", "details", "fundamental", "action", default="n/a")
-                      exec_status = safe_get(item, "execution", "status", default="unknown")
-                      order_id = safe_get(item, "execution", "details", "order_id", default="-")
-                      reason = safe_get(item, "execution", "reason", default="")
+                  lines.append("| Rank | Symbol | Verdict | Final Score | Scanner | Fundamental | Technical |")
+                  lines.append("|---:|---|---|---:|---:|---:|---:|")
+                  for item in ranked:
+                      scores = item.get("score_breakdown") or {}
                       lines.append(
-                          f"| {symbol} | {th_verdict(verdict)} | {th_verdict(tech)} | {th_verdict(fund)} | "
-                          f"{th_execution(exec_status)} | {order_id or '-'} | {str(reason).replace('|', '/')} |"
+                          f"| {item.get('rank')} | {item.get('symbol')} | {th_verdict(item.get('final_verdict'))} | "
+                          f"{scores.get('final_opportunity_score')} | {scores.get('scanner_score')} | "
+                          f"{scores.get('fundamental_score')} | {scores.get('technical_score')} |"
                       )
+              lines.append("")
+              lines.append("## Trade Decision")
+              lines.append("```json")
+              lines.append(json.dumps(trade_decision, ensure_ascii=False, indent=2, default=str))
+              lines.append("```")
 
           Path("reports/hourly-auto-trading-report.md").write_text("\n".join(lines), encoding="utf-8")
           print("\n".join(lines))
 
-          # Fail the workflow when the API itself errors. Do not fail only because no trade was approved.
           if response.get("status") == "error":
               sys.exit(1)
           PY
