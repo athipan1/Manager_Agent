@@ -1,23 +1,33 @@
 import asyncio
-from typing import Tuple, Dict, Any
+from typing import Tuple, Dict, Any, Optional
 
 from .models import AgentRequestBody
 from .config import TECHNICAL_AGENT_URL, FUNDAMENTAL_AGENT_URL
-from .resilient_client import ResilientAgentClient, AgentUnavailable
+from .resilient_client import ResilientAgentClient
 from .contracts import AnalysisEndpoints, StandardAgentResponse
 
-async def call_agents(ticker: str, correlation_id: str) -> Tuple[StandardAgentResponse | Dict[str, Any], StandardAgentResponse | Dict[str, Any]]:
+
+async def call_agents(
+    ticker: str,
+    correlation_id: str,
+    fundamental_context: Optional[Dict[str, Any]] = None,
+) -> Tuple[StandardAgentResponse | Dict[str, Any], StandardAgentResponse | Dict[str, Any]]:
     """
-    Calls both the Technical and Fundamental agents concurrently using ResilientAgentClient.
+    Calls both the Technical and Fundamental agents concurrently.
+    Fundamental_Agent can receive Scanner_Agent prefetched data so it can still
+    produce v2 factor scores when live data providers are sparse/rate-limited.
     """
     request_body = AgentRequestBody(ticker=ticker).model_dump()
+    fundamental_body = dict(request_body)
+    if fundamental_context:
+        fundamental_body["prefetched_data"] = fundamental_context
 
     tech_client = ResilientAgentClient(base_url=TECHNICAL_AGENT_URL)
     fund_client = ResilientAgentClient(base_url=FUNDAMENTAL_AGENT_URL)
 
     async with tech_client as tc, fund_client as fc:
         technical_task = tc._post(AnalysisEndpoints.ANALYZE, correlation_id, request_body)
-        fundamental_task = fc._post(AnalysisEndpoints.ANALYZE, correlation_id, request_body)
+        fundamental_task = fc._post(AnalysisEndpoints.ANALYZE, correlation_id, fundamental_body)
 
         results = await asyncio.gather(
             technical_task,
@@ -25,7 +35,6 @@ async def call_agents(ticker: str, correlation_id: str) -> Tuple[StandardAgentRe
             return_exceptions=True
         )
 
-    # Handle responses and validate them
     def process_result(result, client: ResilientAgentClient):
         if isinstance(result, BaseException):
             return {"status": "error", "error": {"message": str(result)}}
