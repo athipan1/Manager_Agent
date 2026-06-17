@@ -42,6 +42,11 @@ class ScannerAgentClient(ResilientAgentClient):
         """
         Calls Scanner_Agent's broad-market fundamental discovery endpoint.
         Returns Top N candidates for Manager_Agent to analyze deeply.
+
+        This endpoint can legitimately take several minutes when max_universe
+        is large because it gathers market/fundamental data for many symbols.
+        Use a per-request timeout so the generic 10-second agent timeout does
+        not incorrectly surface as a connection failure.
         """
         payload = {
             "universe": "NASDAQ_SP500",
@@ -54,5 +59,6 @@ class ScannerAgentClient(ResilientAgentClient):
             ScannerEndpoints.DISCOVER_BEST_FUNDAMENTALS,
             correlation_id,
             json_data=payload,
+            timeout=900,
         )
         return self.validate_standard_response(response_data)
