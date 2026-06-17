@@ -51,6 +51,7 @@ class MultiAgentRequestBody(BaseModel):
     def convert_to_str(cls, v):
         return str(v) if v is not None else v
 
+
 class ScanAndAnalyzeRequest(BaseModel):
     """Request body for the scan and analyze endpoint."""
     symbols: Optional[List[str]] = None
@@ -61,4 +62,24 @@ class ScanAndAnalyzeRequest(BaseModel):
     @field_validator('account_id', mode='before')
     @classmethod
     def convert_to_str(cls, v):
+        return str(v) if v is not None else v
+
+
+class DiscoverAnalyzeTradeRequest(BaseModel):
+    """
+    End-to-end request for Manager-led auto trading:
+    Scanner discovers broad-market candidates, analysis agents score them,
+    Manager selects one winner, then risk/execution handles the order.
+    """
+    account_id: Optional[Union[int, str]] = None
+    max_universe: int = Field(default=1000, ge=1, le=6000)
+    top_n: int = Field(default=10, ge=1, le=50)
+    exchange: str = "NASDAQ"
+    max_workers: int = Field(default=10, ge=1, le=20)
+    min_final_score: float = Field(default=0.55, ge=0.0, le=1.0)
+    execute: bool = True
+
+    @field_validator('account_id', mode='before')
+    @classmethod
+    def convert_account_to_str(cls, v):
         return str(v) if v is not None else v
