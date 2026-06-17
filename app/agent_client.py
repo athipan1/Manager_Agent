@@ -5,6 +5,7 @@ from .models import AgentRequestBody
 from .config import TECHNICAL_AGENT_URL, FUNDAMENTAL_AGENT_URL
 from .resilient_client import ResilientAgentClient
 from .contracts import AnalysisEndpoints, StandardAgentResponse
+from .scanner_client import get_scanner_prefetch
 
 
 async def call_agents(
@@ -12,15 +13,11 @@ async def call_agents(
     correlation_id: str,
     fundamental_context: Optional[Dict[str, Any]] = None,
 ) -> Tuple[StandardAgentResponse | Dict[str, Any], StandardAgentResponse | Dict[str, Any]]:
-    """
-    Calls both the Technical and Fundamental agents concurrently.
-    Fundamental_Agent can receive Scanner_Agent prefetched data so it can still
-    produce v2 factor scores when live data providers are sparse/rate-limited.
-    """
     request_body = AgentRequestBody(ticker=ticker).model_dump()
     fundamental_body = dict(request_body)
-    if fundamental_context:
-        fundamental_body["prefetched_data"] = fundamental_context
+    context = fundamental_context or get_scanner_prefetch(ticker)
+    if context:
+        fundamental_body["prefetched_data"] = context
 
     tech_client = ResilientAgentClient(base_url=TECHNICAL_AGENT_URL)
     fund_client = ResilientAgentClient(base_url=FUNDAMENTAL_AGENT_URL)
