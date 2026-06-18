@@ -1,325 +1,593 @@
 name: Hourly Auto Trading
 
 on:
+
   workflow_dispatch:
+
     inputs:
+
       max_universe:
+
         description: "Maximum symbols Scanner_Agent should analyze from NASDAQ/S&P500 universe"
+
         required: false
+
         default: "1000"
+
       top_n:
+
         description: "Number of fundamentally strong candidates Scanner_Agent returns to Manager_Agent"
+
         required: false
+
         default: "10"
+
       min_final_score:
+
         description: "Minimum final opportunity score required before Manager sends to Execution_Agent"
+
         required: false
+
         default: "0.55"
+
       dry_run:
+
         description: "Keep execution in simulator/safety mode"
+
         required: false
-        default: "true"
+
+        default: "false"
+
   schedule:
-    # Run every hour at minute 5.
+
     - cron: "5 * * * *"
 
 concurrency:
+
   group: hourly-auto-trading
+
   cancel-in-progress: false
 
 jobs:
+
   hourly-auto-trading:
+
     runs-on: ubuntu-latest
+
     timeout-minutes: 60
 
     env:
+
       MAX_UNIVERSE: ${{ github.event.inputs.max_universe || '1000' }}
+
       TOP_N: ${{ github.event.inputs.top_n || '10' }}
+
       MIN_FINAL_SCORE: ${{ github.event.inputs.min_final_score || '0.55' }}
-      DRY_RUN: "false"
-      BROKER_MODE: "ALPACA"
+
+      DRY_RUN: ${{ github.event.inputs.dry_run || 'false' }}
+
+      BROKER_MODE: ${{ (github.event.inputs.dry_run || 'false') == 'false' && 'ALPACA' || 'SIMULATOR' }}
+
       ALPACA_API_KEY_ID: ${{ secrets.ALPACA_API_KEY_ID }}
+
       ALPACA_SECRET_KEY: ${{ secrets.ALPACA_SECRET_KEY }}
-      ALPACA_API_URL: ${{ secrets.ALPACA_API_URL }}
+
+      ALPACA_API_URL: ${{ secrets.ALPACA_API_URL || 'https://paper-api.alpaca.markets' }}
 
     steps:
+
       - name: Checkout Manager_Agent
+
         uses: actions/checkout@v4
+
         with:
+
           path: Manager_Agent
 
       - name: Checkout Scanner_Agent
+
         uses: actions/checkout@v4
+
         with:
+
           repository: athipan1/Scanner_Agent
+
           ref: main
+
           path: Scanner_Agent
+
           fetch-depth: 1
 
       - name: Checkout Technical_Agent
+
         uses: actions/checkout@v4
+
         with:
+
           repository: athipan1/Technical_Agent
+
           path: Technical_Agent
 
       - name: Checkout Fundamental_Agent
+
         uses: actions/checkout@v4
+
         with:
+
           repository: athipan1/Fundamental_Agent
+
           path: Fundamental_Agent
 
       - name: Checkout Database_Agent
+
         uses: actions/checkout@v4
+
         with:
+
           repository: athipan1/Database_Agent
+
           path: Database_Agent
 
       - name: Checkout Learning_Agent
+
         uses: actions/checkout@v4
+
         with:
+
           repository: athipan1/Learning_Agent
+
           path: Learning_Agent
 
       - name: Checkout Execution_Agent
+
         uses: actions/checkout@v4
+
         with:
+
           repository: athipan1/Execution_Agent
+
           path: Execution_Agent
 
       - name: Show checked out agent commits
+
         run: |
+
           echo "Manager_Agent=$(git -C Manager_Agent rev-parse HEAD)"
+
           echo "Scanner_Agent=$(git -C Scanner_Agent rev-parse HEAD)"
+
           echo "Technical_Agent=$(git -C Technical_Agent rev-parse HEAD)"
+
           echo "Fundamental_Agent=$(git -C Fundamental_Agent rev-parse HEAD)"
+
           echo "Database_Agent=$(git -C Database_Agent rev-parse HEAD)"
+
           echo "Learning_Agent=$(git -C Learning_Agent rev-parse HEAD)"
+
           echo "Execution_Agent=$(git -C Execution_Agent rev-parse HEAD)"
+
           echo "DRY_RUN=${DRY_RUN}"
+
           echo "BROKER_MODE=${BROKER_MODE}"
 
-      - name: Build and start trading stack
-        working-directory: Manager_Agent
+      - name: Validate Alpaca paper configuration
+
         run: |
+
+          if [ "${BROKER_MODE}" = "ALPACA" ]; then
+
+            if [ -z "${ALPACA_API_KEY_ID}" ] || [ -z "${ALPACA_SECRET_KEY}" ]; then
+
+              echo "Missing GitHub Secrets: ALPACA_API_KEY_ID or ALPACA_SECRET_KEY"
+
+              exit 1
+
+            fi
+
+            echo "Alpaca paper mode configured."
+
+          else
+
+            echo "Simulator mode."
+
+          fi
+
+      - name: Build and start trading stack
+
+        working-directory: Manager_Agent
+
+        run: |
+
           echo "Starting stack. DRY_RUN=${DRY_RUN} BROKER_MODE=${BROKER_MODE}"
+
           docker compose up --build -d
 
       - name: Wait for all services
+
         working-directory: Manager_Agent
+
         run: |
+
           runtime_services="database-agent technical-agent scanner-agent fundamental-agent learning-agent execution-agent manager-agent db"
+
           for i in {1..60}; do
+
             docker compose ps
 
             exited=$(docker compose ps --status exited -q $runtime_services | wc -l | tr -d ' ')
+
             if [ "$exited" != "0" ]; then
+
               echo "One or more runtime containers exited."
+
               for service in $runtime_services; do
+
                 echo "---- ${service} logs tail ----"
+
                 docker compose logs --tail=160 "$service" || true
+
               done
+
               exit 1
+
             fi
 
             manager=$(docker compose exec -T manager-agent python /app/healthcheck.py >/dev/null && echo ok || echo wait)
+
             fundamental=$(curl -fsS http://localhost:8001/health >/dev/null && echo ok || echo wait)
+
             technical=$(curl -fsS http://localhost:8002/health >/dev/null && echo ok || echo wait)
+
             scanner=$(curl -fsS http://localhost:8003/health >/dev/null && echo ok || echo wait)
+
             database=$(curl -fsS http://localhost:8004/health >/dev/null && echo ok || echo wait)
+
             learning=$(curl -fsS http://localhost:8005/health >/dev/null && echo ok || echo wait)
+
             execution=$(curl -fsS http://localhost:8006/health >/dev/null && echo ok || echo wait)
+
             manager_to_scanner=$(docker compose exec -T manager-agent python - <<'PY' >/dev/null 2>&1 && echo ok || echo wait
+
           import urllib.request
+
           urllib.request.urlopen("http://scanner-agent:8003/health", timeout=5).read()
+
           PY
+
           )
 
             echo "health: manager=$manager fundamental=$fundamental technical=$technical scanner=$scanner database=$database learning=$learning execution=$execution manager_to_scanner=$manager_to_scanner"
+
             if [ "$manager$fundamental$technical$scanner$database$learning$execution$manager_to_scanner" = "okokokokokokokok" ]; then
+
               echo "All services are reachable, including manager-agent -> scanner-agent."
+
               exit 0
+
             fi
+
             sleep 5
+
           done
 
           echo "Services did not become reachable in time."
+
           docker compose ps
+
           for service in $runtime_services; do
+
             echo "---- ${service} logs tail ----"
+
             docker compose logs --tail=160 "$service" || true
+
           done
+
           exit 1
 
       - name: Run hourly discover, deep analysis, winner selection, risk check, and execution
+
         working-directory: Manager_Agent
+
         run: |
+
           mkdir -p reports
 
           docker compose exec -T manager-agent python - <<'PY' > reports/hourly-auto-trading-report.json
+
           import json
+
           import os
+
           import urllib.request
+
           import urllib.error
+
           from datetime import datetime, timezone
 
           max_universe = int(os.getenv("MAX_UNIVERSE", "1000"))
+
           top_n = int(os.getenv("TOP_N", "10"))
+
           min_final_score = float(os.getenv("MIN_FINAL_SCORE", "0.55"))
+
           dry_run = os.getenv("DRY_RUN", "true").lower() != "false"
+
           broker_mode = os.getenv("BROKER_MODE", "SIMULATOR")
 
           def post_json(path, payload):
+
               req = urllib.request.Request(
+
                   f"http://localhost{path}",
+
                   data=json.dumps(payload).encode("utf-8"),
+
                   headers={"Content-Type": "application/json"},
+
                   method="POST",
+
               )
+
               try:
+
                   with urllib.request.urlopen(req, timeout=900) as resp:
+
                       body = resp.read().decode("utf-8")
+
                       return json.loads(body)
+
               except urllib.error.HTTPError as exc:
+
                   body = exc.read().decode("utf-8")
+
                   return {"status": "error", "http_status": exc.code, "body": body}
+
               except Exception as exc:
+
                   return {"status": "error", "error": str(exc)}
 
           payload = {
+
               "account_id": 1,
+
               "max_universe": max_universe,
+
               "top_n": top_n,
+
               "exchange": "NASDAQ",
+
               "max_workers": 10,
+
               "min_final_score": min_final_score,
+
               "execute": True,
+
           }
 
           response = post_json("/discover-analyze-trade", payload)
 
           report = {
+
               "generated_at": datetime.now(timezone.utc).isoformat(),
-              "mode": "SIMULATOR" if dry_run else "ALPACA_PAPER",
+
+              "mode": "ALPACA_PAPER" if broker_mode == "ALPACA" and not dry_run else "SIMULATOR",
+
               "broker_mode": broker_mode,
+
               "flow": "discover_analyze_trade",
-              "warning": "DRY_RUN=false sends orders to the configured broker. Use Alpaca paper credentials for paper trading only.",
+
+              "warning": "DRY_RUN=false with BROKER_MODE=ALPACA sends orders to Alpaca Paper.",
+
               "request": payload,
+
               "response": response,
+
           }
+
           print(json.dumps(report, ensure_ascii=False, indent=2, default=str))
+
           PY
 
           python - <<'PY'
+
           import json
+
           import sys
+
           from pathlib import Path
 
           report_path = Path("reports/hourly-auto-trading-report.json")
+
           report = json.loads(report_path.read_text())
+
           response = report.get("response") or {}
+
           data = response.get("data") if isinstance(response, dict) else {}
 
           def th_verdict(value):
+
               mapping = {
+
                   "strong_buy": "ซื้อแรง",
+
                   "buy": "ซื้อ",
+
                   "hold": "ถือ/รอดู",
+
                   "sell": "ขาย",
+
                   "strong_sell": "ขายแรง",
+
                   "unknown": "ไม่ทราบผล",
+
               }
+
               return mapping.get(str(value).lower(), str(value))
 
           def th_execution(value):
+
               mapping = {
+
                   "submitted": "ส่งออเดอร์แล้ว",
+
                   "rejected": "ไม่ส่งออเดอร์ / ถูกปฏิเสธ",
+
                   "failed": "ส่งออเดอร์ไม่สำเร็จ",
+
                   "not_attempted": "ยังไม่ส่งออเดอร์",
+
                   "unknown": "ไม่ทราบสถานะ",
+
               }
+
               return mapping.get(str(value).lower(), str(value))
 
           lines = []
+
           lines.append("# Hourly Auto Trading Report")
+
           lines.append("")
+
           lines.append(f"Generated at UTC: `{report.get('generated_at')}`")
+
           lines.append(f"Mode: `{report.get('mode')}`")
+
           lines.append(f"Broker Mode: `{report.get('broker_mode')}`")
+
           lines.append(f"Flow: `{report.get('flow')}`")
+
           lines.append("")
+
           lines.append("## Request")
+
           lines.append("```json")
+
           lines.append(json.dumps(report.get("request"), ensure_ascii=False, indent=2))
+
           lines.append("```")
+
           lines.append("")
 
           if response.get("status") == "error":
+
               lines.append("## Error")
+
               lines.append("```json")
+
               lines.append(json.dumps(response, ensure_ascii=False, indent=2))
+
               lines.append("```")
+
           else:
+
               winner = data.get("winner") or {}
+
               execution = data.get("execution") or {}
+
               trade_decision = data.get("trade_decision")
+
               ranked = data.get("ranked_candidates") or []
 
               lines.append("## Winner")
+
               lines.append(f"- Symbol: `{winner.get('symbol', '-')}`")
+
               lines.append(f"- Verdict: {th_verdict(winner.get('final_verdict', 'unknown'))}")
+
               score = (winner.get("score_breakdown") or {}).get("final_opportunity_score")
+
               lines.append(f"- Final Opportunity Score: `{score}`")
+
               lines.append(f"- Execution: {th_execution(execution.get('status', 'unknown'))}")
+
               lines.append(f"- Execution Reason: {execution.get('reason', '-')}")
+
               lines.append("")
 
               lines.append("## Ranked Candidates")
+
               if not ranked:
+
                   lines.append("No ranked candidates returned by Manager_Agent.")
+
               else:
+
                   lines.append("| Rank | Symbol | Verdict | Final Score | Scanner | Fundamental | Technical |")
+
                   lines.append("|---:|---|---|---:|---:|---:|---:|")
+
                   for item in ranked:
+
                       scores = item.get("score_breakdown") or {}
+
                       lines.append(
+
                           f"| {item.get('rank')} | {item.get('symbol')} | {th_verdict(item.get('final_verdict'))} | "
+
                           f"{scores.get('final_opportunity_score')} | {scores.get('scanner_score')} | "
+
                           f"{scores.get('fundamental_score')} | {scores.get('technical_score')} |"
+
                       )
+
               lines.append("")
+
               lines.append("## Trade Decision")
+
               lines.append("```json")
+
               lines.append(json.dumps(trade_decision, ensure_ascii=False, indent=2, default=str))
+
               lines.append("```")
 
           Path("reports/hourly-auto-trading-report.md").write_text("\n".join(lines), encoding="utf-8")
+
           print("\n".join(lines))
 
           if response.get("status") == "error":
+
               sys.exit(1)
+
           PY
 
       - name: Upload hourly trading report
+
         if: always()
+
         uses: actions/upload-artifact@v4
+
         with:
+
           name: hourly-auto-trading-report
+
           path: Manager_Agent/reports/
+
           if-no-files-found: warn
 
       - name: Show logs on failure
+
         if: failure()
+
         working-directory: Manager_Agent
+
         run: |
+
           docker compose ps || true
+
           for service in database-agent technical-agent scanner-agent fundamental-agent learning-agent execution-agent manager-agent db; do
+
             echo "---- ${service} logs tail ----"
+
             docker compose logs --tail=180 "$service" || true
+
           done
 
       - name: Stop stack
+
         if: always()
+
         working-directory: Manager_Agent
+
         run: |
+
           docker compose down -v || true
