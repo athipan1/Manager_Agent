@@ -190,7 +190,10 @@ services:
       API_KEY: dev_execution_key
       DB_AGENT_URL: http://database-agent:8004
       DATABASE_AGENT_API_KEY: dev_database_key
-      BROKER_MODE: SIMULATOR
+      BROKER_MODE: ${BROKER_MODE:-SIMULATOR}
+      ALPACA_API_KEY_ID: ${ALPACA_API_KEY_ID:-}
+      ALPACA_SECRET_KEY: ${ALPACA_SECRET_KEY:-}
+      ALPACA_API_URL: ${ALPACA_API_URL:-https://paper-api.alpaca.markets}
       PYTHONPATH: /home/appuser:/home/appuser/src
     depends_on:
       database-agent:
