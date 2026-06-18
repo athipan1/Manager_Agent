@@ -15,6 +15,8 @@ SCANNER_AGENT_URL = os.getenv("SCANNER_AGENT_URL", "http://scanner-agent:8003")
 DATABASE_AGENT_URL = os.getenv("DATABASE_AGENT_URL", "http://database-agent:8004")
 AUTO_LEARNING_AGENT_URL = os.getenv("AUTO_LEARNING_AGENT_URL", "http://learning-agent:8005")
 EXECUTION_AGENT_URL = os.getenv("EXECUTION_AGENT_URL", "http://execution-agent:8006")
+RISK_AGENT_URL = os.getenv("RISK_AGENT_URL", "http://risk-agent:8007")
+RISK_AGENT_TIMEOUT = float(os.getenv("RISK_AGENT_TIMEOUT", 10))
 EXECUTION_API_KEY = os.getenv("EXECUTION_API_KEY", os.getenv("EXECUTION_AGENT_API_KEY", "dev_execution_key"))
 
 
@@ -30,7 +32,7 @@ RISK_PER_TRADE = float(os.getenv("RISK_PER_TRADE", 0.01))  # 1% risk per trade
 MIN_RISK_PER_TRADE = float(os.getenv("MIN_RISK_PER_TRADE", 0.005)) # Min risk is 0.5%
 MAX_RISK_PER_TRADE = float(os.getenv("MAX_RISK_PER_TRADE", 0.03)) # Max risk is 3%
 STOP_LOSS_PERCENTAGE = float(os.getenv("STOP_LOSS_PERCENTAGE", 0.03))  # 3% stop loss
-MAX_POSITION_PERCENTAGE = float(os.getenv("MAX_POSITION_PERCENTAGE", 0.20)) # Max 20% of portfolio in one stock
+MAX_POSITION_PERCENTAGE = float(os.getenv("MAX_POSITION_PERCENTAGE", 0.10)) # External Risk Agent enforces final cap
 ENABLE_TECHNICAL_STOP = os.getenv("ENABLE_TECHNICAL_STOP", "true").lower() in ("true", "1", "t")
 
 # Portfolio-Level Risk Parameters
