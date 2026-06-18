@@ -83,7 +83,9 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: athipan1/Execution_Agent
+          ref: main
           path: Execution_Agent
+          fetch-depth: 1
 
       - name: Show checked out agent commits
         run: |
@@ -161,7 +163,7 @@ jobs:
           done
           exit 1
 
-      - name: Run hourly discover, deep analysis, winner selection, risk check, and execution
+      - name: Run hourly discover, deep analysis, winner selection, risk check, execution, and broker snapshot
         working-directory: Manager_Agent
         run: |
           mkdir -p reports
@@ -170,8 +172,8 @@ jobs:
           import json
           import os
           import time
-          import urllib.request
           import urllib.error
+          import urllib.request
           from datetime import datetime, timezone
 
           max_universe = int(os.getenv("MAX_UNIVERSE", "1000"))
@@ -179,28 +181,42 @@ jobs:
           min_final_score = float(os.getenv("MIN_FINAL_SCORE", "0.55"))
           dry_run = os.getenv("DRY_RUN", "true").lower() != "false"
           broker_mode = os.getenv("BROKER_MODE", "SIMULATOR")
+          execution_api_key = os.getenv("EXECUTION_API_KEY", "dev_execution_key")
 
-          def request_json(path, payload=None, method="GET"):
+          def request_json(base_url, path, payload=None, method="GET", api_key=None, timeout=900):
               data = None
-              headers = {"X-API-KEY": os.getenv("EXECUTION_API_KEY", "dev_execution_key")}
+              headers = {}
+              if api_key:
+                  headers["X-API-KEY"] = api_key
               if payload is not None:
                   data = json.dumps(payload).encode("utf-8")
                   headers["Content-Type"] = "application/json"
               req = urllib.request.Request(
-                  f"http://localhost{path}",
+                  f"{base_url}{path}",
                   data=data,
                   headers=headers,
                   method=method,
               )
               try:
-                  with urllib.request.urlopen(req, timeout=900) as resp:
+                  with urllib.request.urlopen(req, timeout=timeout) as resp:
                       body = resp.read().decode("utf-8")
-                      return json.loads(body)
+                      return json.loads(body) if body else None
               except urllib.error.HTTPError as exc:
                   body = exc.read().decode("utf-8")
                   return {"status": "error", "http_status": exc.code, "body": body}
               except Exception as exc:
                   return {"status": "error", "error": str(exc)}
+
+          def request_manager(path, payload=None, method="GET"):
+              return request_json("http://localhost", path, payload=payload, method=method)
+
+          def request_execution(path):
+              return request_json(
+                  "http://execution-agent:8006",
+                  path,
+                  api_key=execution_api_key,
+                  timeout=120,
+              )
 
           payload = {
               "account_id": 1,
@@ -212,16 +228,16 @@ jobs:
               "execute": True,
           }
 
-          response = request_json("/discover-analyze-trade", payload, method="POST")
+          response = request_manager("/discover-analyze-trade", payload, method="POST")
 
           # Give broker/background task a short window to submit/update the order,
           # then capture a paper-account snapshot for auditing.
           time.sleep(10)
           broker_snapshot = {
-              "account": request_json("/account"),
-              "orders": request_json("/orders"),
-              "positions": request_json("/positions"),
-              "portfolio": request_json("/portfolio"),
+              "account": request_execution("/account"),
+              "orders": request_execution("/orders"),
+              "positions": request_execution("/positions"),
+              "portfolio": request_execution("/portfolio"),
           }
 
           report = {
