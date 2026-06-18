@@ -161,7 +161,7 @@ jobs:
           done
           exit 1
 
-      - name: Run hourly discover, deep analysis, winner selection, risk check, execution, and broker snapshot
+      - name: Run hourly discover, deep analysis, winner selection, risk check, and execution
         working-directory: Manager_Agent
         run: |
           mkdir -p reports
@@ -170,8 +170,8 @@ jobs:
           import json
           import os
           import time
-          import urllib.error
           import urllib.request
+          import urllib.error
           from datetime import datetime, timezone
 
           max_universe = int(os.getenv("MAX_UNIVERSE", "1000"))
@@ -179,40 +179,28 @@ jobs:
           min_final_score = float(os.getenv("MIN_FINAL_SCORE", "0.55"))
           dry_run = os.getenv("DRY_RUN", "true").lower() != "false"
           broker_mode = os.getenv("BROKER_MODE", "SIMULATOR")
-          execution_api_key = os.getenv("EXECUTION_API_KEY", "dev_execution_key")
 
-          def request_json(method, base_url, path, payload=None, headers=None, timeout=900):
-              body = None if payload is None else json.dumps(payload).encode("utf-8")
-              req_headers = {"Content-Type": "application/json"}
-              if headers:
-                  req_headers.update(headers)
+          def request_json(path, payload=None, method="GET"):
+              data = None
+              headers = {"X-API-KEY": os.getenv("EXECUTION_API_KEY", "dev_execution_key")}
+              if payload is not None:
+                  data = json.dumps(payload).encode("utf-8")
+                  headers["Content-Type"] = "application/json"
               req = urllib.request.Request(
-                  f"{base_url}{path}",
-                  data=body,
-                  headers=req_headers,
+                  f"http://localhost{path}",
+                  data=data,
+                  headers=headers,
                   method=method,
               )
               try:
-                  with urllib.request.urlopen(req, timeout=timeout) as resp:
-                      raw = resp.read().decode("utf-8")
-                      return json.loads(raw) if raw else None
+                  with urllib.request.urlopen(req, timeout=900) as resp:
+                      body = resp.read().decode("utf-8")
+                      return json.loads(body)
               except urllib.error.HTTPError as exc:
-                  raw = exc.read().decode("utf-8")
-                  return {"status": "error", "http_status": exc.code, "body": raw}
+                  body = exc.read().decode("utf-8")
+                  return {"status": "error", "http_status": exc.code, "body": body}
               except Exception as exc:
                   return {"status": "error", "error": str(exc)}
-
-          def post_manager(path, payload):
-              return request_json("POST", "http://localhost", path, payload=payload)
-
-          def get_execution(path):
-              return request_json(
-                  "GET",
-                  "http://execution-agent:8006",
-                  path,
-                  headers={"X-API-KEY": execution_api_key},
-                  timeout=120,
-              )
 
           payload = {
               "account_id": 1,
@@ -224,16 +212,16 @@ jobs:
               "execute": True,
           }
 
-          response = post_manager("/discover-analyze-trade", payload)
+          response = request_json("/discover-analyze-trade", payload, method="POST")
 
-          # Give the broker/background task a short window to update order state.
+          # Give broker/background task a short window to submit/update the order,
+          # then capture a paper-account snapshot for auditing.
           time.sleep(10)
-
           broker_snapshot = {
-              "account": get_execution("/account"),
-              "orders": get_execution("/orders"),
-              "positions": get_execution("/positions"),
-              "portfolio": get_execution("/portfolio"),
+              "account": request_json("/account"),
+              "orders": request_json("/orders"),
+              "positions": request_json("/positions"),
+              "portfolio": request_json("/portfolio"),
           }
 
           report = {
@@ -258,7 +246,7 @@ jobs:
           report = json.loads(report_path.read_text())
           response = report.get("response") or {}
           data = response.get("data") if isinstance(response, dict) else {}
-          broker_snapshot = report.get("broker_snapshot") or {}
+          snapshot = report.get("broker_snapshot") or {}
 
           def th_verdict(value):
               mapping = {
@@ -281,15 +269,10 @@ jobs:
               }
               return mapping.get(str(value).lower(), str(value))
 
-          def unwrap_data(value, fallback):
-              if isinstance(value, dict) and value.get("status") == "success":
-                  return value.get("data", fallback)
-              return fallback
-
-          account = unwrap_data(broker_snapshot.get("account"), {})
-          orders = unwrap_data(broker_snapshot.get("orders"), [])
-          positions = unwrap_data(broker_snapshot.get("positions"), [])
-          portfolio = unwrap_data(broker_snapshot.get("portfolio"), {})
+          def unwrap_data(value):
+              if isinstance(value, dict) and "data" in value:
+                  return value.get("data")
+              return value
 
           lines = []
           lines.append("# Hourly Auto Trading Report")
@@ -344,36 +327,40 @@ jobs:
               lines.append(json.dumps(trade_decision, ensure_ascii=False, indent=2, default=str))
               lines.append("```")
 
-          lines.append("")
-          lines.append("## Broker Account")
-          if isinstance(account, dict):
-              lines.append(f"- Status: `{account.get('status', '-')}`")
-              lines.append(f"- Cash: `{account.get('cash', '-')}`")
-              lines.append(f"- Equity: `{account.get('equity', '-')}`")
-              lines.append(f"- Buying Power: `{account.get('buying_power', account.get('buyingPower', '-'))}`")
-          else:
-              lines.append("Account snapshot unavailable.")
+          account = unwrap_data(snapshot.get("account")) or {}
+          orders = unwrap_data(snapshot.get("orders")) or []
+          positions = unwrap_data(snapshot.get("positions")) or []
 
           lines.append("")
-          lines.append("## Open Orders")
+          lines.append("## Broker Snapshot")
+          lines.append(f"- Account Status: `{account.get('status', '-') if isinstance(account, dict) else '-'}`")
+          lines.append(f"- Equity: `{account.get('equity', '-') if isinstance(account, dict) else '-'}`")
+          lines.append(f"- Cash: `{account.get('cash', '-') if isinstance(account, dict) else '-'}`")
+          lines.append(f"- Buying Power: `{account.get('buying_power', '-') if isinstance(account, dict) else '-'}`")
+          lines.append(f"- Open Orders: `{len(orders) if isinstance(orders, list) else '-'}`")
+          lines.append(f"- Positions: `{len(positions) if isinstance(positions, list) else '-'}`")
+          lines.append("")
+
+          lines.append("### Orders")
           if isinstance(orders, list) and orders:
-              lines.append("| Symbol | Side | Qty | Status | Type | Submitted At | Broker Order ID |")
-              lines.append("|---|---|---:|---|---|---|---|")
-              for order in orders:
+              lines.append("| Symbol | Side | Qty | Type | Status | Filled Qty | Limit Price | Submitted At |")
+              lines.append("|---|---|---:|---|---|---:|---:|---|")
+              for order in orders[:20]:
                   lines.append(
                       f"| {order.get('symbol', '-')} | {order.get('side', '-')} | {order.get('qty', order.get('quantity', '-'))} | "
-                      f"{order.get('status', '-')} | {order.get('type', order.get('order_type', '-'))} | "
-                      f"{order.get('submitted_at', order.get('created_at', '-'))} | {order.get('id', order.get('broker_order_id', '-'))} |"
+                      f"{order.get('type', order.get('order_type', '-'))} | {order.get('status', '-')} | "
+                      f"{order.get('filled_qty', order.get('executed_quantity', '-'))} | {order.get('limit_price', order.get('price', '-'))} | "
+                      f"{order.get('submitted_at', order.get('created_at', '-'))} |"
                   )
           else:
               lines.append("No open orders returned by broker.")
-
           lines.append("")
-          lines.append("## Positions")
+
+          lines.append("### Positions")
           if isinstance(positions, list) and positions:
               lines.append("| Symbol | Qty | Avg Entry | Market Value | Unrealized P/L |")
               lines.append("|---|---:|---:|---:|---:|")
-              for position in positions:
+              for position in positions[:20]:
                   lines.append(
                       f"| {position.get('symbol', '-')} | {position.get('qty', position.get('quantity', '-'))} | "
                       f"{position.get('avg_entry_price', position.get('avg_price', '-'))} | "
@@ -381,11 +368,11 @@ jobs:
                   )
           else:
               lines.append("No positions returned by broker.")
-
           lines.append("")
-          lines.append("## Broker Snapshot JSON")
+
+          lines.append("### Raw Broker Snapshot")
           lines.append("```json")
-          lines.append(json.dumps(broker_snapshot, ensure_ascii=False, indent=2, default=str))
+          lines.append(json.dumps(snapshot, ensure_ascii=False, indent=2, default=str))
           lines.append("```")
 
           Path("reports/hourly-auto-trading-report.md").write_text("\n".join(lines), encoding="utf-8")
