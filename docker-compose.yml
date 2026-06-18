@@ -22,6 +22,8 @@ services:
       retries: 5
       start_period: 30s
     environment:
+      DRY_RUN: ${DRY_RUN:-true}
+      BROKER_MODE: ${BROKER_MODE:-SIMULATOR}
       TECHNICAL_AGENT_URL: http://technical-agent:8002
       FUNDAMENTAL_AGENT_URL: http://fundamental-agent:8001
       SCANNER_AGENT_URL: http://scanner-agent:8003
@@ -190,6 +192,7 @@ services:
       API_KEY: dev_execution_key
       DB_AGENT_URL: http://database-agent:8004
       DATABASE_AGENT_API_KEY: dev_database_key
+      DRY_RUN: ${DRY_RUN:-true}
       BROKER_MODE: ${BROKER_MODE:-SIMULATOR}
       ALPACA_API_KEY_ID: ${ALPACA_API_KEY_ID:-}
       ALPACA_SECRET_KEY: ${ALPACA_SECRET_KEY:-}
