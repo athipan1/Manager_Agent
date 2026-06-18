@@ -37,7 +37,11 @@ jobs:
       TOP_N: ${{ github.event.inputs.top_n || '10' }}
       MIN_FINAL_SCORE: ${{ github.event.inputs.min_final_score || '0.55' }}
       DRY_RUN: ${{ github.event.inputs.dry_run || 'true' }}
-
+      
+      BROKER_MODE: ${{ (github.event.inputs.dry_run || 'true') == 'false' && 'ALPACA' || 'SIMULATOR' }}
+      ALPACA_API_KEY_ID: ${{ secrets.ALPACA_API_KEY_ID }}
+      ALPACA_SECRET_KEY: ${{ secrets.ALPACA_SECRET_KEY }}
+      ALPACA_API_URL: ${{ secrets.ALPACA_API_URL }}
     steps:
       - name: Checkout Manager_Agent
         uses: actions/checkout@v4
@@ -95,7 +99,7 @@ jobs:
       - name: Build and start trading stack
         working-directory: Manager_Agent
         run: |
-          echo "Starting stack. DRY_RUN=${DRY_RUN}"
+          echo "Starting stack. DRY_RUN=${DRY_RUN} BROKER_MODE=${BROKER_MODE}"
           docker compose up --build -d
 
       - name: Wait for all services
