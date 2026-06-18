@@ -1,62 +1,67 @@
 import os
-import json
-import csv
-from datetime import datetime, timezone
-from math import floor
-from typing import Dict, Any, Optional
 from decimal import Decimal
+from typing import Any, Dict, Optional
 
-LOG_DIR = "logs"
-JSON_LOG_FILE = os.path.join(LOG_DIR, "assessment_history.json")
-CSV_LOG_FILE = os.path.join(LOG_DIR, "assessment_history.csv")
+import httpx
 
-class DecimalEncoder(json.JSONEncoder):
-    def default(self, o):
-        if isinstance(o, Decimal):
-            return str(o)
-        return super(DecimalEncoder, self).default(o)
 
-def _log_assessment_result(result: Dict[str, Any]):
-    """Logs the result of a trade assessment to JSON and CSV files."""
-    os.makedirs(LOG_DIR, exist_ok=True)
+RISK_AGENT_URL = os.getenv("RISK_AGENT_URL", "http://risk-agent:8007")
+RISK_AGENT_TIMEOUT = float(os.getenv("RISK_AGENT_TIMEOUT", "10"))
 
-    log_entry = result.copy()
-    log_entry["timestamp"] = datetime.now(timezone.utc).isoformat()
 
-    with open(JSON_LOG_FILE, "a") as f:
-        f.write(json.dumps(log_entry, cls=DecimalEncoder) + "\n")
+def _as_float(value: Any, default: float = 0.0) -> float:
+    try:
+        if value is None:
+            return default
+        return float(value)
+    except (TypeError, ValueError):
+        return default
 
-    file_exists = os.path.isfile(CSV_LOG_FILE)
-    with open(CSV_LOG_FILE, "a", newline="") as f:
-        fieldnames = [
-            "timestamp", "approved", "reason", "symbol", "action",
-            "position_size", "stop_loss", "take_profit", "risk_reward_ratio",
-            "risk_amount", "entry_price"
-        ]
-        writer = csv.DictWriter(f, fieldnames=fieldnames, extrasaction='ignore')
 
-        if not file_exists:
-            writer.writeheader()
+def _normalise_action(action: str) -> str:
+    action_lower = str(action or "hold").lower()
+    if action_lower in {"buy", "strong_buy"}:
+        return "buy"
+    if action_lower in {"sell", "strong_sell", "short", "cover"}:
+        return "sell"
+    return "hold"
 
-        writer.writerow(log_entry)
 
-def _prepare_and_log_result(**kwargs):
-    """Prepares the result dictionary and logs it before returning."""
-    result = {
-        "approved": kwargs.get("approved", False),
-        "reason": kwargs.get("reason", "An unknown error occurred."),
-        "symbol": kwargs.get("symbol"),
-        "action": kwargs.get("action"),
-        "entry_price": kwargs.get("entry_price"),
-        "position_size": kwargs.get("position_size"),
-        "stop_loss": kwargs.get("stop_loss"),
-        "take_profit": kwargs.get("take_profit"),
-        "risk_reward_ratio": kwargs.get("risk_reward_ratio"),
-        "risk_amount": kwargs.get("risk_amount"),
+def _default_protection_price(side: str, entry_price: Decimal, fixed_pct: Decimal) -> Decimal:
+    if side == "buy":
+        return entry_price * (Decimal("1") - fixed_pct)
+    if side == "sell":
+        return entry_price * (Decimal("1") + fixed_pct)
+    return entry_price
+
+
+def _build_result(
+    *,
+    approved: bool,
+    reason: str,
+    symbol: str,
+    action: str,
+    entry_price: Decimal,
+    position_size: int = 0,
+    protection_price: Optional[Decimal] = None,
+    risk_response: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    risk_amount = Decimal("0")
+    if protection_price is not None and position_size > 0:
+        risk_amount = abs(entry_price - protection_price) * Decimal(position_size)
+
+    return {
+        "approved": approved,
+        "reason": reason,
+        "symbol": symbol,
+        "action": action,
+        "entry_price": entry_price,
+        "position_size": int(position_size or 0),
+        "stop_loss": protection_price,
+        "risk_amount": risk_amount,
+        "risk_agent_response": risk_response or {},
+        "guard_plan": (risk_response or {}).get("data", {}).get("guard_plan"),
     }
-    final_result = {k: v for k, v in result.items() if v is not None}
-    _log_assessment_result(final_result)
-    return final_result
 
 
 def assess_trade(
@@ -76,102 +81,92 @@ def assess_trade(
     reward_multiplier: Optional[Decimal] = None,
     min_risk_reward_ratio: Optional[Decimal] = None,
 ) -> Dict[str, Any]:
+    """Compatibility adapter that delegates pre-trade checks to Risk_Agent.
+
+    This function intentionally no longer performs local position sizing. It keeps
+    the old Manager_Agent call sites stable while enforcing the new external
+    Risk_Agent `/risk/check` gate before Execution_Agent receives an order.
     """
-    Assesses a trade based on a strict set of risk management rules.
-    """
-    action_lower = action.lower()
+    side = _normalise_action(action)
+    if side == "hold":
+        return _build_result(
+            approved=False,
+            reason="Risk_Agent check skipped because action is hold or unsupported.",
+            symbol=symbol,
+            action=str(action).lower(),
+            entry_price=entry_price,
+        )
 
     if portfolio_value <= Decimal("0"):
-        return _prepare_and_log_result(reason="Input validation failed: portfolio_value must be greater than 0.", symbol=symbol, action=action, position_size=0)
-    if not Decimal("0") < risk_per_trade < Decimal("1"):
-        return _prepare_and_log_result(reason="Input validation failed: risk_per_trade must be between 0 and 1.", symbol=symbol, action=action, position_size=0)
-    if not Decimal("0") < max_position_pct <= Decimal("1"):
-        return _prepare_and_log_result(reason="Input validation failed: max_position_pct must be between 0 and 1.", symbol=symbol, action=action, position_size=0)
-    if entry_price <= Decimal("0") and action_lower in ["buy", "strong_buy", "short"]:
-        return _prepare_and_log_result(reason="Input validation failed: entry_price must be greater than 0 for buy/short actions.", symbol=symbol, action=action, position_size=0)
+        return _build_result(
+            approved=False,
+            reason="Risk_Agent check failed: portfolio_value must be greater than zero.",
+            symbol=symbol,
+            action=side,
+            entry_price=entry_price,
+        )
 
-    if action_lower in ["sell", "strong_sell"]:
-        if current_position_size > 0:
-            return _prepare_and_log_result(approved=True, reason="Approval to sell existing position.", symbol=symbol, action=action_lower, position_size=int(current_position_size), risk_amount=Decimal("0.0"))
-        else:
-            return _prepare_and_log_result(reason="Sell rejected. No existing position to sell.", symbol=symbol, action=action_lower, position_size=0, risk_amount=Decimal("0.0"))
+    if entry_price <= Decimal("0"):
+        return _build_result(
+            approved=False,
+            reason="Risk_Agent check failed: entry_price must be greater than zero.",
+            symbol=symbol,
+            action=side,
+            entry_price=entry_price,
+        )
 
-    if action_lower == "cover":
-        if current_position_size < 0:
-            return _prepare_and_log_result(approved=True, reason="Approval to cover existing short position.", symbol=symbol, action=action_lower, position_size=int(abs(current_position_size)), risk_amount=Decimal("0.0"))
-        else:
-            return _prepare_and_log_result(reason="Cover rejected. No existing short position to cover.", symbol=symbol, action=action_lower, position_size=0, risk_amount=Decimal("0.0"))
+    protection_price = None
+    if enable_technical_stop and technical_stop_loss is not None and technical_stop_loss > Decimal("0"):
+        protection_price = technical_stop_loss
+    else:
+        protection_price = _default_protection_price(side, entry_price, fixed_stop_loss_pct)
 
-    allowed_actions = ["buy", "strong_buy", "sell", "strong_sell", "short", "cover"]
-    if action_lower not in allowed_actions:
-        return _prepare_and_log_result(reason=f"Invalid action '{action}'. Allowed actions are: {', '.join(allowed_actions)}.", symbol=symbol, action=action, position_size=0)
+    if side == "buy" and protection_price >= entry_price:
+        protection_price = _default_protection_price(side, entry_price, fixed_stop_loss_pct)
+    if side == "sell" and protection_price <= entry_price:
+        protection_price = _default_protection_price(side, entry_price, fixed_stop_loss_pct)
 
-    if action_lower not in ["buy", "strong_buy", "short"]:
-        return _prepare_and_log_result(reason=f"Action '{action}' is for closing positions, but no open position was found.", symbol=symbol, action=action_lower, position_size=0)
+    requested_quantity = current_position_size if side == "sell" and current_position_size > 0 else 999999999
 
-    final_stop_loss = Decimal("0.0")
-    if action_lower in ["buy", "strong_buy"]:
-        stop_loss_candidates = [entry_price * (Decimal("1") - fixed_stop_loss_pct)]
-        if enable_technical_stop and technical_stop_loss is not None:
-            stop_loss_candidates.append(technical_stop_loss)
-        if atr_value is not None and atr_value > Decimal("0"):
-            stop_loss_candidates.append(entry_price - (atr_value * atr_multiplier))
-        final_stop_loss = max(c for c in stop_loss_candidates if c is not None)
-        if final_stop_loss >= entry_price:
-            return _prepare_and_log_result(reason=f"Stop loss ({final_stop_loss}) must be below entry price ({entry_price}) for a BUY action.", symbol=symbol, action=action_lower, position_size=0, stop_loss=final_stop_loss, risk_amount=Decimal("0"), entry_price=entry_price)
+    payload = {
+        "account_id": os.getenv("DEFAULT_ACCOUNT_ID", "1"),
+        "symbol": symbol,
+        "side": side,
+        "entry_price": _as_float(entry_price),
+        "protection_price": _as_float(protection_price),
+        "requested_quantity": int(requested_quantity),
+        "equity": _as_float(portfolio_value),
+        "current_symbol_exposure": 0,
+        "current_total_exposure": 0,
+        "margin_multiplier": 1,
+    }
 
-    elif action_lower == "short":
-        stop_loss_candidates = [entry_price * (Decimal("1") + fixed_stop_loss_pct)]
-        if enable_technical_stop and technical_stop_loss is not None:
-            stop_loss_candidates.append(technical_stop_loss)
-        if atr_value is not None and atr_value > Decimal("0"):
-            stop_loss_candidates.append(entry_price + (atr_value * atr_multiplier))
-        final_stop_loss = min(c for c in stop_loss_candidates if c is not None)
-        if final_stop_loss <= entry_price:
-            return _prepare_and_log_result(reason=f"Stop loss ({final_stop_loss}) must be above entry price ({entry_price}) for a SHORT action.", symbol=symbol, action=action_lower, position_size=0, stop_loss=final_stop_loss, risk_amount=Decimal("0"), entry_price=entry_price)
+    try:
+        with httpx.Client(base_url=RISK_AGENT_URL, timeout=RISK_AGENT_TIMEOUT) as client:
+            response = client.post("/risk/check", json=payload)
+            response.raise_for_status()
+            risk_response = response.json()
+    except Exception as exc:
+        return _build_result(
+            approved=False,
+            reason=f"Risk_Agent unavailable or returned invalid response: {exc}",
+            symbol=symbol,
+            action=side,
+            entry_price=entry_price,
+            protection_price=protection_price,
+        )
 
-    risk_per_share = abs(entry_price - final_stop_loss)
-    if risk_per_share <= Decimal("0"):
-        return _prepare_and_log_result(reason="Risk per share is zero or negative. Cannot calculate position size.", symbol=symbol, action=action_lower, position_size=0, stop_loss=final_stop_loss, risk_amount=portfolio_value * risk_per_trade, entry_price=entry_price)
+    data = risk_response.get("data") or {}
+    approved = bool(data.get("approved")) and str(risk_response.get("status", "")).lower() == "approved"
+    final_quantity = int(data.get("final_quantity") or data.get("approved_quantity") or 0)
 
-    final_take_profit = None
-    risk_reward_ratio = None
-    if take_profit_price is not None:
-        final_take_profit = take_profit_price
-    elif reward_multiplier is not None:
-        final_take_profit = entry_price + (reward_multiplier * risk_per_share) if action_lower == 'buy' else entry_price - (reward_multiplier * risk_per_share)
-
-    if final_take_profit is not None:
-        reward_per_share = abs(final_take_profit - entry_price)
-        risk_reward_ratio = reward_per_share / risk_per_share if risk_per_share > Decimal("0") else Decimal("inf")
-        if min_risk_reward_ratio is not None and risk_reward_ratio < min_risk_reward_ratio:
-            return _prepare_and_log_result(reason=f"Risk/Reward ratio ({risk_reward_ratio:.2f}) is below the minimum required ({min_risk_reward_ratio}).", symbol=symbol, action=action_lower, position_size=0, stop_loss=final_stop_loss, take_profit=final_take_profit, risk_reward_ratio=risk_reward_ratio, risk_amount=Decimal("0"), entry_price=entry_price)
-
-    # Higher risk for strong buy signals? (Optional, but let's keep it consistent for now as per user request)
-    risk_amount_per_trade = portfolio_value * risk_per_trade
-    position_size = floor(risk_amount_per_trade / risk_per_share)
-
-    if position_size <= 0:
-        return _prepare_and_log_result(reason=f"Calculated position size is {position_size}. Must be greater than zero.", symbol=symbol, action=action_lower, position_size=0, stop_loss=final_stop_loss, risk_amount=risk_amount_per_trade, entry_price=entry_price)
-
-    position_value = Decimal(position_size) * entry_price
-    max_allowed_value = portfolio_value * max_position_pct
-    reason = "Trade approved by Risk Manager."
-
-    if position_value > max_allowed_value:
-        original_size = position_size
-        position_size = floor(max_allowed_value / entry_price)
-        if position_size <= 0:
-            return _prepare_and_log_result(reason=f"Position size scaled down to {position_size} which is not a valid size.", symbol=symbol, action=action_lower, position_size=0, stop_loss=final_stop_loss, risk_amount=risk_amount_per_trade, entry_price=entry_price)
-        risk_amount_per_trade = Decimal(position_size) * risk_per_share
-        reason = f"Position size scaled down from {original_size} to {position_size} to respect max_position_pct."
-
-    # Final conversion to int for position_size
-    final_position_size = int(position_size)
-
-    return _prepare_and_log_result(
-        approved=True, reason=reason, symbol=symbol, action=action_lower,
-        position_size=final_position_size, stop_loss=final_stop_loss,
-        take_profit=final_take_profit, risk_reward_ratio=risk_reward_ratio,
-        risk_amount=risk_amount_per_trade, entry_price=entry_price
+    return _build_result(
+        approved=approved,
+        reason="Approved by external Risk_Agent." if approved else f"Rejected by external Risk_Agent: {data.get('violations') or risk_response.get('error')}",
+        symbol=symbol,
+        action=side,
+        entry_price=entry_price,
+        position_size=final_quantity if approved else 0,
+        protection_price=protection_price,
+        risk_response=risk_response,
     )
