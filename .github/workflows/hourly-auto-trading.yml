@@ -38,6 +38,9 @@ jobs:
       MIN_FINAL_SCORE: ${{ github.event.inputs.min_final_score || '0.55' }}
       DRY_RUN: ${{ github.event.inputs.dry_run || 'true' }}
       
+      DRY_RUN: false
+      BROKER_MODE: ALPACA
+
       BROKER_MODE: ${{ (github.event.inputs.dry_run || 'true') == 'false' && 'ALPACA' || 'SIMULATOR' }}
       ALPACA_API_KEY_ID: ${{ secrets.ALPACA_API_KEY_ID }}
       ALPACA_SECRET_KEY: ${{ secrets.ALPACA_SECRET_KEY }}
