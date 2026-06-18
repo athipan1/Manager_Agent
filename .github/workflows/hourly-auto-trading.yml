@@ -36,15 +36,12 @@ jobs:
       MAX_UNIVERSE: ${{ github.event.inputs.max_universe || '1000' }}
       TOP_N: ${{ github.event.inputs.top_n || '10' }}
       MIN_FINAL_SCORE: ${{ github.event.inputs.min_final_score || '0.55' }}
-      
-      
-      DRY_RUN: false
-      BROKER_MODE: ALPACA
-
-      BROKER_MODE: ${{ (github.event.inputs.dry_run || 'true') == 'false' && 'ALPACA' || 'SIMULATOR' }}
+      DRY_RUN: "false"
+      BROKER_MODE: "ALPACA"
       ALPACA_API_KEY_ID: ${{ secrets.ALPACA_API_KEY_ID }}
       ALPACA_SECRET_KEY: ${{ secrets.ALPACA_SECRET_KEY }}
       ALPACA_API_URL: ${{ secrets.ALPACA_API_URL }}
+
     steps:
       - name: Checkout Manager_Agent
         uses: actions/checkout@v4
@@ -98,6 +95,8 @@ jobs:
           echo "Database_Agent=$(git -C Database_Agent rev-parse HEAD)"
           echo "Learning_Agent=$(git -C Learning_Agent rev-parse HEAD)"
           echo "Execution_Agent=$(git -C Execution_Agent rev-parse HEAD)"
+          echo "DRY_RUN=${DRY_RUN}"
+          echo "BROKER_MODE=${BROKER_MODE}"
 
       - name: Build and start trading stack
         working-directory: Manager_Agent
@@ -167,6 +166,7 @@ jobs:
           top_n = int(os.getenv("TOP_N", "10"))
           min_final_score = float(os.getenv("MIN_FINAL_SCORE", "0.55"))
           dry_run = os.getenv("DRY_RUN", "true").lower() != "false"
+          broker_mode = os.getenv("BROKER_MODE", "SIMULATOR")
 
           def post_json(path, payload):
               req = urllib.request.Request(
@@ -199,9 +199,10 @@ jobs:
 
           report = {
               "generated_at": datetime.now(timezone.utc).isoformat(),
-              "mode": "SIMULATOR" if dry_run else "CONFIGURED_STACK_MODE",
+              "mode": "SIMULATOR" if dry_run else "ALPACA_PAPER",
+              "broker_mode": broker_mode,
               "flow": "discover_analyze_trade",
-              "warning": "This GitHub Action stack currently uses docker-compose settings. Execution_Agent is SIMULATOR unless docker-compose/secrets are intentionally changed.",
+              "warning": "DRY_RUN=false sends orders to the configured broker. Use Alpaca paper credentials for paper trading only.",
               "request": payload,
               "response": response,
           }
@@ -244,6 +245,7 @@ jobs:
           lines.append("")
           lines.append(f"Generated at UTC: `{report.get('generated_at')}`")
           lines.append(f"Mode: `{report.get('mode')}`")
+          lines.append(f"Broker Mode: `{report.get('broker_mode')}`")
           lines.append(f"Flow: `{report.get('flow')}`")
           lines.append("")
           lines.append("## Request")
