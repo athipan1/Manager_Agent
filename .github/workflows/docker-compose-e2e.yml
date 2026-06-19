@@ -152,7 +152,16 @@ jobs:
               "quantity": 1,
               "order_type": "market",
               "time_in_force": "GTC",
-              "trade_id": "github-actions-e2e-test"
+              "trade_id": "github-actions-e2e-test",
+              "risk_approval_id": "github-actions-risk-approval",
+              "final_quantity": 1,
+              "guard_plan": {
+                "symbol": "AAPL",
+                "side": "sell",
+                "quantity": 1,
+                "trigger_price": 95,
+                "time_in_force": "GTC"
+              }
             }'
 
       - name: Show logs on failure
