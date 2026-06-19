@@ -6,7 +6,7 @@ from fastapi.testclient import TestClient
 
 from app.main import app
 from app.models import AccountBalance, Position, ReportDetail, ReportDetails
-from app.contracts import StandardAgentResponse, StandardAgentData
+from app.contracts import StandardAgentResponse
 
 client = TestClient(app)
 
@@ -21,25 +21,23 @@ def analysis_result(symbol="AAPL", verdict="buy", price=Decimal("100")):
             fundamental=ReportDetail(action=verdict, score=0.8, reason=""),
         ),
         "raw_data": {
-            "technical": StandardAgentResponse(
-                status="success",
-                agent_type="technical",
-                version="1.0",
-                timestamp=datetime.datetime.now(),
-                data=StandardAgentData(
-                    action=verdict,
-                    confidence_score=0.9,
-                    current_price=float(price),
-                    indicators={"stop_loss": float(price * Decimal("0.9"))},
-                ),
-            ),
-            "fundamental": StandardAgentResponse(
-                status="success",
-                agent_type="fundamental",
-                version="1.0",
-                timestamp=datetime.datetime.now(),
-                data=StandardAgentData(action=verdict, confidence_score=0.8, current_price=float(price)),
-            ),
+            "technical": {
+                "status": "success",
+                "data": {
+                    "action": verdict,
+                    "confidence_score": 0.9,
+                    "current_price": float(price),
+                    "indicators": {"stop_loss": float(price * Decimal("0.9"))},
+                },
+            },
+            "fundamental": {
+                "status": "success",
+                "data": {
+                    "action": verdict,
+                    "confidence_score": 0.8,
+                    "current_price": float(price),
+                },
+            },
         },
     }
 
