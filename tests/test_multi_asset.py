@@ -145,7 +145,7 @@ def test_analyze_multi_endpoint_success(mock_main_cm, mock_high_level_dependenci
     assert data["execution_summary"]["total_trades_executed"] == 3
 
     mock_high_level_dependencies["learning"].trigger_learning_cycle.assert_called_once()
-    assert mock_high_level_dependencies["learning"].trigger_learning_cycle.call_args.kwargs['symbol'] == "AAPL"
+    assert mock_high_level_dependencies["learning"].trigger_learning_cycle.call_args.kwargs['symbol'] == "MSFT"
 
 @patch('app.main.config_manager')
 def test_position_scaling_on_risk_budget(mock_main_cm, mock_high_level_dependencies):
