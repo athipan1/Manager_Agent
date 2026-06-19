@@ -23,6 +23,8 @@ def approved_response(quantity=100, symbol="AAPL"):
     }
 
 
+@patch("app.risk_manager.config.TRADING_ENABLED", True)
+@patch("app.risk_manager.config.TRADING_MODE", "PAPER")
 @patch("app.risk_manager.evaluate_risk")
 def test_approve_buy_order_fixed_stop(mock_evaluate_risk):
     mock_evaluate_risk.return_value = approved_response(quantity=133, symbol="AAPL")
@@ -48,8 +50,11 @@ def test_approve_buy_order_fixed_stop(mock_evaluate_risk):
     assert payload["side"] == "buy"
     assert payload["requested_quantity"] == 200
     assert payload["protection_price"] == 142.5
+    assert payload["trading_mode"] == "PAPER"
 
 
+@patch("app.risk_manager.config.TRADING_ENABLED", True)
+@patch("app.risk_manager.config.TRADING_MODE", "PAPER")
 @patch("app.risk_manager.evaluate_risk")
 def test_approve_buy_order_technical_stop(mock_evaluate_risk):
     mock_evaluate_risk.return_value = approved_response(quantity=200, symbol="AAPL")
@@ -74,6 +79,8 @@ def test_approve_buy_order_technical_stop(mock_evaluate_risk):
     assert payload["protection_price"] == 145.0
 
 
+@patch("app.risk_manager.config.TRADING_ENABLED", True)
+@patch("app.risk_manager.config.TRADING_MODE", "PAPER")
 @patch("app.risk_manager.evaluate_risk")
 def test_invalid_buy_technical_stop_falls_back_to_fixed_stop(mock_evaluate_risk):
     mock_evaluate_risk.return_value = approved_response(quantity=100, symbol="AAPL")
@@ -97,6 +104,8 @@ def test_invalid_buy_technical_stop_falls_back_to_fixed_stop(mock_evaluate_risk)
     assert payload["protection_price"] == 142.5
 
 
+@patch("app.risk_manager.config.TRADING_ENABLED", True)
+@patch("app.risk_manager.config.TRADING_MODE", "PAPER")
 @patch("app.risk_manager.evaluate_risk")
 def test_reject_when_external_risk_agent_rejects(mock_evaluate_risk):
     mock_evaluate_risk.return_value = {
@@ -125,6 +134,8 @@ def test_reject_when_external_risk_agent_rejects(mock_evaluate_risk):
     assert "Rejected by external Risk_Agent" in decision["reason"]
 
 
+@patch("app.risk_manager.config.TRADING_ENABLED", True)
+@patch("app.risk_manager.config.TRADING_MODE", "PAPER")
 @patch("app.risk_manager.evaluate_risk")
 def test_approve_sell_order_existing_position(mock_evaluate_risk):
     mock_evaluate_risk.return_value = approved_response(quantity=100, symbol="AAPL")

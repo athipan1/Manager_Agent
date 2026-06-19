@@ -14,6 +14,9 @@ class PortfolioRiskManager:
         self.current_exposure = sum(Decimal(p.quantity) * (p.current_market_price or p.average_cost) for p in self.existing_positions)
         self.approved_buys_value = Decimal("0.0")
 
+    def exposure_before_next_trade(self) -> Decimal:
+        return self.current_exposure + self.approved_buys_value
+
     def evaluate_sell(self, sell_decision: Dict[str, Any]):
         if not (sell_decision.get("approved") and sell_decision.get("action") in ["sell", "strong_sell"]):
             return
@@ -56,6 +59,12 @@ def _position_price(position: Position | None) -> Decimal:
     return Decimal(position.current_market_price or position.average_cost or 0)
 
 
+def _position_exposure(position: Position | None) -> Decimal:
+    if not position:
+        return Decimal("0")
+    return Decimal(position.quantity) * _position_price(position)
+
+
 def _raw_data_dict(result: Dict[str, Any], agent_name: str) -> Dict[str, Any]:
     raw = (result.get("raw_data") or {}).get(agent_name) or {}
     if hasattr(raw, "model_dump"):
@@ -77,7 +86,7 @@ def _technical_stop_from_result(result: Dict[str, Any]):
     return indicators.get("stop_loss")
 
 
-def assess_portfolio_trades(analysis_results: List[Dict[str, Any]], cash_balance: Decimal, existing_positions: List[Position], per_request_risk_budget: Decimal, max_total_exposure: Decimal, risk_per_trade: Decimal, fixed_stop_loss_pct: Decimal, enable_technical_stop: bool, max_position_pct: Decimal, min_position_value: Decimal) -> List[Dict[str, Any]]:
+def assess_portfolio_trades(analysis_results: List[Dict[str, Any]], cash_balance: Decimal, existing_positions: List[Position], per_request_risk_budget: Decimal, max_total_exposure: Decimal, risk_per_trade: Decimal, fixed_stop_loss_pct: Decimal, enable_technical_stop: bool, max_position_pct: Decimal, min_position_value: Decimal, open_orders_exposure: Decimal = Decimal("0"), margin_multiplier: Decimal = Decimal("1")) -> List[Dict[str, Any]]:
     portfolio_value = cash_balance + sum(Decimal(p.quantity) * (p.current_market_price or p.average_cost) for p in existing_positions)
     manager = PortfolioRiskManager(portfolio_value=portfolio_value, existing_positions=existing_positions, per_request_risk_budget=per_request_risk_budget, max_total_exposure=max_total_exposure, min_position_value=min_position_value)
     final_decisions = []
@@ -94,7 +103,7 @@ def assess_portfolio_trades(analysis_results: List[Dict[str, Any]], cash_balance
     for result in sell_verdicts:
         ticker = result["ticker"]
         current_position = next((p for p in existing_positions if p.symbol == ticker), None)
-        sell_decision = assess_trade(portfolio_value=portfolio_value, risk_per_trade=risk_per_trade, fixed_stop_loss_pct=fixed_stop_loss_pct, enable_technical_stop=False, max_position_pct=max_position_pct, symbol=ticker, action=result["final_verdict"], entry_price=_position_price(current_position), current_position_size=current_position.quantity if current_position else 0)
+        sell_decision = assess_trade(portfolio_value=portfolio_value, risk_per_trade=risk_per_trade, fixed_stop_loss_pct=fixed_stop_loss_pct, enable_technical_stop=False, max_position_pct=max_position_pct, symbol=ticker, action=result["final_verdict"], entry_price=_position_price(current_position), current_position_size=current_position.quantity if current_position else 0, current_symbol_exposure=_position_exposure(current_position), current_total_exposure=manager.exposure_before_next_trade(), open_orders_exposure=open_orders_exposure, margin_multiplier=margin_multiplier)
         manager.evaluate_sell(sell_decision)
         final_decisions.append(sell_decision)
 
@@ -103,7 +112,7 @@ def assess_portfolio_trades(analysis_results: List[Dict[str, Any]], cash_balance
         current_position = next((p for p in existing_positions if p.symbol == ticker), None)
         entry_price_raw = _current_price_from_result(result)
         technical_stop_loss_raw = _technical_stop_from_result(result)
-        initial_buy_decision = assess_trade(portfolio_value=portfolio_value, risk_per_trade=risk_per_trade, fixed_stop_loss_pct=fixed_stop_loss_pct, enable_technical_stop=enable_technical_stop, max_position_pct=max_position_pct, symbol=ticker, action=result["final_verdict"], entry_price=entry_price_raw, technical_stop_loss=Decimal(str(technical_stop_loss_raw)) if technical_stop_loss_raw is not None else None, current_position_size=current_position.quantity if current_position else 0)
+        initial_buy_decision = assess_trade(portfolio_value=portfolio_value, risk_per_trade=risk_per_trade, fixed_stop_loss_pct=fixed_stop_loss_pct, enable_technical_stop=enable_technical_stop, max_position_pct=max_position_pct, symbol=ticker, action=result["final_verdict"], entry_price=entry_price_raw, technical_stop_loss=Decimal(str(technical_stop_loss_raw)) if technical_stop_loss_raw is not None else None, current_position_size=current_position.quantity if current_position else 0, current_symbol_exposure=_position_exposure(current_position), current_total_exposure=manager.exposure_before_next_trade(), open_orders_exposure=open_orders_exposure, margin_multiplier=margin_multiplier)
         final_buy_decision = manager.evaluate_buy(initial_buy_decision)
         final_decisions.append(final_buy_decision)
 
