@@ -5,8 +5,30 @@ import json
 # Load environment variables from .env file
 load_dotenv()
 
+
+def _env_bool(name: str, default: bool = False) -> bool:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    return value.strip().lower() in ("1", "true", "yes", "y", "on")
+
+
 # General Configuration
 DEFAULT_ACCOUNT_ID = int(os.getenv("DEFAULT_ACCOUNT_ID", 1))
+
+# Live trading guardrails. Default is deliberately safe.
+TRADING_ENABLED = _env_bool("TRADING_ENABLED", False)
+TRADING_MODE = os.getenv("TRADING_MODE", "PAPER").strip().upper()
+ALLOW_LIVE_TRADING = _env_bool("ALLOW_LIVE_TRADING", False)
+
+if TRADING_MODE not in {"PAPER", "LIVE"}:
+    raise RuntimeError("TRADING_MODE must be explicitly set to PAPER or LIVE.")
+
+if TRADING_MODE == "LIVE" and not ALLOW_LIVE_TRADING:
+    raise RuntimeError(
+        "LIVE trading requested but ALLOW_LIVE_TRADING is not true. "
+        "Set TRADING_MODE=PAPER for paper trading or explicitly enable live trading."
+    )
 
 # Agent URLs (use Docker Compose service names as defaults)
 TECHNICAL_AGENT_URL = os.getenv("TECHNICAL_AGENT_URL", "http://technical-agent:8002")
@@ -17,7 +39,10 @@ AUTO_LEARNING_AGENT_URL = os.getenv("AUTO_LEARNING_AGENT_URL", "http://learning-
 EXECUTION_AGENT_URL = os.getenv("EXECUTION_AGENT_URL", "http://execution-agent:8006")
 RISK_AGENT_URL = os.getenv("RISK_AGENT_URL", "http://risk-agent:8007")
 RISK_AGENT_TIMEOUT = float(os.getenv("RISK_AGENT_TIMEOUT", 10))
+RISK_AGENT_FAILURE_THRESHOLD = int(os.getenv("RISK_AGENT_FAILURE_THRESHOLD", 3))
+RISK_AGENT_COOLDOWN_SECONDS = float(os.getenv("RISK_AGENT_COOLDOWN_SECONDS", 30))
 EXECUTION_API_KEY = os.getenv("EXECUTION_API_KEY", os.getenv("EXECUTION_AGENT_API_KEY", "dev_execution_key"))
+DEFAULT_MARGIN_MULTIPLIER = float(os.getenv("DEFAULT_MARGIN_MULTIPLIER", 1.0))
 
 
 # Resilient Agent Client Parameters
