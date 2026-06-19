@@ -1,126 +1,121 @@
-import unittest
-import os
-import json
 from decimal import Decimal
+from unittest.mock import patch
+
 from app.risk_manager import assess_trade
 
-class TestNewRiskManagerFeatures(unittest.TestCase):
 
-    def setUp(self):
-        """Set up for tests. Ensures log files don't exist before each test."""
-        if os.path.exists("logs/assessment_history.json"):
-            os.remove("logs/assessment_history.json")
-        if os.path.exists("logs/assessment_history.csv"):
-            os.remove("logs/assessment_history.csv")
+def approved_response(final_quantity=100):
+    return {
+        "status": "approved",
+        "data": {
+            "approved": True,
+            "final_quantity": final_quantity,
+            "approved_quantity": final_quantity,
+            "guard_plan": {
+                "symbol": "AAPL",
+                "quantity": final_quantity,
+                "trigger_price": 140.0,
+            },
+            "violations": [],
+            "warnings": [],
+        },
+        "error": None,
+    }
 
-    def tearDown(self):
-        """Tear down after tests. Cleans up log files."""
-        if os.path.exists("logs/assessment_history.json"):
-            os.remove("logs/assessment_history.json")
-        if os.path.exists("logs/assessment_history.csv"):
-            os.remove("logs/assessment_history.csv")
 
-    def test_approve_short_order(self):
-        """Test a standard short order approval."""
+@patch("app.risk_manager.evaluate_risk")
+def test_assess_trade_approves_with_external_risk_agent(mock_evaluate_risk):
+    mock_evaluate_risk.return_value = approved_response(final_quantity=100)
+
+    decision = assess_trade(
+        portfolio_value=Decimal("100000"),
+        risk_per_trade=Decimal("0.01"),
+        fixed_stop_loss_pct=Decimal("0.10"),
+        enable_technical_stop=True,
+        max_position_pct=Decimal("0.20"),
+        symbol="AAPL",
+        action="buy",
+        entry_price=Decimal("150.00"),
+        technical_stop_loss=Decimal("140.00"),
+        current_position_size=250,
+    )
+
+    assert decision["approved"] is True
+    assert decision["position_size"] == 100
+    assert decision["stop_loss"] == Decimal("140.00")
+    assert decision["guard_plan"]["quantity"] == 100
+
+    payload = mock_evaluate_risk.call_args.args[0]
+    assert payload["symbol"] == "AAPL"
+    assert payload["side"] == "buy"
+    assert payload["entry_price"] == 150.0
+    assert payload["protection_price"] == 140.0
+    assert payload["requested_quantity"] == 250
+
+
+@patch("app.risk_manager.evaluate_risk")
+def test_assess_trade_rejects_when_external_risk_agent_rejects(mock_evaluate_risk):
+    mock_evaluate_risk.return_value = {
+        "status": "rejected",
+        "data": {
+            "approved": False,
+            "violations": ["position_size_limit_exceeded"],
+        },
+        "error": "risk_check_failed",
+    }
+
+    decision = assess_trade(
+        portfolio_value=Decimal("100000"),
+        risk_per_trade=Decimal("0.01"),
+        fixed_stop_loss_pct=Decimal("0.10"),
+        enable_technical_stop=False,
+        max_position_pct=Decimal("0.20"),
+        symbol="AAPL",
+        action="buy",
+        entry_price=Decimal("150.00"),
+        current_position_size=250,
+    )
+
+    assert decision["approved"] is False
+    assert decision["position_size"] == 0
+    assert "Rejected by external Risk_Agent" in decision["reason"]
+
+
+@patch("app.risk_manager.evaluate_risk")
+def test_assess_trade_uses_default_protection_price(mock_evaluate_risk):
+    mock_evaluate_risk.return_value = approved_response(final_quantity=50)
+
+    decision = assess_trade(
+        portfolio_value=Decimal("100000"),
+        risk_per_trade=Decimal("0.01"),
+        fixed_stop_loss_pct=Decimal("0.10"),
+        enable_technical_stop=False,
+        max_position_pct=Decimal("0.20"),
+        symbol="AAPL",
+        action="buy",
+        entry_price=Decimal("150.00"),
+        current_position_size=100,
+    )
+
+    assert decision["approved"] is True
+    assert decision["stop_loss"] == Decimal("135.0000")
+    payload = mock_evaluate_risk.call_args.args[0]
+    assert payload["protection_price"] == 135.0
+
+
+def test_assess_trade_rejects_hold_without_calling_risk_agent():
+    with patch("app.risk_manager.evaluate_risk") as mock_evaluate_risk:
         decision = assess_trade(
-            portfolio_value=Decimal("100000"), risk_per_trade=Decimal("0.01"),
-            fixed_stop_loss_pct=Decimal("0.05"), enable_technical_stop=False,
-            max_position_pct=Decimal("0.20"), symbol="TSLA",
-            action="short", entry_price=Decimal("150.00"),
-        )
-        self.assertTrue(decision["approved"])
-        self.assertEqual(decision["position_size"], 133)
-        self.assertEqual(decision["stop_loss"], Decimal("157.5"))
-        self.assertEqual(decision["action"], "short")
-
-    def test_approve_cover_order(self):
-        """Test a cover order for an existing short position."""
-        decision = assess_trade(
-            portfolio_value=Decimal("100000"), risk_per_trade=Decimal("0.01"),
-            fixed_stop_loss_pct=Decimal("0.05"), enable_technical_stop=False,
-            max_position_pct=Decimal("0.20"), symbol="TSLA",
-            action="cover", entry_price=Decimal("140.00"),
-            current_position_size=-100
-        )
-        self.assertTrue(decision["approved"])
-        self.assertEqual(decision["position_size"], 100)
-        self.assertEqual(decision["reason"], "Approval to cover existing short position.")
-
-    def test_reject_buy_bad_risk_reward(self):
-        """Test rejection of a buy order due to a poor risk/reward ratio."""
-        decision = assess_trade(
-            portfolio_value=Decimal("100000"), risk_per_trade=Decimal("0.01"),
-            fixed_stop_loss_pct=Decimal("0.05"), enable_technical_stop=False,
-            max_position_pct=Decimal("0.20"), symbol="AAPL",
-            action="buy", entry_price=Decimal("150.00"),
-            take_profit_price=Decimal("155.00"), min_risk_reward_ratio=Decimal("1.5")
-        )
-        self.assertFalse(decision["approved"])
-        self.assertIn("Risk/Reward ratio", decision["reason"])
-
-    def test_approve_buy_good_risk_reward_multiplier(self):
-        """Test approval with a good R:R ratio calculated from a multiplier."""
-        decision = assess_trade(
-            portfolio_value=Decimal("100000"), risk_per_trade=Decimal("0.01"),
-            fixed_stop_loss_pct=Decimal("0.05"), enable_technical_stop=False, # Risk/share = 7.5
-            max_position_pct=Decimal("0.20"), symbol="AAPL",
-            action="buy", entry_price=Decimal("150.00"),
-            reward_multiplier=Decimal("2.0"), min_risk_reward_ratio=Decimal("1.5") # TP = 165, Reward/share = 15, R:R = 2.0
-        )
-        self.assertTrue(decision["approved"])
-        self.assertEqual(decision["take_profit"], Decimal("165.0"))
-        self.assertAlmostEqual(float(decision["risk_reward_ratio"]), 2.0)
-
-    def test_approve_buy_atr_stop(self):
-        """Test that the ATR stop is correctly used when it's the most conservative."""
-        decision = assess_trade(
-            portfolio_value=Decimal("100000"), risk_per_trade=Decimal("0.01"),
-            fixed_stop_loss_pct=Decimal("0.10"), enable_technical_stop=False, # Fixed SL = 135
-            max_position_pct=Decimal("0.20"), symbol="AAPL",
-            action="buy", entry_price=Decimal("150.00"),
-            atr_value=Decimal("4"), atr_multiplier=Decimal("2.5") # ATR SL = 150 - (4 * 2.5) = 140
-        )
-        self.assertTrue(decision["approved"])
-        self.assertEqual(decision["stop_loss"], Decimal("140"))
-
-    def test_short_atr_stop(self):
-        """Test ATR stop for a short position."""
-        decision = assess_trade(
-            portfolio_value=Decimal("100000"), risk_per_trade=Decimal("0.01"),
-            fixed_stop_loss_pct=Decimal("0.05"), enable_technical_stop=False, # Fixed SL = 157.5
-            max_position_pct=Decimal("0.20"), symbol="TSLA",
-            action="short", entry_price=Decimal("150.00"),
-            atr_value=Decimal("3"), atr_multiplier=Decimal("2") # ATR SL = 150 + (3 * 2) = 156
-        )
-        self.assertTrue(decision["approved"])
-        self.assertEqual(decision["stop_loss"], Decimal("156")) # Tighter stop is chosen
-
-    def test_logging_to_files(self):
-        """Test that a decision is correctly logged to both JSON and CSV files."""
-        assess_trade(
-            portfolio_value=Decimal("10000"), risk_per_trade=Decimal("0.01"),
-            fixed_stop_loss_pct=Decimal("0.05"), enable_technical_stop=False,
-            max_position_pct=Decimal("0.10"), symbol="LOGTEST",
-            action="buy", entry_price=Decimal("200.00"),
+            portfolio_value=Decimal("100000"),
+            risk_per_trade=Decimal("0.01"),
+            fixed_stop_loss_pct=Decimal("0.10"),
+            enable_technical_stop=False,
+            max_position_pct=Decimal("0.20"),
+            symbol="AAPL",
+            action="hold",
+            entry_price=Decimal("150.00"),
         )
 
-        # Check JSON log
-        self.assertTrue(os.path.exists("logs/assessment_history.json"))
-        with open("logs/assessment_history.json", "r") as f:
-            lines = f.readlines()
-            self.assertEqual(len(lines), 1)
-            log_data = json.loads(lines[0])
-            self.assertEqual(log_data["symbol"], "LOGTEST")
-            self.assertTrue(log_data["approved"])
-
-        # Check CSV log
-        self.assertTrue(os.path.exists("logs/assessment_history.csv"))
-        with open("logs/assessment_history.csv", "r") as f:
-            lines = f.readlines()
-            self.assertEqual(len(lines), 2) # Header + 1 line
-            self.assertIn("timestamp,approved,reason,symbol", lines[0])
-            self.assertIn("LOGTEST", lines[1])
-            self.assertIn("True", lines[1])
-
-if __name__ == '__main__':
-    unittest.main()
+    assert decision["approved"] is False
+    assert decision["position_size"] == 0
+    mock_evaluate_risk.assert_not_called()
