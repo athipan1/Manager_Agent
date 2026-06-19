@@ -137,12 +137,9 @@ def _total_position_exposure(positions: List[Any]) -> Decimal:
 
 async def _fetch_context_value(db_client: DatabaseAgentClient, account_id: Union[int, str], correlation_id: str) -> Decimal:
     try:
-        if hasattr(db_client, "get_context_rows"):
-            rows = await db_client.get_context_rows(account_id, correlation_id)
-        else:
-            response_data = await db_client._get(f"/accounts/{account_id}/orders", correlation_id)
-            standard_resp = db_client.validate_standard_response(response_data)
-            rows = standard_resp.data or []
+        response_data = await db_client._get(f"/accounts/{account_id}/orders", correlation_id)
+        standard_resp = db_client.validate_standard_response(response_data)
+        rows = standard_resp.data or []
         return active_value(rows)
     except Exception as exc:
         if config.TRADING_MODE == "LIVE":
