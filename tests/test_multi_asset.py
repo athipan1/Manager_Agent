@@ -56,20 +56,57 @@ def mock_analysis_result(ticker, final_verdict, tech_score=0.8, fund_score=0.7, 
 
 import uuid
 
+
+def mock_risk_decision(**kwargs):
+    symbol = kwargs["symbol"]
+    action = str(kwargs["action"]).lower()
+    entry_price = Decimal(kwargs.get("entry_price") or 0)
+    if symbol == "AAPL":
+        size = 100
+        risk_amount = Decimal("1000")
+    elif symbol == "MSFT":
+        size = 100
+        risk_amount = Decimal("2000")
+    elif symbol == "GOOG":
+        size = int(kwargs.get("current_position_size") or 50)
+        risk_amount = Decimal("0")
+    else:
+        size = 10
+        risk_amount = Decimal("100")
+    return {
+        "approved": True,
+        "reason": "Approved by mocked Risk_Agent.",
+        "symbol": symbol,
+        "action": action,
+        "entry_price": entry_price,
+        "position_size": size,
+        "stop_loss": kwargs.get("technical_stop_loss"),
+        "risk_amount": risk_amount,
+        "risk_agent_response": {
+            "status": "approved",
+            "data": {
+                "approved": True,
+                "final_quantity": size,
+                "guard_plan": {"symbol": symbol, "quantity": size}
+            }
+        },
+        "guard_plan": {"symbol": symbol, "quantity": size}
+    }
+
+
 @pytest.fixture
 def mock_high_level_dependencies():
-    """Mocks dependencies by patching _analyze_single_asset and _execute_trade."""
+    """Mocks dependencies by patching analysis, risk gate, and execution."""
     with patch('app.main._analyze_single_asset', new_callable=AsyncMock) as mock_analyze, \
          patch('app.main._execute_trade', new_callable=AsyncMock) as mock_execute_trade, \
+         patch('app.portfolio_risk_manager.assess_trade', side_effect=mock_risk_decision) as mock_risk_gate, \
          patch('app.main.DatabaseAgentClient', autospec=True) as mock_db_client_class, \
          patch('app.main.LearningAgentClient', autospec=True) as mock_learning_client:
 
-        # Mock Database Client for portfolio data
         mock_db_instance = mock_db_client_class.return_value.__aenter__.return_value
         mock_db_instance.get_account_balance.return_value = AccountBalance(cash_balance=Decimal("100000.0"))
         mock_db_instance.get_positions.return_value = [Position(symbol="GOOG", quantity=50, average_cost=Decimal("90.0"), current_market_price=Decimal("120.0"))]
 
-        # Mock _execute_trade to always return a successful submission status
         mock_execute_trade.return_value = {"status": "submitted", "order_id": "mock-order-id", "details": {}}
 
         mock_learning_instance = mock_learning_client.return_value
@@ -78,6 +115,7 @@ def mock_high_level_dependencies():
         yield {
             "analyze": mock_analyze,
             "execute": mock_execute_trade,
+            "risk": mock_risk_gate,
             "learning": mock_learning_instance
         }
 
