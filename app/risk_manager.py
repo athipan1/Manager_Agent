@@ -111,6 +111,8 @@ def assess_trade(
         return _build_result(False, f"Invalid TRADING_MODE={config.TRADING_MODE}; rejecting trade.", symbol, side, entry_price)
     if config.TRADING_MODE == "LIVE" and not config.ALLOW_LIVE_TRADING:
         return _build_result(False, "LIVE mode requires ALLOW_LIVE_TRADING=true; rejecting trade.", symbol, side, entry_price)
+    if config.TRADING_MODE == "LIVE" and (current_symbol_exposure is None or current_total_exposure is None or open_orders_exposure is None):
+        return _build_result(False, "LIVE risk context incomplete: symbol exposure, total exposure, and open orders exposure are required.", symbol, side, entry_price)
 
     protection_price = technical_stop_loss if enable_technical_stop and technical_stop_loss is not None and technical_stop_loss > Decimal("0") else _default_protection_price(side, entry_price, fixed_stop_loss_pct)
     if side == "buy" and protection_price >= entry_price:
