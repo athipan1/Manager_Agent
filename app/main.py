@@ -7,7 +7,6 @@ from decimal import Decimal
 import asyncio
 
 from . import config
-from . import database_rows  # noqa: F401 - attaches DatabaseAgentClient.get_orders
 from .models import (
     AgentRequestBody, OrchestratorResponse, ReportDetail, ReportDetails,
     MultiAgentRequestBody, MultiOrchestratorResponse,
@@ -31,6 +30,43 @@ from .context_numbers import active_value
 app = FastAPI()
 
 
+def _manager_metadata(
+    *,
+    risk_context_loaded: bool = False,
+    learning_delta_applied: bool = False,
+    learning_delta_pending: bool = False,
+    learning_delta_skipped_reason: Optional[str] = None,
+) -> Dict[str, Any]:
+    metadata = {
+        "trading_mode": config.TRADING_MODE,
+        "trading_enabled": config.TRADING_ENABLED,
+        "allow_live_trading": config.ALLOW_LIVE_TRADING,
+        "risk_context_loaded": risk_context_loaded,
+        "learning_delta_auto_apply_enabled": config.APPLY_LEARNING_DELTAS,
+        "learning_delta_applied": learning_delta_applied,
+        "learning_delta_pending": learning_delta_pending,
+    }
+    if learning_delta_skipped_reason:
+        metadata["learning_delta_skipped_reason"] = learning_delta_skipped_reason
+    return metadata
+
+
+def _apply_learning_deltas_if_allowed(learning_response: Any) -> Dict[str, Any]:
+    if not learning_response or learning_response.learning_state == "warmup":
+        return {"applied": False, "pending": False, "reason": "no_active_learning_delta"}
+
+    deltas = learning_response.policy_deltas.model_dump(exclude_none=True)
+    if not deltas:
+        return {"applied": False, "pending": False, "reason": "empty_learning_delta"}
+
+    if not config.APPLY_LEARNING_DELTAS:
+        report_logger.warning("Learning policy deltas generated but not applied because APPLY_LEARNING_DELTAS=false.")
+        return {"applied": False, "pending": True, "reason": "approval_required"}
+
+    config_manager.apply_deltas(deltas)
+    return {"applied": True, "pending": False, "reason": None}
+
+
 @app.get("/health", response_model=StandardAgentResponse)
 async def health_check():
     is_healthy = True
@@ -48,6 +84,7 @@ async def health_check():
         version="1.0.0",
         timestamp=datetime.datetime.now(datetime.UTC),
         data={"dependencies": downstream_services},
+        metadata=_manager_metadata(),
     )
     return JSONResponse(
         status_code=status.HTTP_200_OK if is_healthy else status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -296,6 +333,7 @@ async def analyze_ticker(request: AgentRequestBody):
             final_verdict = analysis_result["final_verdict"]
             await _persist_signal(db_client, account_id, analysis_result, correlation_id)
             execution_result = None
+            trade_decision = None
             if final_verdict in ["buy", "sell", "strong_buy", "strong_sell"]:
                 portfolio_value = balance.cash_balance if balance else 0
                 current_position = next((p for p in positions if p.symbol == ticker), None)
@@ -324,11 +362,20 @@ async def analyze_ticker(request: AgentRequestBody):
             report = OrchestratorResponse(report_id=correlation_id, ticker=ticker.upper(), timestamp=datetime.datetime.now(datetime.UTC), final_verdict=final_verdict, status=analysis_result["status"], details=analysis_result["details"])
             learning_client = LearningAgentClient(db_client=db_client)
             learning_response = await learning_client.trigger_learning_cycle(account_id=account_id, symbol=ticker, correlation_id=correlation_id, execution_result=execution_result)
-            if learning_response and learning_response.learning_state != "warmup":
-                deltas = learning_response.policy_deltas.model_dump(exclude_none=True)
-                if deltas:
-                    config_manager.apply_deltas(deltas)
-            return StandardAgentResponse(status="success", agent_type="manager-agent", version="1.0.0", timestamp=datetime.datetime.now(datetime.UTC), data=report)
+            learning_state = _apply_learning_deltas_if_allowed(learning_response)
+            return StandardAgentResponse(
+                status="success",
+                agent_type="manager-agent",
+                version="1.0.0",
+                timestamp=datetime.datetime.now(datetime.UTC),
+                data=report,
+                metadata=_manager_metadata(
+                    risk_context_loaded=True,
+                    learning_delta_applied=learning_state["applied"],
+                    learning_delta_pending=learning_state["pending"],
+                    learning_delta_skipped_reason=learning_state["reason"],
+                ),
+            )
     except AgentUnavailable as e:
         report_logger.critical(f"An agent is unavailable: {e}")
         raise HTTPException(status_code=503, detail=str(e))
@@ -380,12 +427,26 @@ async def _process_multi_asset_analysis(tickers: List[str], account_id: Union[in
                     exec_reason = decision.get("reason", "Reason not provided.")
                 asset_responses.append(AssetResult(analysis=analysis_result, execution=ExecutionResult(status=exec_status, reason=exec_reason, details=exec_details)))
             total_executed = sum(1 for outcome in execution_outcomes if outcome["status"] == "submitted")
+            learning_state = {"applied": False, "pending": False, "reason": "no_approved_trade"}
             if approved_trades:
                 most_impactful_trade = max(approved_trades, key=lambda t: t.get("risk_amount", 0))
                 learning_client = LearningAgentClient(db_client=db_client)
-                await learning_client.trigger_learning_cycle(account_id=account_id, symbol=most_impactful_trade["symbol"], correlation_id=correlation_id, execution_result=ticker_to_execution.get(most_impactful_trade["symbol"]))
+                learning_response = await learning_client.trigger_learning_cycle(account_id=account_id, symbol=most_impactful_trade["symbol"], correlation_id=correlation_id, execution_result=ticker_to_execution.get(most_impactful_trade["symbol"]))
+                learning_state = _apply_learning_deltas_if_allowed(learning_response)
             multi_report = MultiOrchestratorResponse(multi_report_id=correlation_id, timestamp=datetime.datetime.now(datetime.UTC), execution_summary=ExecutionSummary(total_trades_approved=len(approved_trades), total_trades_executed=total_executed, total_trades_failed=len(execution_outcomes) - total_executed), results=asset_responses)
-            return StandardAgentResponse(status="success", agent_type="manager-agent", version="1.0.0", timestamp=datetime.datetime.now(datetime.UTC), data=multi_report)
+            return StandardAgentResponse(
+                status="success",
+                agent_type="manager-agent",
+                version="1.0.0",
+                timestamp=datetime.datetime.now(datetime.UTC),
+                data=multi_report,
+                metadata=_manager_metadata(
+                    risk_context_loaded=True,
+                    learning_delta_applied=learning_state["applied"],
+                    learning_delta_pending=learning_state["pending"],
+                    learning_delta_skipped_reason=learning_state["reason"],
+                ),
+            )
     except AgentUnavailable as e:
         report_logger.critical(f"An agent is unavailable: {e}")
         raise HTTPException(status_code=503, detail=str(e))
@@ -409,7 +470,7 @@ async def discover_analyze_trade_endpoint(request: DiscoverAnalyzeTradeRequest):
         scan_payload = scan_data.model_dump() if hasattr(scan_data, "model_dump") else scan_data if isinstance(scan_data, dict) else {}
         candidates = scan_payload.get("candidates", [])
         if not candidates:
-            return StandardAgentResponse(status="error", agent_type="manager-agent", version="1.0.0", timestamp=datetime.datetime.now(datetime.UTC), data={"report_id": correlation_id, "stage": "scanner_discovery", "message": "Scanner returned zero candidates.", "scanner_error": scan_response.error, "scanner_data": scan_payload}, error={"code": "NO_SCANNER_CANDIDATES", "message": "Scanner returned zero candidates."})
+            return StandardAgentResponse(status="error", agent_type="manager-agent", version="1.0.0", timestamp=datetime.datetime.now(datetime.UTC), data={"report_id": correlation_id, "stage": "scanner_discovery", "message": "Scanner returned zero candidates.", "scanner_error": scan_response.error, "scanner_data": scan_payload}, metadata=_manager_metadata(), error={"code": "NO_SCANNER_CANDIDATES", "message": "Scanner returned zero candidates."})
         ticker_to_scanner_candidate: Dict[str, Any] = {}
         selected_tickers = []
         for candidate in candidates:
@@ -420,7 +481,7 @@ async def discover_analyze_trade_endpoint(request: DiscoverAnalyzeTradeRequest):
         analysis_results = await asyncio.gather(*[_analyze_single_asset(ticker, correlation_id) for ticker in selected_tickers])
         valid_results = [result for result in analysis_results if "error" not in result]
         if not valid_results:
-            return StandardAgentResponse(status="error", agent_type="manager-agent", version="1.0.0", timestamp=datetime.datetime.now(datetime.UTC), data={"report_id": correlation_id, "stage": "deep_analysis", "scanner_candidates": selected_tickers, "analysis_results": analysis_results}, error={"code": "NO_VALID_ANALYSIS", "message": "Technical/Fundamental agents returned no valid analysis."})
+            return StandardAgentResponse(status="error", agent_type="manager-agent", version="1.0.0", timestamp=datetime.datetime.now(datetime.UTC), data={"report_id": correlation_id, "stage": "deep_analysis", "scanner_candidates": selected_tickers, "analysis_results": analysis_results}, metadata=_manager_metadata(), error={"code": "NO_VALID_ANALYSIS", "message": "Technical/Fundamental agents returned no valid analysis."})
         ranked = []
         for result in valid_results:
             symbol = result["ticker"]
@@ -479,11 +540,8 @@ async def discover_analyze_trade_endpoint(request: DiscoverAnalyzeTradeRequest):
                 execution_result = {"status": "not_attempted", "reason": "; ".join(reason_parts)}
             learning_client = LearningAgentClient(db_client=db_client)
             learning_response = await learning_client.trigger_learning_cycle(account_id=account_id, symbol=winner_symbol, correlation_id=correlation_id, execution_result=execution_result)
-            if learning_response and learning_response.learning_state != "warmup":
-                deltas = learning_response.policy_deltas.model_dump(exclude_none=True)
-                if deltas:
-                    config_manager.apply_deltas(deltas)
-        return StandardAgentResponse(status="success", agent_type="manager-agent", version="1.0.0", timestamp=datetime.datetime.now(datetime.UTC), data={"report_id": correlation_id, "flow": "discover_analyze_trade", "scanner_metadata": scan_payload.get("metadata", {}), "scanner_count": len(candidates), "deep_analysis_count": len(valid_results), "top_10_symbols": selected_tickers, "winner": {"symbol": winner_symbol, "final_verdict": winner_analysis.get("final_verdict"), "analysis_status": winner_analysis.get("status"), "score_breakdown": winner["score_breakdown"], "scanner_candidate": winner["scanner_candidate"], "fundamental_v2": _fundamental_v2_scores(winner_analysis)}, "ranked_candidates": [{"rank": index + 1, "symbol": item["symbol"], "final_verdict": item["analysis"].get("final_verdict"), "analysis_status": item["analysis"].get("status"), "score_breakdown": item["score_breakdown"]} for index, item in enumerate(ranked)], "trade_decision": trade_decision, "execution": execution_result})
+            learning_state = _apply_learning_deltas_if_allowed(learning_response)
+        return StandardAgentResponse(status="success", agent_type="manager-agent", version="1.0.0", timestamp=datetime.datetime.now(datetime.UTC), data={"report_id": correlation_id, "flow": "discover_analyze_trade", "scanner_metadata": scan_payload.get("metadata", {}), "scanner_count": len(candidates), "deep_analysis_count": len(valid_results), "top_10_symbols": selected_tickers, "winner": {"symbol": winner_symbol, "final_verdict": winner_analysis.get("final_verdict"), "analysis_status": winner_analysis.get("status"), "score_breakdown": winner["score_breakdown"], "scanner_candidate": winner["scanner_candidate"], "fundamental_v2": _fundamental_v2_scores(winner_analysis)}, "ranked_candidates": [{"rank": index + 1, "symbol": item["symbol"], "final_verdict": item["analysis"].get("final_verdict"), "analysis_status": item["analysis"].get("status"), "score_breakdown": item["score_breakdown"]} for index, item in enumerate(ranked)], "trade_decision": trade_decision, "execution": execution_result}, metadata=_manager_metadata(risk_context_loaded=True, learning_delta_applied=learning_state["applied"], learning_delta_pending=learning_state["pending"], learning_delta_skipped_reason=learning_state["reason"]))
     except AgentUnavailable as e:
         report_logger.critical(f"An agent is unavailable: {e}")
         raise HTTPException(status_code=503, detail=str(e))
@@ -515,7 +573,7 @@ async def scan_and_analyze_endpoint(request: ScanAndAnalyzeRequest):
             selected_tickers = [get_symbol(c) for c in candidates[:request.max_candidates]]
             if not selected_tickers:
                 multi_report = MultiOrchestratorResponse(multi_report_id=correlation_id, timestamp=datetime.datetime.now(datetime.UTC), execution_summary=ExecutionSummary(total_trades_approved=0, total_trades_executed=0, total_trades_failed=0), results=[])
-                return StandardAgentResponse(status="success", agent_type="manager-agent", version="1.0.0", timestamp=datetime.datetime.now(datetime.UTC), data=multi_report)
+                return StandardAgentResponse(status="success", agent_type="manager-agent", version="1.0.0", timestamp=datetime.datetime.now(datetime.UTC), data=multi_report, metadata=_manager_metadata())
             return await _process_multi_asset_analysis(selected_tickers, account_id, correlation_id)
     except AgentUnavailable as e:
         report_logger.critical(f"Scanner Agent is unavailable: {e}")
