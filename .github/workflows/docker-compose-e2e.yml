@@ -139,11 +139,6 @@ jobs:
             -H "Content-Type: application/json" \
             -d '{"symbols":["AAPL","MSFT"],"screener":"default","exchange":"NASDAQ"}'
 
-      - name: Seed Execution approval
-        working-directory: Manager_Agent
-        run: |
-          python scripts/seed_execution_approval.py
-
       - name: Test Execution Agent Simulator
         run: |
           curl -f -X POST http://localhost:8006/execute \
@@ -159,7 +154,7 @@ jobs:
             "order_type": "market",
             "time_in_force": "GTC",
             "trade_id": "github-actions-e2e-test",
-            "risk_approval_id": "github-actions-risk-approval",
+            "risk_approval_id": "risk-test-approval",
             "final_quantity": 1,
             "guard_plan": {
               "symbol": "AAPL",
