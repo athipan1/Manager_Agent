@@ -2,6 +2,7 @@ import datetime
 from typing import Any, Dict, Optional
 
 from . import config
+from .alerts import alert_service
 from .readiness_config import (
     READINESS_GATE_ENABLED,
     READINESS_GATE_FAIL_CLOSED,
@@ -12,7 +13,7 @@ from .readiness_config import (
     READINESS_GATE_TECH_STEP_BARS,
     READINESS_GATE_TECH_TEST_BARS,
 )
-from .resilient_client import AgentUnavailable, ResilientAgentClient
+from .resilient_client import ResilientAgentClient
 
 
 class ReadinessGateError(Exception):
@@ -87,6 +88,14 @@ async def check_symbol_readiness(symbol: str, correlation_id: str) -> Dict[str, 
         async with ResilientAgentClient(config.FUNDAMENTAL_AGENT_URL) as fund_client:
             fundamental = await fund_client._post("/validate/fundamental", correlation_id, fundamental_payload)
     except Exception as exc:
+        alert_service.emit(
+            "readiness_validation_unavailable",
+            f"Readiness gate unavailable for {symbol}: {exc}",
+            severity="critical",
+            correlation_id=correlation_id,
+            symbol=symbol,
+            metadata={"error": str(exc)},
+        )
         if READINESS_GATE_FAIL_CLOSED or config.TRADING_MODE == "LIVE":
             raise ReadinessGateError(f"readiness gate unavailable for {symbol}: {exc}") from exc
         return {"required": True, "approved": True, "reason": "readiness_gate_unavailable_fail_open", "error": str(exc)}
@@ -101,7 +110,7 @@ async def check_symbol_readiness(symbol: str, correlation_id: str) -> Dict[str, 
             failures.append(f"{item['name']} report is stale or missing timestamp")
 
     approved = not failures
-    return {
+    readiness = {
         "required": True,
         "approved": approved,
         "reason": "validation_passed" if approved else "; ".join(failures),
@@ -109,3 +118,5 @@ async def check_symbol_readiness(symbol: str, correlation_id: str) -> Dict[str, 
         "fundamental": fundamental_result,
         "max_age_seconds": READINESS_GATE_MAX_AGE_SECONDS,
     }
+    alert_service.record_readiness_result(correlation_id=correlation_id, symbol=symbol, readiness=readiness)
+    return readiness
