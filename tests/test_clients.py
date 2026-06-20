@@ -82,6 +82,9 @@ async def test_database_client_create_order(mock_config):
         order_type=OrderType.LIMIT,
         quantity=Decimal("10"),
         price=Decimal("150.00"),
+        risk_approval_id="approval-test-1",
+        final_quantity=10,
+        guard_plan={"symbol": "AAPL", "side": "sell", "quantity": 10, "trigger_price": 140},
     )
     mock_order_id = 12345
 
