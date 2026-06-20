@@ -1,5 +1,5 @@
 from pydantic import BaseModel, ConfigDict, Field, field_validator
-from typing import Optional, Literal, List, Dict, Union
+from typing import Optional, Literal, List, Dict, Union, Any
 from decimal import Decimal
 
 # Import from contracts
@@ -83,3 +83,17 @@ class DiscoverAnalyzeTradeRequest(BaseModel):
     @classmethod
     def convert_account_to_str(cls, v):
         return str(v) if v is not None else v
+
+
+class QueueStatusAlertRequest(BaseModel):
+    queue_name: str = "execution"
+    oldest_age_seconds: Optional[float] = None
+    pending_count: Optional[int] = None
+    correlation_id: Optional[str] = None
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+
+
+class ReconciliationAlertRequest(BaseModel):
+    mismatch_count: int = Field(default=0, ge=0)
+    correlation_id: Optional[str] = None
+    metadata: Dict[str, Any] = Field(default_factory=dict)
