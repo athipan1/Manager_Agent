@@ -28,6 +28,16 @@ def _coerce_model(model_cls: Type[T], value: Any) -> T:
     return model_cls.model_validate(value)
 
 
+def _coerce_dict(value: Any) -> Dict[str, Any]:
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, BaseModel):
+        return value.model_dump(mode="json")
+    if hasattr(value, "model_dump"):
+        return value.model_dump(mode="json")
+    return {}
+
+
 class DatabaseAgentClient(ResilientAgentClient):
     """
     A client for the Database Agent service, built on top of ResilientAgentClient.
@@ -56,6 +66,14 @@ class DatabaseAgentClient(ResilientAgentClient):
         response_data = await self._get(url, correlation_id)
         standard_resp = self.validate_standard_response(response_data)
         return [_coerce_model(Position, p) for p in standard_resp.data]
+
+    async def get_orders(
+        self, account_id: Union[int, str], correlation_id: str
+    ) -> List[Dict[str, Any]]:
+        url = DatabaseEndpoints.ORDERS.format(account_id=account_id)
+        response_data = await self._get(url, correlation_id)
+        standard_resp = self.validate_standard_response(response_data)
+        return [_coerce_dict(row) for row in (standard_resp.data or [])]
 
     async def create_order(
         self,
