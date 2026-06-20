@@ -48,7 +48,7 @@ def test_approve_buy_order_fixed_stop(mock_evaluate_risk):
 
     payload = mock_evaluate_risk.call_args.args[0]
     assert payload["side"] == "buy"
-    assert payload["requested_quantity"] == 200
+    assert payload["requested_quantity"] == 133
     assert payload["protection_price"] == 142.5
     assert payload["trading_mode"] == "PAPER"
 

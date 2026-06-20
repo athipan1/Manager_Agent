@@ -7,6 +7,7 @@ from decimal import Decimal
 import asyncio
 
 from . import config
+from . import database_rows  # noqa: F401 - attaches DatabaseAgentClient.get_orders
 from .models import (
     AgentRequestBody, OrchestratorResponse, ReportDetail, ReportDetails,
     MultiAgentRequestBody, MultiOrchestratorResponse,
@@ -17,12 +18,7 @@ from .agent_client import call_agents
 from .scanner_client import ScannerAgentClient
 from .database_client import DatabaseAgentClient
 from .execution_client import ExecutionAgentClient
-from .contracts import (
-    CreateOrderRequest,
-    StandardAgentResponse,
-    ScannerResponseData,
-    ScannerCandidate,
-)
+from .contracts import CreateOrderRequest, StandardAgentResponse, ScannerResponseData, ScannerCandidate
 from .resilient_client import AgentUnavailable
 from .synthesis import get_weighted_verdict, get_reasons
 from .logger import report_logger
@@ -32,25 +28,20 @@ from .config_manager import config_manager
 from .learning_client import LearningAgentClient
 from .context_numbers import active_value
 
-
 app = FastAPI()
 
 
 @app.get("/health", response_model=StandardAgentResponse)
 async def health_check():
     is_healthy = True
-    downstream_services = {
-        "database_agent": {"status": "healthy", "details": "Connected successfully."},
-    }
+    downstream_services = {"database_agent": {"status": "healthy", "details": "Connected successfully."}}
     try:
         async with DatabaseAgentClient() as db_client:
             await db_client.health(correlation_id=str(uuid.uuid4()))
     except Exception as e:
         is_healthy = False
-        downstream_services["database_agent"]["status"] = "unhealthy"
-        downstream_services["database_agent"]["details"] = f"Connection failed: {str(e)}"
+        downstream_services["database_agent"] = {"status": "unhealthy", "details": f"Connection failed: {str(e)}"}
         report_logger.warning(f"Health check failed: Database Agent connection error: {e}")
-
     content = StandardAgentResponse(
         status="success" if is_healthy else "error",
         agent_type="manager-agent",
@@ -84,8 +75,7 @@ def _normalize_score(value: Any) -> float:
 
 
 def _agent_data(resp: Union[StandardAgentResponse, Dict[str, Any], Any]) -> Dict[str, Any]:
-    resp_dict = _response_to_dict(resp)
-    data = resp_dict.get("data") or {}
+    data = (_response_to_dict(resp).get("data") or {})
     if hasattr(data, "model_dump"):
         data = data.model_dump(mode="json")
     return data if isinstance(data, dict) else {}
@@ -107,11 +97,7 @@ def _process_agent_response(resp: Union[StandardAgentResponse, Dict[str, Any]], 
         action if agent_type == "technical" else "hold",
         action if agent_type == "fundamental" else "hold",
     )
-    return ReportDetail(
-        action=action,
-        score=score,
-        reason=reason or (tech_reason if agent_type == "technical" else fund_reason),
-    )
+    return ReportDetail(action=action, score=score, reason=reason or (tech_reason if agent_type == "technical" else fund_reason))
 
 
 def _as_decimal(value: Any) -> Decimal:
@@ -137,9 +123,7 @@ def _total_position_exposure(positions: List[Any]) -> Decimal:
 
 async def _fetch_context_value(db_client: DatabaseAgentClient, account_id: Union[int, str], correlation_id: str) -> Decimal:
     try:
-        response_data = await db_client._get(f"/accounts/{account_id}/orders", correlation_id)
-        standard_resp = db_client.validate_standard_response(response_data)
-        rows = standard_resp.data or []
+        rows = await db_client.get_orders(account_id, correlation_id)
         return active_value(rows)
     except Exception as exc:
         if config.TRADING_MODE == "LIVE":
@@ -148,13 +132,7 @@ async def _fetch_context_value(db_client: DatabaseAgentClient, account_id: Union
         return Decimal("0")
 
 
-async def _persist_signal(
-    db_client: DatabaseAgentClient,
-    account_id: Union[int, str],
-    analysis_result: dict,
-    correlation_id: str,
-    extra_metadata: Optional[Dict[str, Any]] = None,
-) -> None:
+async def _persist_signal(db_client: DatabaseAgentClient, account_id: Union[int, str], analysis_result: dict, correlation_id: str, extra_metadata: Optional[Dict[str, Any]] = None) -> None:
     try:
         details = analysis_result.get("details")
         tech_detail = details.technical if details else None
