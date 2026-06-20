@@ -145,24 +145,26 @@ jobs:
             -H "Content-Type: application/json" \
             -H "X-API-KEY: dev_execution_key" \
             -H "Idempotency-Key: github-actions-e2e-test" \
-            -d '{
-              "account_id": 1,
+            --data-binary @- <<'JSON'
+          {
+            "account_id": 1,
+            "symbol": "AAPL",
+            "side": "buy",
+            "quantity": 1,
+            "order_type": "market",
+            "time_in_force": "GTC",
+            "trade_id": "github-actions-e2e-test",
+            "risk_approval_id": "risk-test-approval",
+            "final_quantity": 1,
+            "guard_plan": {
               "symbol": "AAPL",
-              "side": "buy",
+              "side": "sell",
               "quantity": 1,
-              "order_type": "market",
-              "time_in_force": "GTC",
-              "trade_id": "github-actions-e2e-test",
-              "risk_approval_id": "github-actions-risk-approval",
-              "final_quantity": 1,
-              "guard_plan": {
-                "symbol": "AAPL",
-                "side": "sell",
-                "quantity": 1,
-                "trigger_price": 95,
-                "time_in_force": "GTC"
-              }
-            }'
+              "trigger_price": 95,
+              "time_in_force": "GTC"
+            }
+          }
+          JSON
 
       - name: Show logs on failure
         if: failure()

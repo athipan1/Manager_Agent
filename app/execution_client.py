@@ -3,10 +3,11 @@ from .contracts import (
     CreateOrderRequest,
     CreateOrderResponse,
     ExecutionEndpoints,
-    StandardAgentResponse
+    StandardAgentResponse,
 )
 from . import config
 from .logger import report_logger
+from .readiness_gate import ReadinessGateError, check_symbol_readiness, readiness_required
 
 
 class ExecutionAgentClient(ResilientAgentClient):
@@ -16,10 +17,7 @@ class ExecutionAgentClient(ResilientAgentClient):
 
     def __init__(self):
         headers = {"X-API-KEY": config.EXECUTION_API_KEY}
-        super().__init__(
-            base_url=config.EXECUTION_AGENT_URL,
-            headers=headers
-        )
+        super().__init__(base_url=config.EXECUTION_AGENT_URL, headers=headers)
 
     async def create_order(
         self,
@@ -27,14 +25,26 @@ class ExecutionAgentClient(ResilientAgentClient):
         correlation_id: str,
     ) -> CreateOrderResponse:
         """
-        Submits a new trade order to the Execution Agent.
+        Submits a new order to the Execution Agent after Manager readiness checks.
         """
         endpoint = ExecutionEndpoints.EXECUTE
 
         try:
-            # Serialize payload (Decimal-safe)
+            if readiness_required():
+                readiness = await check_symbol_readiness(order_details.symbol, correlation_id)
+                report_logger.info(
+                    f"Manager readiness check for {order_details.symbol}: {readiness}, "
+                    f"correlation_id={correlation_id}"
+                )
+                if not readiness.get("approved"):
+                    return CreateOrderResponse(
+                        order_id="readiness-gate",
+                        client_order_id=order_details.client_order_id,
+                        status="failed",
+                        reason=f"Manager readiness gate rejected execution: {readiness.get('reason')}",
+                    )
+
             payload = order_details.model_dump(mode="json")
-            # Map client_order_id to trade_id for Execution Agent
             if "client_order_id" in payload and "trade_id" not in payload:
                 payload["trade_id"] = payload.pop("client_order_id")
 
@@ -49,13 +59,23 @@ class ExecutionAgentClient(ResilientAgentClient):
                 url=endpoint,
                 correlation_id=correlation_id,
                 json_data=payload,
-                extra_headers={
-                    "Idempotency-Key": idempotency_key
-                },
+                extra_headers={"Idempotency-Key": idempotency_key},
             )
 
             standard_resp = self.validate_standard_response(response_data)
             return CreateOrderResponse.model_validate(standard_resp.data)
+
+        except ReadinessGateError as e:
+            report_logger.error(
+                f"Readiness gate failed for {order_details.symbol}: {e}, "
+                f"correlation_id={correlation_id}"
+            )
+            return CreateOrderResponse(
+                order_id="readiness-gate",
+                client_order_id=order_details.client_order_id,
+                status="failed",
+                reason=str(e),
+            )
 
         except AgentUnavailable as e:
             report_logger.error(
@@ -64,7 +84,7 @@ class ExecutionAgentClient(ResilientAgentClient):
             )
             raise
 
-        except Exception as e:
+        except Exception:
             report_logger.exception(
                 "Unexpected error while creating order "
                 f"(correlation_id={correlation_id})"
