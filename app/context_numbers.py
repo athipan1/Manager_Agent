@@ -22,6 +22,9 @@ def as_dict(item: Any) -> Dict[str, Any]:
 
 
 def active_value(rows: List[Any]) -> Decimal:
+    if not isinstance(rows, list):
+        raise TypeError("context rows must be a list")
+
     total = Decimal("0")
     for item in rows:
         row = as_dict(item)
