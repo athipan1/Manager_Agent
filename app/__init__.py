@@ -10,13 +10,8 @@ class ManagerFastAPI(_OriginalFastAPI):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        try:
-            from .alert_routes import router as alert_router
-            self.include_router(alert_router)
-        except Exception:
-            # Do not block app boot if optional alert routes fail to import.
-            # Main app health and trading safety paths must remain available.
-            pass
+        from .alert_routes import router as alert_router
+        self.include_router(alert_router)
 
 
 _fastapi.FastAPI = ManagerFastAPI
