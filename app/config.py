@@ -80,6 +80,7 @@ MAX_ASSET_BIAS = float(os.getenv("MAX_ASSET_BIAS", 1.0))
 LEARNING_MODE = os.getenv("LEARNING_MODE", "conservative")
 WINDOW_SIZE = int(os.getenv("WINDOW_SIZE", 50))
 PREFERRED_REGIME = os.getenv("PREFERRED_REGIME", "neutral")
+APPLY_LEARNING_DELTAS = _env_bool("APPLY_LEARNING_DELTAS", False)
 
 # Database Agent Client Parameters
 DB_CLIENT_TIMEOUT = int(os.getenv("DB_CLIENT_TIMEOUT", 10))
