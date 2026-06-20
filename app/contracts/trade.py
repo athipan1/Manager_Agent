@@ -1,5 +1,5 @@
 from pydantic import BaseModel, Field, field_validator, AliasChoices
-from typing import Optional, Literal, Dict, Union
+from typing import Optional, Literal, Dict, Union, Any
 from decimal import Decimal
 from enum import Enum
 import datetime
@@ -34,6 +34,10 @@ class CreateOrderRequest(BaseModel):
     price: Optional[float] = None
     quantity: int
     time_in_force: TimeInForce = TimeInForce.GTC
+    risk_approval_id: str
+    final_quantity: int
+    guard_plan: Optional[Dict[str, Any]] = None
+    protective_exit: Optional[Dict[str, Any]] = None
 
     @field_validator('account_id', mode='before')
     @classmethod
@@ -68,8 +72,8 @@ class Order(BaseModel):
     side: Literal["buy", "sell"]
     quantity: int
     price: Decimal
-    status: Literal["pending", "executed", "cancelled", "failed"]
-    timestamp: datetime.datetime
+    status: Literal["pending", "placed", "partially_filled", "executed", "cancelled", "failed"]
+    timestamp: Optional[datetime.datetime] = None
 
     @field_validator('order_id', 'account_id', mode='before')
     @classmethod
