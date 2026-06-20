@@ -1,9 +1,22 @@
 import os
-from decimal import Decimal
+from decimal import Decimal, ROUND_FLOOR
 from typing import Any, Dict, Optional
 
 from . import config
 from .risk_agent_client import evaluate_risk
+
+
+"""
+Risk payload exposure contract:
+
+- current_symbol_exposure: existing filled position exposure for the target symbol only.
+- current_total_exposure: existing filled portfolio position exposure only; it must not include open/pending orders.
+- open_orders_exposure: outstanding order exposure for pending/placed/partially-filled orders.
+- requested_quantity: desired quantity for the new order being reviewed.
+
+Risk_Agent owns the projected exposure calculation:
+current_total_exposure + open_orders_exposure + new_order_position_value.
+"""
 
 
 def _as_float(value: Any, default: float = 0.0) -> float:
@@ -41,6 +54,35 @@ def _default_protection_price(side: str, entry_price: Decimal, fixed_pct: Decima
     return entry_price
 
 
+def _floor_quantity(value: Decimal) -> int:
+    if value <= Decimal("0"):
+        return 0
+    return int(value.to_integral_value(rounding=ROUND_FLOOR))
+
+
+def _default_requested_quantity(
+    *,
+    side: str,
+    portfolio_value: Decimal,
+    risk_per_trade: Decimal,
+    max_position_pct: Decimal,
+    entry_price: Decimal,
+    protection_price: Decimal,
+    current_position_size: int,
+) -> int:
+    if side == "sell" and current_position_size:
+        return max(0, int(abs(current_position_size)))
+
+    per_unit_risk = abs(entry_price - protection_price)
+    risk_budget = portfolio_value * risk_per_trade
+    max_position_value = portfolio_value * max_position_pct
+
+    risk_limited_qty = _floor_quantity(risk_budget / per_unit_risk) if per_unit_risk > 0 else 0
+    value_limited_qty = _floor_quantity(max_position_value / entry_price) if entry_price > 0 else 0
+    candidates = [qty for qty in (risk_limited_qty, value_limited_qty) if qty > 0]
+    return min(candidates) if candidates else 0
+
+
 def _build_result(
     approved: bool,
     reason: str,
@@ -49,7 +91,7 @@ def _build_result(
     entry_price: Decimal,
     position_size: int = 0,
     protection_price: Optional[Decimal] = None,
-    risk_response: Optional[Dict[str, Any]] = None,
+    risk_response: Optional[Dict[str, Any]] = None
 ) -> Dict[str, Any]:
     risk_amount = Decimal("0")
     if protection_price is not None and position_size > 0:
@@ -88,6 +130,7 @@ def assess_trade(
     current_total_exposure: Optional[Decimal] = None,
     open_orders_exposure: Optional[Decimal] = None,
     margin_multiplier: Optional[Decimal] = None,
+    requested_quantity: Optional[int] = None,
 ) -> Dict[str, Any]:
     side = _normalise_action(action)
 
@@ -131,16 +174,27 @@ def assess_trade(
     if margin <= Decimal("0"):
         return _build_result(False, "Risk_Agent check failed: margin/leverage multiplier must be greater than zero.", symbol, side, entry_price, protection_price=protection_price)
 
+    desired_quantity = int(requested_quantity) if requested_quantity is not None else _default_requested_quantity(
+        side=side,
+        portfolio_value=portfolio_value,
+        risk_per_trade=risk_per_trade,
+        max_position_pct=max_position_pct,
+        entry_price=entry_price,
+        protection_price=protection_price,
+        current_position_size=current_position_size,
+    )
+    desired_quantity = max(0, desired_quantity)
+
     payload = {
         "account_id": os.getenv("DEFAULT_ACCOUNT_ID", "1"),
         "symbol": symbol,
         "side": side,
         "entry_price": _as_float(entry_price),
         "protection_price": _as_float(protection_price),
-        "requested_quantity": int(current_position_size or 0),
+        "requested_quantity": desired_quantity,
         "equity": _as_float(portfolio_value),
         "current_symbol_exposure": _as_float(symbol_exposure),
-        "current_total_exposure": _as_float(total_exposure + pending_exposure),
+        "current_total_exposure": _as_float(total_exposure),
         "open_orders_exposure": _as_float(pending_exposure),
         "margin_multiplier": _as_float(margin, 1.0),
         "trading_mode": config.TRADING_MODE,
