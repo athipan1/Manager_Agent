@@ -192,6 +192,9 @@ services:
       API_KEY: dev_execution_key
       DB_AGENT_URL: http://database-agent:8004
       DATABASE_AGENT_API_KEY: dev_database_key
+      TRADING_ENABLED: ${TRADING_ENABLED:-false}
+      TRADING_MODE: ${TRADING_MODE:-PAPER}
+      ALLOW_LIVE_TRADING: ${ALLOW_LIVE_TRADING:-false}
       DRY_RUN: ${DRY_RUN:-true}
       BROKER_MODE: ${BROKER_MODE:-SIMULATOR}
       ALPACA_API_KEY_ID: ${ALPACA_API_KEY_ID:-}
