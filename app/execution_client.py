@@ -6,8 +6,13 @@ from .contracts import (
     StandardAgentResponse,
 )
 from . import config
+from .alerts import alert_service
 from .logger import report_logger
 from .readiness_gate import ReadinessGateError, check_symbol_readiness, readiness_required
+
+
+def _is_rejected_status(status) -> bool:
+    return str(status).lower() in {"failed", "rejected", "cancelled", "error"}
 
 
 class ExecutionAgentClient(ResilientAgentClient):
@@ -37,11 +42,18 @@ class ExecutionAgentClient(ResilientAgentClient):
                     f"correlation_id={correlation_id}"
                 )
                 if not readiness.get("approved"):
+                    reason = f"Manager readiness gate rejected execution: {readiness.get('reason')}"
+                    alert_service.record_approval_reject(
+                        correlation_id=correlation_id,
+                        symbol=order_details.symbol,
+                        reason=reason,
+                        metadata={"source": "readiness_gate", "readiness": readiness},
+                    )
                     return CreateOrderResponse(
                         order_id="readiness-gate",
                         client_order_id=order_details.client_order_id,
                         status="failed",
-                        reason=f"Manager readiness gate rejected execution: {readiness.get('reason')}",
+                        reason=reason,
                     )
 
             payload = order_details.model_dump(mode="json")
@@ -63,12 +75,26 @@ class ExecutionAgentClient(ResilientAgentClient):
             )
 
             standard_resp = self.validate_standard_response(response_data)
-            return CreateOrderResponse.model_validate(standard_resp.data)
+            response = CreateOrderResponse.model_validate(standard_resp.data)
+            if _is_rejected_status(response.status):
+                alert_service.record_approval_reject(
+                    correlation_id=correlation_id,
+                    symbol=order_details.symbol,
+                    reason=response.reason or f"Execution status {response.status}",
+                    metadata={"source": "execution_agent", "order_id": response.order_id},
+                )
+            return response
 
         except ReadinessGateError as e:
             report_logger.error(
                 f"Readiness gate failed for {order_details.symbol}: {e}, "
                 f"correlation_id={correlation_id}"
+            )
+            alert_service.record_approval_reject(
+                correlation_id=correlation_id,
+                symbol=order_details.symbol,
+                reason=str(e),
+                metadata={"source": "readiness_gate_exception"},
             )
             return CreateOrderResponse(
                 order_id="readiness-gate",
