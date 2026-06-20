@@ -30,12 +30,17 @@ from .context_numbers import active_value
 app = FastAPI()
 
 
+def _now() -> datetime.datetime:
+    return datetime.datetime.now(datetime.UTC)
+
+
 def _manager_metadata(
     *,
     risk_context_loaded: bool = False,
     learning_delta_applied: bool = False,
     learning_delta_pending: bool = False,
     learning_delta_skipped_reason: Optional[str] = None,
+    dry_run: bool = False,
 ) -> Dict[str, Any]:
     metadata = {
         "trading_mode": config.TRADING_MODE,
@@ -45,6 +50,7 @@ def _manager_metadata(
         "learning_delta_auto_apply_enabled": config.APPLY_LEARNING_DELTAS,
         "learning_delta_applied": learning_delta_applied,
         "learning_delta_pending": learning_delta_pending,
+        "dry_run": dry_run,
     }
     if learning_delta_skipped_reason:
         metadata["learning_delta_skipped_reason"] = learning_delta_skipped_reason
@@ -54,42 +60,14 @@ def _manager_metadata(
 def _apply_learning_deltas_if_allowed(learning_response: Any) -> Dict[str, Any]:
     if not learning_response or learning_response.learning_state == "warmup":
         return {"applied": False, "pending": False, "reason": "no_active_learning_delta"}
-
     deltas = learning_response.policy_deltas.model_dump(exclude_none=True)
     if not deltas:
         return {"applied": False, "pending": False, "reason": "empty_learning_delta"}
-
     if not config.APPLY_LEARNING_DELTAS:
         report_logger.warning("Learning policy deltas generated but not applied because APPLY_LEARNING_DELTAS=false.")
         return {"applied": False, "pending": True, "reason": "approval_required"}
-
     config_manager.apply_deltas(deltas)
     return {"applied": True, "pending": False, "reason": None}
-
-
-@app.get("/health", response_model=StandardAgentResponse)
-async def health_check():
-    is_healthy = True
-    downstream_services = {"database_agent": {"status": "healthy", "details": "Connected successfully."}}
-    try:
-        async with DatabaseAgentClient() as db_client:
-            await db_client.health(correlation_id=str(uuid.uuid4()))
-    except Exception as e:
-        is_healthy = False
-        downstream_services["database_agent"] = {"status": "unhealthy", "details": f"Connection failed: {str(e)}"}
-        report_logger.warning(f"Health check failed: Database Agent connection error: {e}")
-    content = StandardAgentResponse(
-        status="success" if is_healthy else "error",
-        agent_type="manager-agent",
-        version="1.0.0",
-        timestamp=datetime.datetime.now(datetime.UTC),
-        data={"dependencies": downstream_services},
-        metadata=_manager_metadata(),
-    )
-    return JSONResponse(
-        status_code=status.HTTP_200_OK if is_healthy else status.HTTP_503_SERVICE_UNAVAILABLE,
-        content=content.model_dump(mode="json"),
-    )
 
 
 def _response_to_dict(resp: Union[StandardAgentResponse, Dict[str, Any], Any]) -> Dict[str, Any]:
@@ -146,6 +124,20 @@ def _as_decimal(value: Any) -> Decimal:
         return Decimal("0")
 
 
+def _jsonable(value: Any) -> Any:
+    if isinstance(value, Decimal):
+        return float(value)
+    if isinstance(value, datetime.datetime):
+        return value.isoformat()
+    if hasattr(value, "model_dump"):
+        return value.model_dump(mode="json")
+    if isinstance(value, dict):
+        return {k: _jsonable(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_jsonable(v) for v in value]
+    return value
+
+
 def _position_exposure(position: Any) -> Decimal:
     if not position:
         return Decimal("0")
@@ -167,6 +159,82 @@ async def _fetch_context_value(db_client: DatabaseAgentClient, account_id: Union
             raise AgentUnavailable(f"Required portfolio context unavailable: {exc}") from exc
         report_logger.warning(f"Portfolio context unavailable in PAPER mode; using zero value. correlation_id={correlation_id}: {exc}")
         return Decimal("0")
+
+
+def _ensure_risk_approval_id(trade_decision: Optional[Dict[str, Any]], correlation_id: str) -> Optional[str]:
+    if not trade_decision:
+        return None
+    risk_data = ((trade_decision.get("risk_agent_response") or {}).get("data") or {})
+    approval_id = risk_data.get("risk_approval_id") or risk_data.get("approval_id")
+    if not approval_id:
+        approval_id = f"risk-{correlation_id}-{trade_decision.get('symbol', 'unknown')}"
+    trade_decision["risk_approval_id"] = str(approval_id)
+    return str(approval_id)
+
+
+def _dry_run_report(
+    *,
+    correlation_id: str,
+    flow: str,
+    symbol: Optional[str],
+    analysis_result: Optional[Dict[str, Any]],
+    trade_decision: Optional[Dict[str, Any]],
+    execution_result: Optional[Dict[str, Any]],
+    context_value: Decimal,
+    dry_run: bool,
+) -> Dict[str, Any]:
+    return {
+        "report_id": correlation_id,
+        "flow": flow,
+        "symbol": symbol,
+        "dry_run": dry_run,
+        "trading_mode": config.TRADING_MODE,
+        "trading_enabled": config.TRADING_ENABLED,
+        "risk_context": {"open_orders_exposure": _jsonable(context_value), "loaded": True},
+        "analysis": _jsonable(analysis_result),
+        "trade_decision": _jsonable(trade_decision),
+        "risk_approval_id": trade_decision.get("risk_approval_id") if trade_decision else None,
+        "execution": _jsonable(execution_result),
+        "generated_at": _now().isoformat(),
+    }
+
+
+async def _audit_trade_decision(
+    *,
+    db_client: Optional[DatabaseAgentClient],
+    account_id: Union[int, str],
+    correlation_id: str,
+    flow: str,
+    symbol: str,
+    analysis_result: Optional[Dict[str, Any]],
+    trade_decision: Optional[Dict[str, Any]],
+    execution_result: Optional[Dict[str, Any]],
+    context_value: Decimal,
+    dry_run: bool = False,
+) -> Dict[str, Any]:
+    audit = _dry_run_report(
+        correlation_id=correlation_id,
+        flow=flow,
+        symbol=symbol,
+        analysis_result=analysis_result,
+        trade_decision=trade_decision,
+        execution_result=execution_result,
+        context_value=context_value,
+        dry_run=dry_run,
+    )
+    report_logger.info(f"trade_decision_audit={_jsonable(audit)}")
+    if db_client is not None:
+        try:
+            await db_client.save_signal(
+                account_id=account_id,
+                symbol=symbol,
+                correlation_id=correlation_id,
+                final_verdict=(analysis_result or {}).get("final_verdict"),
+                metadata={"audit": _jsonable(audit), "risk_approval_id": audit.get("risk_approval_id"), "dry_run": dry_run, "flow": flow},
+            )
+        except Exception as exc:
+            report_logger.warning(f"Failed to persist trade decision audit for {symbol}: {exc}, correlation_id={correlation_id}")
+    return audit
 
 
 async def _persist_signal(db_client: DatabaseAgentClient, account_id: Union[int, str], analysis_result: dict, correlation_id: str, extra_metadata: Optional[Dict[str, Any]] = None) -> None:
@@ -195,8 +263,9 @@ async def _persist_signal(db_client: DatabaseAgentClient, account_id: Union[int,
 async def _execute_trade(exec_client: ExecutionAgentClient, trade_decision: dict, account_id: Union[int, str], correlation_id: str) -> dict:
     ticker = trade_decision["symbol"]
     final_verdict = trade_decision["action"]
-    quantity = trade_decision["position_size"]
+    quantity = int(trade_decision["position_size"])
     entry_price = trade_decision.get("entry_price", 0)
+    risk_approval_id = _ensure_risk_approval_id(trade_decision, correlation_id)
     try:
         side = "buy" if "buy" in final_verdict.lower() else "sell"
         order_request = CreateOrderRequest(
@@ -207,15 +276,18 @@ async def _execute_trade(exec_client: ExecutionAgentClient, trade_decision: dict
             price=float(entry_price),
             client_order_id=str(uuid.uuid4()),
             account_id=account_id,
+            risk_approval_id=risk_approval_id,
+            final_quantity=quantity,
+            guard_plan=trade_decision.get("guard_plan"),
         )
         async with exec_client as client:
             response = await client.create_order(order_request, correlation_id)
         if str(response.status).upper() in ["PENDING", "PLACED", "EXECUTED"]:
-            return {"status": "submitted", "order_id": response.order_id, "details": response.model_dump()}
-        return {"status": "rejected", "reason": f"Execution Agent returned status: {response.status}"}
+            return {"status": "submitted", "order_id": response.order_id, "risk_approval_id": risk_approval_id, "details": response.model_dump()}
+        return {"status": "rejected", "risk_approval_id": risk_approval_id, "reason": f"Execution Agent returned status: {response.status}"}
     except Exception as e:
         report_logger.exception(f"Trade submission failed for {ticker}: {e}, correlation_id={correlation_id}")
-        return {"status": "failed", "reason": str(e)}
+        return {"status": "failed", "risk_approval_id": risk_approval_id, "reason": str(e)}
 
 
 async def _analyze_single_asset(ticker: str, correlation_id: str) -> dict:
@@ -317,8 +389,7 @@ def _score_deep_analysis(analysis_result: Dict[str, Any], scanner_score: float) 
     return {"scanner_score": round(scanner_score, 4), "technical_score": round(tech_score, 4), "fundamental_score": round(fund_score, 4), "verdict_score": round(verdict_score, 4), "final_opportunity_score": round(final_score, 4)}
 
 
-@app.post("/analyze", response_model=StandardAgentResponse)
-async def analyze_ticker(request: AgentRequestBody):
+async def _run_single_analysis_flow(request: AgentRequestBody, *, dry_run: bool = False) -> StandardAgentResponse:
     correlation_id = str(uuid.uuid4())
     ticker = request.ticker
     account_id = request.account_id if request.account_id is not None else config_manager.get("DEFAULT_ACCOUNT_ID")
@@ -332,7 +403,7 @@ async def analyze_ticker(request: AgentRequestBody):
                 raise HTTPException(status_code=500, detail=analysis_result["error"])
             final_verdict = analysis_result["final_verdict"]
             await _persist_signal(db_client, account_id, analysis_result, correlation_id)
-            execution_result = None
+            execution_result = {"status": "not_attempted", "reason": "No trade decision."}
             trade_decision = None
             if final_verdict in ["buy", "sell", "strong_buy", "strong_sell"]:
                 portfolio_value = balance.cash_balance if balance else 0
@@ -354,31 +425,60 @@ async def analyze_ticker(request: AgentRequestBody):
                     open_orders_exposure=context_value,
                     margin_multiplier=Decimal(str(config.DEFAULT_MARGIN_MULTIPLIER)),
                 )
-                if trade_decision.get("approved"):
+                _ensure_risk_approval_id(trade_decision, correlation_id)
+                if dry_run:
+                    execution_result = {"status": "dry_run", "reason": "Execution skipped by dry-run mode.", "risk_approval_id": trade_decision.get("risk_approval_id")}
+                elif trade_decision.get("approved"):
                     async with ExecutionAgentClient() as exec_client:
                         execution_result = await _execute_trade(exec_client, trade_decision, account_id, correlation_id)
                 else:
-                    execution_result = {"status": "rejected", "reason": trade_decision.get("reason")}
-            report = OrchestratorResponse(report_id=correlation_id, ticker=ticker.upper(), timestamp=datetime.datetime.now(datetime.UTC), final_verdict=final_verdict, status=analysis_result["status"], details=analysis_result["details"])
-            learning_client = LearningAgentClient(db_client=db_client)
-            learning_response = await learning_client.trigger_learning_cycle(account_id=account_id, symbol=ticker, correlation_id=correlation_id, execution_result=execution_result)
-            learning_state = _apply_learning_deltas_if_allowed(learning_response)
-            return StandardAgentResponse(
-                status="success",
-                agent_type="manager-agent",
-                version="1.0.0",
-                timestamp=datetime.datetime.now(datetime.UTC),
-                data=report,
-                metadata=_manager_metadata(
-                    risk_context_loaded=True,
-                    learning_delta_applied=learning_state["applied"],
-                    learning_delta_pending=learning_state["pending"],
-                    learning_delta_skipped_reason=learning_state["reason"],
-                ),
-            )
+                    execution_result = {"status": "rejected", "reason": trade_decision.get("reason"), "risk_approval_id": trade_decision.get("risk_approval_id")}
+            audit = await _audit_trade_decision(db_client=db_client, account_id=account_id, correlation_id=correlation_id, flow="analyze", symbol=ticker, analysis_result=analysis_result, trade_decision=trade_decision, execution_result=execution_result, context_value=context_value, dry_run=dry_run)
+            report = OrchestratorResponse(report_id=correlation_id, ticker=ticker.upper(), timestamp=_now(), final_verdict=final_verdict, status=analysis_result["status"], details=analysis_result["details"])
+            learning_state = {"applied": False, "pending": False, "reason": "dry_run" if dry_run else "no_learning_response"}
+            if not dry_run:
+                learning_client = LearningAgentClient(db_client=db_client)
+                learning_response = await learning_client.trigger_learning_cycle(account_id=account_id, symbol=ticker, correlation_id=correlation_id, execution_result=execution_result)
+                learning_state = _apply_learning_deltas_if_allowed(learning_response)
+            data = report if not dry_run else audit
+            return StandardAgentResponse(status="success", agent_type="manager-agent", version="1.0.0", timestamp=_now(), data=data, metadata=_manager_metadata(risk_context_loaded=True, learning_delta_applied=learning_state["applied"], learning_delta_pending=learning_state["pending"], learning_delta_skipped_reason=learning_state["reason"], dry_run=dry_run))
     except AgentUnavailable as e:
         report_logger.critical(f"An agent is unavailable: {e}")
         raise HTTPException(status_code=503, detail=str(e))
+
+
+@app.get("/health", response_model=StandardAgentResponse)
+async def health_check():
+    is_healthy = True
+    downstream_services = {"database_agent": {"status": "healthy", "details": "Connected successfully."}}
+    try:
+        async with DatabaseAgentClient() as db_client:
+            await db_client.health(correlation_id=str(uuid.uuid4()))
+    except Exception as e:
+        is_healthy = False
+        downstream_services["database_agent"] = {"status": "unhealthy", "details": f"Connection failed: {str(e)}"}
+        report_logger.warning(f"Health check failed: Database Agent connection error: {e}")
+    content = StandardAgentResponse(status="success" if is_healthy else "error", agent_type="manager-agent", version="1.0.0", timestamp=_now(), data={"dependencies": downstream_services}, metadata=_manager_metadata())
+    return JSONResponse(status_code=status.HTTP_200_OK if is_healthy else status.HTTP_503_SERVICE_UNAVAILABLE, content=content.model_dump(mode="json"))
+
+
+@app.post("/analyze", response_model=StandardAgentResponse)
+async def analyze_ticker(request: AgentRequestBody):
+    return await _run_single_analysis_flow(request, dry_run=False)
+
+
+@app.post("/dry-run/analyze", response_model=StandardAgentResponse)
+async def dry_run_analyze_ticker(request: AgentRequestBody):
+    return await _run_single_analysis_flow(request, dry_run=True)
+
+
+@app.post("/trade-replay", response_model=StandardAgentResponse)
+async def trade_replay(payload: Dict[str, Any]):
+    correlation_id = str(uuid.uuid4())
+    context_value = _as_decimal((payload.get("risk_context") or {}).get("open_orders_exposure", 0))
+    audit = _dry_run_report(correlation_id=correlation_id, flow="trade_replay", symbol=payload.get("symbol"), analysis_result=payload.get("analysis"), trade_decision=payload.get("trade_decision"), execution_result=payload.get("execution"), context_value=context_value, dry_run=True)
+    report_logger.info(f"trade_replay_report={_jsonable(audit)}")
+    return StandardAgentResponse(status="success", agent_type="manager-agent", version="1.0.0", timestamp=_now(), data=audit, metadata=_manager_metadata(risk_context_loaded=True, dry_run=True))
 
 
 async def _process_multi_asset_analysis(tickers: List[str], account_id: Union[int, str], correlation_id: str) -> StandardAgentResponse:
@@ -392,20 +492,9 @@ async def _process_multi_asset_analysis(tickers: List[str], account_id: Union[in
             valid_results = [res for res in analysis_results if "error" not in res]
             for result in valid_results:
                 await _persist_signal(db_client, account_id, result, correlation_id, extra_metadata={"batch": True})
-            trade_decisions = assess_portfolio_trades(
-                analysis_results=valid_results,
-                cash_balance=Decimal(cash_balance),
-                existing_positions=positions,
-                per_request_risk_budget=Decimal(config_manager.get("PER_REQUEST_RISK_BUDGET", "0.1")),
-                max_total_exposure=Decimal(config_manager.get("MAX_TOTAL_EXPOSURE", "0.8")),
-                risk_per_trade=Decimal(config_manager.get("RISK_PER_TRADE", "0.01")),
-                fixed_stop_loss_pct=Decimal(config_manager.get("STOP_LOSS_PERCENTAGE", "0.1")),
-                enable_technical_stop=config_manager.get("ENABLE_TECHNICAL_STOP", True),
-                max_position_pct=Decimal(config_manager.get("MAX_POSITION_PERCENTAGE", "0.2")),
-                min_position_value=Decimal(config_manager.get("MIN_POSITION_VALUE", "500")),
-                open_orders_exposure=context_value,
-                margin_multiplier=Decimal(str(config.DEFAULT_MARGIN_MULTIPLIER)),
-            )
+            trade_decisions = assess_portfolio_trades(analysis_results=valid_results, cash_balance=Decimal(cash_balance), existing_positions=positions, per_request_risk_budget=Decimal(config_manager.get("PER_REQUEST_RISK_BUDGET", "0.1")), max_total_exposure=Decimal(config_manager.get("MAX_TOTAL_EXPOSURE", "0.8")), risk_per_trade=Decimal(config_manager.get("RISK_PER_TRADE", "0.01")), fixed_stop_loss_pct=Decimal(config_manager.get("STOP_LOSS_PERCENTAGE", "0.1")), enable_technical_stop=config_manager.get("ENABLE_TECHNICAL_STOP", True), max_position_pct=Decimal(config_manager.get("MAX_POSITION_PERCENTAGE", "0.2")), min_position_value=Decimal(config_manager.get("MIN_POSITION_VALUE", "500")), open_orders_exposure=context_value, margin_multiplier=Decimal(str(config.DEFAULT_MARGIN_MULTIPLIER)))
+            for decision in trade_decisions:
+                _ensure_risk_approval_id(decision, correlation_id)
             approved_trades = [d for d in trade_decisions if d.get("approved")]
             async with ExecutionAgentClient() as exec_client:
                 execution_outcomes = await asyncio.gather(*[_execute_trade(exec_client, decision, account_id, correlation_id) for decision in approved_trades])
@@ -415,16 +504,13 @@ async def _process_multi_asset_analysis(tickers: List[str], account_id: Union[in
             for result in valid_results:
                 ticker = result["ticker"]
                 analysis_result = AnalysisResult(ticker=ticker, final_verdict=result["final_verdict"], status=result["status"], details=result["details"])
-                decision = ticker_to_decision.get(ticker, {"approved": False, "reason": "Not analyzed or verdict was hold."})
+                decision = ticker_to_decision.get(ticker, {"approved": False, "reason": "Not analyzed or verdict was hold.", "symbol": ticker})
                 if decision.get("approved"):
                     outcome = ticker_to_execution.get(ticker) or {"status": "failed"}
-                    exec_status = outcome.get("status", "failed")
-                    exec_details = outcome.get("details")
-                    exec_reason = outcome.get("reason") or decision.get("reason")
+                    exec_status, exec_details, exec_reason = outcome.get("status", "failed"), outcome.get("details"), outcome.get("reason") or decision.get("reason")
                 else:
-                    exec_status = "rejected"
-                    exec_details = None
-                    exec_reason = decision.get("reason", "Reason not provided.")
+                    exec_status, exec_details, exec_reason = "rejected", None, decision.get("reason", "Reason not provided.")
+                await _audit_trade_decision(db_client=db_client, account_id=account_id, correlation_id=correlation_id, flow="analyze_multi", symbol=ticker, analysis_result=result, trade_decision=decision, execution_result={"status": exec_status, "reason": exec_reason, "details": exec_details}, context_value=context_value)
                 asset_responses.append(AssetResult(analysis=analysis_result, execution=ExecutionResult(status=exec_status, reason=exec_reason, details=exec_details)))
             total_executed = sum(1 for outcome in execution_outcomes if outcome["status"] == "submitted")
             learning_state = {"applied": False, "pending": False, "reason": "no_approved_trade"}
@@ -433,20 +519,8 @@ async def _process_multi_asset_analysis(tickers: List[str], account_id: Union[in
                 learning_client = LearningAgentClient(db_client=db_client)
                 learning_response = await learning_client.trigger_learning_cycle(account_id=account_id, symbol=most_impactful_trade["symbol"], correlation_id=correlation_id, execution_result=ticker_to_execution.get(most_impactful_trade["symbol"]))
                 learning_state = _apply_learning_deltas_if_allowed(learning_response)
-            multi_report = MultiOrchestratorResponse(multi_report_id=correlation_id, timestamp=datetime.datetime.now(datetime.UTC), execution_summary=ExecutionSummary(total_trades_approved=len(approved_trades), total_trades_executed=total_executed, total_trades_failed=len(execution_outcomes) - total_executed), results=asset_responses)
-            return StandardAgentResponse(
-                status="success",
-                agent_type="manager-agent",
-                version="1.0.0",
-                timestamp=datetime.datetime.now(datetime.UTC),
-                data=multi_report,
-                metadata=_manager_metadata(
-                    risk_context_loaded=True,
-                    learning_delta_applied=learning_state["applied"],
-                    learning_delta_pending=learning_state["pending"],
-                    learning_delta_skipped_reason=learning_state["reason"],
-                ),
-            )
+            multi_report = MultiOrchestratorResponse(multi_report_id=correlation_id, timestamp=_now(), execution_summary=ExecutionSummary(total_trades_approved=len(approved_trades), total_trades_executed=total_executed, total_trades_failed=len(execution_outcomes) - total_executed), results=asset_responses)
+            return StandardAgentResponse(status="success", agent_type="manager-agent", version="1.0.0", timestamp=_now(), data=multi_report, metadata=_manager_metadata(risk_context_loaded=True, learning_delta_applied=learning_state["applied"], learning_delta_pending=learning_state["pending"], learning_delta_skipped_reason=learning_state["reason"]))
     except AgentUnavailable as e:
         report_logger.critical(f"An agent is unavailable: {e}")
         raise HTTPException(status_code=503, detail=str(e))
@@ -470,9 +544,8 @@ async def discover_analyze_trade_endpoint(request: DiscoverAnalyzeTradeRequest):
         scan_payload = scan_data.model_dump() if hasattr(scan_data, "model_dump") else scan_data if isinstance(scan_data, dict) else {}
         candidates = scan_payload.get("candidates", [])
         if not candidates:
-            return StandardAgentResponse(status="error", agent_type="manager-agent", version="1.0.0", timestamp=datetime.datetime.now(datetime.UTC), data={"report_id": correlation_id, "stage": "scanner_discovery", "message": "Scanner returned zero candidates.", "scanner_error": scan_response.error, "scanner_data": scan_payload}, metadata=_manager_metadata(), error={"code": "NO_SCANNER_CANDIDATES", "message": "Scanner returned zero candidates."})
-        ticker_to_scanner_candidate: Dict[str, Any] = {}
-        selected_tickers = []
+            return StandardAgentResponse(status="error", agent_type="manager-agent", version="1.0.0", timestamp=_now(), data={"report_id": correlation_id, "stage": "scanner_discovery", "message": "Scanner returned zero candidates.", "scanner_error": scan_response.error, "scanner_data": scan_payload}, metadata=_manager_metadata(), error={"code": "NO_SCANNER_CANDIDATES", "message": "Scanner returned zero candidates."})
+        ticker_to_scanner_candidate, selected_tickers = {}, []
         for candidate in candidates:
             symbol = _scanner_candidate_symbol(candidate)
             if symbol and symbol not in ticker_to_scanner_candidate:
@@ -481,7 +554,7 @@ async def discover_analyze_trade_endpoint(request: DiscoverAnalyzeTradeRequest):
         analysis_results = await asyncio.gather(*[_analyze_single_asset(ticker, correlation_id) for ticker in selected_tickers])
         valid_results = [result for result in analysis_results if "error" not in result]
         if not valid_results:
-            return StandardAgentResponse(status="error", agent_type="manager-agent", version="1.0.0", timestamp=datetime.datetime.now(datetime.UTC), data={"report_id": correlation_id, "stage": "deep_analysis", "scanner_candidates": selected_tickers, "analysis_results": analysis_results}, metadata=_manager_metadata(), error={"code": "NO_VALID_ANALYSIS", "message": "Technical/Fundamental agents returned no valid analysis."})
+            return StandardAgentResponse(status="error", agent_type="manager-agent", version="1.0.0", timestamp=_now(), data={"report_id": correlation_id, "stage": "deep_analysis", "scanner_candidates": selected_tickers, "analysis_results": analysis_results}, metadata=_manager_metadata(), error={"code": "NO_VALID_ANALYSIS", "message": "Technical/Fundamental agents returned no valid analysis."})
         ranked = []
         for result in valid_results:
             symbol = result["ticker"]
@@ -489,12 +562,8 @@ async def discover_analyze_trade_endpoint(request: DiscoverAnalyzeTradeRequest):
             score_breakdown = _score_deep_analysis(result, _scanner_candidate_score(scanner_candidate))
             ranked.append({"symbol": symbol, "analysis": result, "scanner_candidate": _scanner_candidate_metadata(scanner_candidate), "score_breakdown": score_breakdown})
         ranked.sort(key=lambda item: item["score_breakdown"]["final_opportunity_score"], reverse=True)
-        winner = ranked[0]
-        winner_analysis = winner["analysis"]
-        winner_symbol = winner["symbol"]
-        winner_score = winner["score_breakdown"]["final_opportunity_score"]
-        execution_result = {"status": "not_attempted", "reason": "Execution disabled or score/verdict did not qualify."}
-        trade_decision = None
+        winner, execution_result, trade_decision = ranked[0], {"status": "not_attempted", "reason": "Execution disabled or score/verdict did not qualify."}, None
+        winner_analysis, winner_symbol, winner_score = winner["analysis"], winner["symbol"], winner["score_breakdown"]["final_opportunity_score"]
         async with DatabaseAgentClient() as db_client:
             for item in ranked:
                 await _persist_signal(db_client, account_id, item["analysis"], correlation_id, extra_metadata={"flow": "discover_analyze_trade", "scanner_candidate": item["scanner_candidate"], "score_breakdown": item["score_breakdown"], "selected_winner": item["symbol"] == winner_symbol})
@@ -505,30 +574,15 @@ async def discover_analyze_trade_endpoint(request: DiscoverAnalyzeTradeRequest):
             current_position = next((p for p in positions if p.symbol == winner_symbol), None)
             entry_price, technical_stop = _extract_current_price_and_stop(winner_analysis)
             final_verdict = winner_analysis.get("final_verdict", "hold")
-            eligible_verdict = final_verdict in ["buy", "strong_buy"]
-            eligible_score = winner_score >= request.min_final_score
+            eligible_verdict, eligible_score = final_verdict in ["buy", "strong_buy"], winner_score >= request.min_final_score
             if request.execute and eligible_verdict and eligible_score:
-                trade_decision = assess_trade(
-                    portfolio_value=Decimal(portfolio_value),
-                    risk_per_trade=Decimal(config_manager.get("RISK_PER_TRADE")),
-                    fixed_stop_loss_pct=Decimal(config_manager.get("STOP_LOSS_PERCENTAGE")),
-                    enable_technical_stop=config_manager.get("ENABLE_TECHNICAL_STOP"),
-                    max_position_pct=Decimal(config_manager.get("MAX_POSITION_PERCENTAGE")),
-                    symbol=winner_symbol,
-                    action=final_verdict,
-                    entry_price=Decimal(entry_price),
-                    technical_stop_loss=Decimal(technical_stop) if technical_stop is not None else None,
-                    current_position_size=current_position.quantity if current_position else 0,
-                    current_symbol_exposure=_position_exposure(current_position),
-                    current_total_exposure=_total_position_exposure(positions),
-                    open_orders_exposure=context_value,
-                    margin_multiplier=Decimal(str(config.DEFAULT_MARGIN_MULTIPLIER)),
-                )
+                trade_decision = assess_trade(portfolio_value=Decimal(portfolio_value), risk_per_trade=Decimal(config_manager.get("RISK_PER_TRADE")), fixed_stop_loss_pct=Decimal(config_manager.get("STOP_LOSS_PERCENTAGE")), enable_technical_stop=config_manager.get("ENABLE_TECHNICAL_STOP"), max_position_pct=Decimal(config_manager.get("MAX_POSITION_PERCENTAGE")), symbol=winner_symbol, action=final_verdict, entry_price=Decimal(entry_price), technical_stop_loss=Decimal(technical_stop) if technical_stop is not None else None, current_position_size=current_position.quantity if current_position else 0, current_symbol_exposure=_position_exposure(current_position), current_total_exposure=_total_position_exposure(positions), open_orders_exposure=context_value, margin_multiplier=Decimal(str(config.DEFAULT_MARGIN_MULTIPLIER)))
+                _ensure_risk_approval_id(trade_decision, correlation_id)
                 if trade_decision.get("approved"):
                     async with ExecutionAgentClient() as exec_client:
                         execution_result = await _execute_trade(exec_client, trade_decision, account_id, correlation_id)
                 else:
-                    execution_result = {"status": "rejected", "reason": trade_decision.get("reason")}
+                    execution_result = {"status": "rejected", "reason": trade_decision.get("reason"), "risk_approval_id": trade_decision.get("risk_approval_id")}
             else:
                 reason_parts = []
                 if not request.execute:
@@ -538,10 +592,12 @@ async def discover_analyze_trade_endpoint(request: DiscoverAnalyzeTradeRequest):
                 if not eligible_score:
                     reason_parts.append(f"winner score {winner_score:.4f} below threshold {request.min_final_score:.4f}")
                 execution_result = {"status": "not_attempted", "reason": "; ".join(reason_parts)}
+            audit = await _audit_trade_decision(db_client=db_client, account_id=account_id, correlation_id=correlation_id, flow="discover_analyze_trade", symbol=winner_symbol, analysis_result=winner_analysis, trade_decision=trade_decision, execution_result=execution_result, context_value=context_value)
             learning_client = LearningAgentClient(db_client=db_client)
             learning_response = await learning_client.trigger_learning_cycle(account_id=account_id, symbol=winner_symbol, correlation_id=correlation_id, execution_result=execution_result)
             learning_state = _apply_learning_deltas_if_allowed(learning_response)
-        return StandardAgentResponse(status="success", agent_type="manager-agent", version="1.0.0", timestamp=datetime.datetime.now(datetime.UTC), data={"report_id": correlation_id, "flow": "discover_analyze_trade", "scanner_metadata": scan_payload.get("metadata", {}), "scanner_count": len(candidates), "deep_analysis_count": len(valid_results), "top_10_symbols": selected_tickers, "winner": {"symbol": winner_symbol, "final_verdict": winner_analysis.get("final_verdict"), "analysis_status": winner_analysis.get("status"), "score_breakdown": winner["score_breakdown"], "scanner_candidate": winner["scanner_candidate"], "fundamental_v2": _fundamental_v2_scores(winner_analysis)}, "ranked_candidates": [{"rank": index + 1, "symbol": item["symbol"], "final_verdict": item["analysis"].get("final_verdict"), "analysis_status": item["analysis"].get("status"), "score_breakdown": item["score_breakdown"]} for index, item in enumerate(ranked)], "trade_decision": trade_decision, "execution": execution_result}, metadata=_manager_metadata(risk_context_loaded=True, learning_delta_applied=learning_state["applied"], learning_delta_pending=learning_state["pending"], learning_delta_skipped_reason=learning_state["reason"]))
+        data = {"report_id": correlation_id, "flow": "discover_analyze_trade", "scanner_metadata": scan_payload.get("metadata", {}), "scanner_count": len(candidates), "deep_analysis_count": len(valid_results), "top_10_symbols": selected_tickers, "winner": {"symbol": winner_symbol, "final_verdict": winner_analysis.get("final_verdict"), "analysis_status": winner_analysis.get("status"), "score_breakdown": winner["score_breakdown"], "scanner_candidate": winner["scanner_candidate"], "fundamental_v2": _fundamental_v2_scores(winner_analysis)}, "ranked_candidates": [{"rank": index + 1, "symbol": item["symbol"], "final_verdict": item["analysis"].get("final_verdict"), "analysis_status": item["analysis"].get("status"), "score_breakdown": item["score_breakdown"]} for index, item in enumerate(ranked)], "trade_decision": trade_decision, "risk_approval_id": trade_decision.get("risk_approval_id") if trade_decision else None, "execution": execution_result, "dry_run_report": audit}
+        return StandardAgentResponse(status="success", agent_type="manager-agent", version="1.0.0", timestamp=_now(), data=data, metadata=_manager_metadata(risk_context_loaded=True, learning_delta_applied=learning_state["applied"], learning_delta_pending=learning_state["pending"], learning_delta_skipped_reason=learning_state["reason"]))
     except AgentUnavailable as e:
         report_logger.critical(f"An agent is unavailable: {e}")
         raise HTTPException(status_code=503, detail=str(e))
@@ -572,8 +628,8 @@ async def scan_and_analyze_endpoint(request: ScanAndAnalyzeRequest):
                 return c.symbol if isinstance(c, ScannerCandidate) else c.get("symbol")
             selected_tickers = [get_symbol(c) for c in candidates[:request.max_candidates]]
             if not selected_tickers:
-                multi_report = MultiOrchestratorResponse(multi_report_id=correlation_id, timestamp=datetime.datetime.now(datetime.UTC), execution_summary=ExecutionSummary(total_trades_approved=0, total_trades_executed=0, total_trades_failed=0), results=[])
-                return StandardAgentResponse(status="success", agent_type="manager-agent", version="1.0.0", timestamp=datetime.datetime.now(datetime.UTC), data=multi_report, metadata=_manager_metadata())
+                multi_report = MultiOrchestratorResponse(multi_report_id=correlation_id, timestamp=_now(), execution_summary=ExecutionSummary(total_trades_approved=0, total_trades_executed=0, total_trades_failed=0), results=[])
+                return StandardAgentResponse(status="success", agent_type="manager-agent", version="1.0.0", timestamp=_now(), data=multi_report, metadata=_manager_metadata())
             return await _process_multi_asset_analysis(selected_tickers, account_id, correlation_id)
     except AgentUnavailable as e:
         report_logger.critical(f"Scanner Agent is unavailable: {e}")
