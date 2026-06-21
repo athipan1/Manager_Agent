@@ -128,6 +128,10 @@ def _jsonable(value: Any) -> Any:
     return value
 
 
+def _dict_or_empty(value: Any) -> Dict[str, Any]:
+    return value if isinstance(value, dict) else {}
+
+
 def _position_exposure(position: Any) -> Decimal:
     if not position:
         return Decimal("0")
@@ -154,7 +158,7 @@ async def _fetch_context_value(db_client: DatabaseAgentClient, account_id: Union
 async def _fetch_session_risk_context(db_client: DatabaseAgentClient, account_id: Union[int, str], symbol: str, correlation_id: str) -> Dict[str, Any]:
     try:
         snapshot = await db_client.get_session_risk_snapshot(account_id, correlation_id, symbol=symbol)
-        snapshot = snapshot or {}
+        snapshot = _dict_or_empty(snapshot)
         snapshot.setdefault("emergency_halt", bool(getattr(config, "MANAGER_EMERGENCY_HALT", False)))
         if getattr(config, "MANAGER_EMERGENCY_HALT", False):
             snapshot["emergency_halt"] = True
@@ -181,6 +185,7 @@ async def _fetch_session_risk_contexts(db_client: DatabaseAgentClient, account_i
     if not unique_symbols:
         return {}
     snapshots = await asyncio.gather(*[_fetch_session_risk_context(db_client, account_id, symbol, correlation_id) for symbol in unique_symbols])
+    snapshots = [_dict_or_empty(snapshot) for snapshot in snapshots]
     first = snapshots[0] if snapshots else {}
     shared = {key: first.get(key) for key in ["daily_realized_pnl", "weekly_realized_pnl", "consecutive_losses", "trades_today", "minutes_since_last_loss", "emergency_halt"] if key in first}
     shared["symbol_contexts"] = {symbol: snapshot for symbol, snapshot in zip(unique_symbols, snapshots)}
@@ -199,20 +204,7 @@ def _ensure_risk_approval_id(trade_decision: Optional[Dict[str, Any]], correlati
 
 
 def _dry_run_report(*, correlation_id: str, flow: str, symbol: Optional[str], analysis_result: Optional[Dict[str, Any]], trade_decision: Optional[Dict[str, Any]], execution_result: Optional[Dict[str, Any]], context_value: Decimal, dry_run: bool) -> Dict[str, Any]:
-    return {
-        "report_id": correlation_id,
-        "flow": flow,
-        "symbol": symbol,
-        "dry_run": dry_run,
-        "trading_mode": config.TRADING_MODE,
-        "trading_enabled": config.TRADING_ENABLED,
-        "risk_context": {"open_orders_exposure": _jsonable(context_value), "session": _jsonable((trade_decision or {}).get("session_risk_context")), "loaded": True},
-        "analysis": _jsonable(analysis_result),
-        "trade_decision": _jsonable(trade_decision),
-        "risk_approval_id": trade_decision.get("risk_approval_id") if trade_decision else None,
-        "execution": _jsonable(execution_result),
-        "generated_at": _now().isoformat(),
-    }
+    return {"report_id": correlation_id, "flow": flow, "symbol": symbol, "dry_run": dry_run, "trading_mode": config.TRADING_MODE, "trading_enabled": config.TRADING_ENABLED, "risk_context": {"open_orders_exposure": _jsonable(context_value), "session": _jsonable((trade_decision or {}).get("session_risk_context")), "loaded": True}, "analysis": _jsonable(analysis_result), "trade_decision": _jsonable(trade_decision), "risk_approval_id": trade_decision.get("risk_approval_id") if trade_decision else None, "execution": _jsonable(execution_result), "generated_at": _now().isoformat()}
 
 
 async def _audit_trade_decision(*, db_client: Optional[DatabaseAgentClient], account_id: Union[int, str], correlation_id: str, flow: str, symbol: str, analysis_result: Optional[Dict[str, Any]], trade_decision: Optional[Dict[str, Any]], execution_result: Optional[Dict[str, Any]], context_value: Decimal, dry_run: bool = False) -> Dict[str, Any]:
