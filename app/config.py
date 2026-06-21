@@ -22,14 +22,31 @@ TRADING_MODE = os.getenv("TRADING_MODE", "PAPER").strip().upper()
 ALLOW_LIVE_TRADING = _env_bool("ALLOW_LIVE_TRADING", False)
 MANAGER_EMERGENCY_HALT = _env_bool("MANAGER_EMERGENCY_HALT", False)
 
+# Stock-first operating mode. XAUUSD / crypto / forex are explicitly out of scope
+# until later phases are enabled intentionally.
+ASSET_CLASS = os.getenv("ASSET_CLASS", "stock").strip().lower()
+ALLOW_SHORT_SELLING = _env_bool("ALLOW_SHORT_SELLING", False)
+ALLOW_CRYPTO = _env_bool("ALLOW_CRYPTO", False)
+ALLOW_FOREX = _env_bool("ALLOW_FOREX", False)
+ALLOW_FRACTIONAL_SHARES = _env_bool("ALLOW_FRACTIONAL_SHARES", False)
+LIVE_PREFLIGHT_REQUIRED = _env_bool("LIVE_PREFLIGHT_REQUIRED", True)
+MANUAL_APPROVAL_REQUIRED = _env_bool("MANUAL_APPROVAL_REQUIRED", False)
+RISK_APPROVAL_TTL_MINUTES = int(os.getenv("RISK_APPROVAL_TTL_MINUTES", 10))
+
 if TRADING_MODE not in {"PAPER", "LIVE"}:
     raise RuntimeError("TRADING_MODE must be explicitly set to PAPER or LIVE.")
+
+if ASSET_CLASS not in {"stock", "xauusd", "crypto", "multi"}:
+    raise RuntimeError("ASSET_CLASS must be one of: stock, xauusd, crypto, multi.")
 
 if TRADING_MODE == "LIVE" and not ALLOW_LIVE_TRADING:
     raise RuntimeError(
         "LIVE trading requested but ALLOW_LIVE_TRADING is not true. "
         "Set TRADING_MODE=PAPER for paper trading or explicitly enable live trading."
     )
+
+if TRADING_MODE == "LIVE" and ASSET_CLASS == "stock" and (ALLOW_CRYPTO or ALLOW_FOREX):
+    raise RuntimeError("Stock LIVE mode forbids ALLOW_CRYPTO/ALLOW_FOREX. Enable later phases explicitly.")
 
 # Agent URLs (use Docker Compose service names as defaults)
 TECHNICAL_AGENT_URL = os.getenv("TECHNICAL_AGENT_URL", "http://technical-agent:8002")
