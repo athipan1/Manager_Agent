@@ -464,7 +464,7 @@ async def _process_multi_asset_analysis(tickers: List[str], account_id: Union[in
                 outcome = ticker_to_execution.get(ticker) if decision.get("approved") else None
                 exec_status = outcome.get("status", "failed") if outcome else "rejected"
                 exec_details = outcome.get("details") if outcome else None
-                exec_reason = outcome.get("reason") if outcome else decision.get("reason", "Reason not provided.")
+                exec_reason = (outcome.get("reason") if outcome else None) or decision.get("reason", "Reason not provided.")
                 await _audit_trade_decision(db_client=db_client, account_id=account_id, correlation_id=correlation_id, flow="analyze_multi", symbol=ticker, analysis_result=result, trade_decision=decision, execution_result={"status": exec_status, "reason": exec_reason, "details": exec_details}, context_value=context_value)
                 asset_responses.append(AssetResult(analysis=analysis_result, execution=ExecutionResult(status=exec_status, reason=exec_reason, details=exec_details)))
             total_executed = sum(1 for outcome in execution_outcomes if outcome["status"] == "submitted")
