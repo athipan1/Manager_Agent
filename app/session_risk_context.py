@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Any, Dict, Iterable, Optional
 
@@ -40,10 +40,6 @@ def _symbol_of(row: Dict[str, Any]) -> str:
 
 def _status_of(row: Dict[str, Any]) -> str:
     return str(row.get("status") or "").lower()
-
-
-def _side_of(row: Dict[str, Any]) -> str:
-    return str(row.get("side") or "").lower()
 
 
 def _row_timestamp(row: Dict[str, Any]) -> Optional[datetime]:
@@ -116,8 +112,7 @@ def build_session_risk_context(
     """
     now = now or datetime.now(timezone.utc)
     day_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
-    week_start = day_start.replace(day=day_start.day)  # overwritten below
-    week_start = day_start.fromtimestamp(day_start.timestamp() - day_start.weekday() * 24 * 60 * 60, tz=timezone.utc)
+    week_start = day_start - timedelta(days=day_start.weekday())
 
     history_rows = list(trades or []) or [row for row in orders if _status_of(row) in TERMINAL_LOSS_STATUSES]
     daily_rows = _trades_in_window(history_rows, day_start)
