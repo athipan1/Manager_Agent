@@ -123,7 +123,6 @@ jobs:
           runtime_services="database-agent technical-agent scanner-agent fundamental-agent learning-agent execution-agent manager-agent db"
           for i in {1..60}; do
             docker compose ps
-
             exited=$(docker compose ps --status exited -q $runtime_services | wc -l | tr -d ' ')
             if [ "$exited" != "0" ]; then
               echo "One or more runtime containers exited."
@@ -133,7 +132,6 @@ jobs:
               done
               exit 1
             fi
-
             manager=$(docker compose exec -T manager-agent python /app/healthcheck.py >/dev/null && echo ok || echo wait)
             fundamental=$(curl -fsS http://localhost:8001/health >/dev/null && echo ok || echo wait)
             technical=$(curl -fsS http://localhost:8002/health >/dev/null && echo ok || echo wait)
@@ -146,7 +144,6 @@ jobs:
           urllib.request.urlopen("http://scanner-agent:8003/health", timeout=5).read()
           PY
           )
-
             echo "health: manager=$manager fundamental=$fundamental technical=$technical scanner=$scanner database=$database learning=$learning execution=$execution manager_to_scanner=$manager_to_scanner"
             if [ "$manager$fundamental$technical$scanner$database$learning$execution$manager_to_scanner" = "okokokokokokokok" ]; then
               echo "All services are reachable, including manager-agent -> scanner-agent."
@@ -154,7 +151,6 @@ jobs:
             fi
             sleep 5
           done
-
           echo "Services did not become reachable in time."
           docker compose ps
           for service in $runtime_services; do
@@ -167,7 +163,6 @@ jobs:
         working-directory: Manager_Agent
         run: |
           mkdir -p reports
-
           docker compose exec -T manager-agent python - <<'PY' > reports/hourly-auto-trading-report.json
           import json
           import os
@@ -175,14 +170,12 @@ jobs:
           import urllib.error
           import urllib.request
           from datetime import datetime, timezone
-
           max_universe = int(os.getenv("MAX_UNIVERSE", "1000"))
           top_n = int(os.getenv("TOP_N", "10"))
           min_final_score = float(os.getenv("MIN_FINAL_SCORE", "0.55"))
           dry_run = os.getenv("DRY_RUN", "true").lower() != "false"
           broker_mode = os.getenv("BROKER_MODE", "SIMULATOR")
           execution_api_key = os.getenv("EXECUTION_API_KEY", "dev_execution_key")
-
           def request_json(base_url, path, payload=None, method="GET", api_key=None, timeout=900):
               data = None
               headers = {}
@@ -191,12 +184,7 @@ jobs:
               if payload is not None:
                   data = json.dumps(payload).encode("utf-8")
                   headers["Content-Type"] = "application/json"
-              req = urllib.request.Request(
-                  f"{base_url}{path}",
-                  data=data,
-                  headers=headers,
-                  method=method,
-              )
+              req = urllib.request.Request(f"{base_url}{path}", data=data, headers=headers, method=method)
               try:
                   with urllib.request.urlopen(req, timeout=timeout) as resp:
                       body = resp.read().decode("utf-8")
@@ -206,104 +194,68 @@ jobs:
                   return {"status": "error", "http_status": exc.code, "body": body}
               except Exception as exc:
                   return {"status": "error", "error": str(exc)}
-
           def request_manager(path, payload=None, method="GET"):
               return request_json("http://localhost", path, payload=payload, method=method)
-
           def request_execution(path):
-              return request_json(
-                  "http://execution-agent:8006",
-                  path,
-                  api_key=execution_api_key,
-                  timeout=120,
-              )
-
-          payload = {
-              "account_id": 1,
-              "max_universe": max_universe,
-              "top_n": top_n,
-              "exchange": "NASDAQ",
-              "max_workers": 10,
-              "min_final_score": min_final_score,
-              "execute": True,
-          }
-
+              return request_json("http://execution-agent:8006", path, api_key=execution_api_key, timeout=120)
+          payload = {"account_id": 1, "max_universe": max_universe, "top_n": top_n, "exchange": "NASDAQ", "max_workers": 10, "min_final_score": min_final_score, "execute": True}
           response = request_manager("/discover-analyze-trade", payload, method="POST")
-
-          # Give broker/background task a short window to submit/update the order,
-          # then capture a paper-account snapshot for auditing.
           time.sleep(10)
-          broker_snapshot = {
-              "account": request_execution("/account"),
-              "orders": request_execution("/orders"),
-              "positions": request_execution("/positions"),
-              "portfolio": request_execution("/portfolio"),
-          }
-
-          report = {
-              "generated_at": datetime.now(timezone.utc).isoformat(),
-              "mode": "ALPACA_PAPER" if broker_mode == "ALPACA" and not dry_run else "SIMULATOR",
-              "broker_mode": broker_mode,
-              "flow": "discover_analyze_trade",
-              "warning": "DRY_RUN=false with BROKER_MODE=ALPACA sends orders to Alpaca Paper.",
-              "request": payload,
-              "response": response,
-              "broker_snapshot": broker_snapshot,
-          }
+          broker_snapshot = {"account": request_execution("/account"), "orders": request_execution("/orders"), "positions": request_execution("/positions"), "portfolio": request_execution("/portfolio")}
+          dashboard_data = request_manager("/dashboard/data?account_id=1")
+          report = {"generated_at": datetime.now(timezone.utc).isoformat(), "mode": "ALPACA_PAPER" if broker_mode == "ALPACA" and not dry_run else "SIMULATOR", "broker_mode": broker_mode, "flow": "discover_analyze_trade", "warning": "DRY_RUN=false with BROKER_MODE=ALPACA sends orders to Alpaca Paper.", "request": payload, "response": response, "broker_snapshot": broker_snapshot, "dashboard_data": dashboard_data}
           print(json.dumps(report, ensure_ascii=False, indent=2, default=str))
           PY
-
           python - <<'PY'
           import json
           import sys
           from pathlib import Path
-
           report_path = Path("reports/hourly-auto-trading-report.json")
           report = json.loads(report_path.read_text())
           response = report.get("response") or {}
           data = response.get("data") if isinstance(response, dict) else {}
           snapshot = report.get("broker_snapshot") or {}
-
+          dashboard = report.get("dashboard_data") or {}
+          dashboard_data = dashboard.get("data") if isinstance(dashboard, dict) else {}
           def th_verdict(value):
-              mapping = {
-                  "strong_buy": "ซื้อแรง",
-                  "buy": "ซื้อ",
-                  "hold": "ถือ/รอดู",
-                  "sell": "ขาย",
-                  "strong_sell": "ขายแรง",
-                  "unknown": "ไม่ทราบผล",
-              }
-              return mapping.get(str(value).lower(), str(value))
-
+              return {"strong_buy": "ซื้อแรง", "buy": "ซื้อ", "hold": "ถือ/รอดู", "sell": "ขาย", "strong_sell": "ขายแรง", "unknown": "ไม่ทราบผล"}.get(str(value).lower(), str(value))
           def th_execution(value):
-              mapping = {
-                  "submitted": "ส่งออเดอร์แล้ว",
-                  "rejected": "ไม่ส่งออเดอร์ / ถูกปฏิเสธ",
-                  "failed": "ส่งออเดอร์ไม่สำเร็จ",
-                  "not_attempted": "ยังไม่ส่งออเดอร์",
-                  "unknown": "ไม่ทราบสถานะ",
-              }
-              return mapping.get(str(value).lower(), str(value))
-
+              return {"submitted": "ส่งออเดอร์แล้ว", "rejected": "ไม่ส่งออเดอร์ / ถูกปฏิเสธ", "failed": "ส่งออเดอร์ไม่สำเร็จ", "not_attempted": "ยังไม่ส่งออเดอร์", "unknown": "ไม่ทราบสถานะ"}.get(str(value).lower(), str(value))
           def unwrap_data(value):
               if isinstance(value, dict) and "data" in value:
                   return value.get("data")
               return value
-
           lines = []
-          lines.append("# Hourly Auto Trading Report")
+          lines.append("# รายงานระบบเทรดอัตโนมัติรายชั่วโมง")
           lines.append("")
           lines.append(f"Generated at UTC: `{report.get('generated_at')}`")
           lines.append(f"Mode: `{report.get('mode')}`")
           lines.append(f"Broker Mode: `{report.get('broker_mode')}`")
           lines.append(f"Flow: `{report.get('flow')}`")
           lines.append("")
+          if isinstance(dashboard_data, dict):
+              summary = dashboard_data.get("summary") or {}
+              balance = dashboard_data.get("balance") or {}
+              lines.append("## Dashboard Snapshot")
+              lines.append(f"- ปัญหาระบบ: `{summary.get('problem_count', 0)}`")
+              lines.append(f"- ยอดเงินคงเหลือ: `{balance.get('cash_balance') or balance.get('cash') or balance.get('buying_power') or '-'}`")
+              lines.append(f"- หุ้นที่ถืออยู่: `{summary.get('position_count', 0)}`")
+              lines.append(f"- ออเดอร์ที่เปิดอยู่: `{summary.get('open_order_count', 0)}`")
+              lines.append(f"- ประวัติการซื้อขาย: `{summary.get('trade_count', 0)}`")
+              lines.append("")
+              problems = dashboard_data.get("problems") or []
+              if problems:
+                  lines.append("### ปัญหา / Alerts")
+                  lines.append("| ระดับ | ประเภท | ข้อความ | เวลา |")
+                  lines.append("|---|---|---|---|")
+                  for item in problems[:10]:
+                      lines.append(f"| {item.get('severity', '-')} | {item.get('alert_type', '-')} | {item.get('message', '-')} | {item.get('created_at', '-')} |")
+                  lines.append("")
           lines.append("## Request")
           lines.append("```json")
           lines.append(json.dumps(report.get("request"), ensure_ascii=False, indent=2))
           lines.append("```")
           lines.append("")
-
           if response.get("status") == "error":
               lines.append("## Error")
               lines.append("```json")
@@ -314,7 +266,6 @@ jobs:
               execution = data.get("execution") or {}
               trade_decision = data.get("trade_decision")
               ranked = data.get("ranked_candidates") or []
-
               lines.append("## Winner")
               lines.append(f"- Symbol: `{winner.get('symbol', '-')}`")
               lines.append(f"- Verdict: {th_verdict(winner.get('final_verdict', 'unknown'))}")
@@ -323,7 +274,6 @@ jobs:
               lines.append(f"- Execution: {th_execution(execution.get('status', 'unknown'))}")
               lines.append(f"- Execution Reason: {execution.get('reason', '-')}")
               lines.append("")
-
               lines.append("## Ranked Candidates")
               if not ranked:
                   lines.append("No ranked candidates returned by Manager_Agent.")
@@ -332,21 +282,15 @@ jobs:
                   lines.append("|---:|---|---|---:|---:|---:|---:|")
                   for item in ranked:
                       scores = item.get("score_breakdown") or {}
-                      lines.append(
-                          f"| {item.get('rank')} | {item.get('symbol')} | {th_verdict(item.get('final_verdict'))} | "
-                          f"{scores.get('final_opportunity_score')} | {scores.get('scanner_score')} | "
-                          f"{scores.get('fundamental_score')} | {scores.get('technical_score')} |"
-                      )
+                      lines.append(f"| {item.get('rank')} | {item.get('symbol')} | {th_verdict(item.get('final_verdict'))} | {scores.get('final_opportunity_score')} | {scores.get('scanner_score')} | {scores.get('fundamental_score')} | {scores.get('technical_score')} |")
               lines.append("")
               lines.append("## Trade Decision")
               lines.append("```json")
               lines.append(json.dumps(trade_decision, ensure_ascii=False, indent=2, default=str))
               lines.append("```")
-
           account = unwrap_data(snapshot.get("account")) or {}
           orders = unwrap_data(snapshot.get("orders")) or []
           positions = unwrap_data(snapshot.get("positions")) or []
-
           lines.append("")
           lines.append("## Broker Snapshot")
           lines.append(f"- Account Status: `{account.get('status', '-') if isinstance(account, dict) else '-'}`")
@@ -356,44 +300,13 @@ jobs:
           lines.append(f"- Open Orders: `{len(orders) if isinstance(orders, list) else '-'}`")
           lines.append(f"- Positions: `{len(positions) if isinstance(positions, list) else '-'}`")
           lines.append("")
-
-          lines.append("### Orders")
-          if isinstance(orders, list) and orders:
-              lines.append("| Symbol | Side | Qty | Type | Status | Filled Qty | Limit Price | Submitted At |")
-              lines.append("|---|---|---:|---|---|---:|---:|---|")
-              for order in orders[:20]:
-                  lines.append(
-                      f"| {order.get('symbol', '-')} | {order.get('side', '-')} | {order.get('qty', order.get('quantity', '-'))} | "
-                      f"{order.get('type', order.get('order_type', '-'))} | {order.get('status', '-')} | "
-                      f"{order.get('filled_qty', order.get('executed_quantity', '-'))} | {order.get('limit_price', order.get('price', '-'))} | "
-                      f"{order.get('submitted_at', order.get('created_at', '-'))} |"
-                  )
-          else:
-              lines.append("No open orders returned by broker.")
-          lines.append("")
-
-          lines.append("### Positions")
-          if isinstance(positions, list) and positions:
-              lines.append("| Symbol | Qty | Avg Entry | Market Value | Unrealized P/L |")
-              lines.append("|---|---:|---:|---:|---:|")
-              for position in positions[:20]:
-                  lines.append(
-                      f"| {position.get('symbol', '-')} | {position.get('qty', position.get('quantity', '-'))} | "
-                      f"{position.get('avg_entry_price', position.get('avg_price', '-'))} | "
-                      f"{position.get('market_value', '-')} | {position.get('unrealized_pl', position.get('unrealized_pnl', '-'))} |"
-                  )
-          else:
-              lines.append("No positions returned by broker.")
-          lines.append("")
-
           lines.append("### Raw Broker Snapshot")
           lines.append("```json")
           lines.append(json.dumps(snapshot, ensure_ascii=False, indent=2, default=str))
           lines.append("```")
-
+          Path("reports/dashboard-data.json").write_text(json.dumps(dashboard, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
           Path("reports/hourly-auto-trading-report.md").write_text("\n".join(lines), encoding="utf-8")
           print("\n".join(lines))
-
           if response.get("status") == "error":
               sys.exit(1)
           PY
@@ -405,6 +318,24 @@ jobs:
           name: hourly-auto-trading-report
           path: Manager_Agent/reports/
           if-no-files-found: warn
+
+      - name: Send hourly trading email
+        if: always()
+        working-directory: Manager_Agent
+        env:
+          SMTP_SERVER: ${{ secrets.SMTP_SERVER }}
+          SMTP_PORT: ${{ secrets.SMTP_PORT }}
+          SMTP_USERNAME: ${{ secrets.SMTP_USERNAME }}
+          SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+          SMTP_USE_SSL: ${{ secrets.SMTP_USE_SSL }}
+          EMAIL_FROM: ${{ secrets.EMAIL_FROM }}
+          EMAIL_TO: ${{ secrets.EMAIL_TO || 'terdoomcom@gmail.com' }}
+          EMAIL_CC: ${{ secrets.EMAIL_CC }}
+          EMAIL_SUBJECT: "รายงานระบบเทรดอัตโนมัติรายชั่วโมง - ${{ github.run_number }}"
+          GITHUB_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          REPORTS_DIR: reports
+        run: |
+          python scripts/send_workflow_email.py
 
       - name: Show logs on failure
         if: failure()
