@@ -4,7 +4,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from app import main
-from app.database_client import DatabaseAgentClient
+from app.models import ReportDetails
 
 
 @pytest.mark.asyncio
@@ -72,10 +72,6 @@ async def test_single_flow_passes_session_context_into_assess_trade():
     class Balance:
         cash_balance = Decimal("10000")
 
-    class Details:
-        technical = None
-        fundamental = None
-
     db_client = AsyncMock()
     db_client.__aenter__.return_value = db_client
     db_client.__aexit__.return_value = None
@@ -94,7 +90,13 @@ async def test_single_flow_passes_session_context_into_assess_trade():
     }
 
     request = type("Req", (), {"ticker": "AAPL", "account_id": 1})()
-    analysis = {"ticker": "AAPL", "final_verdict": "buy", "status": "complete", "details": Details(), "raw_data": {"technical": {"data": {"current_price": 100, "indicators": {"stop_loss": 95}}}}}
+    analysis = {
+        "ticker": "AAPL",
+        "final_verdict": "buy",
+        "status": "complete",
+        "details": ReportDetails(technical=None, fundamental=None),
+        "raw_data": {"technical": {"data": {"current_price": 100, "indicators": {"stop_loss": 95}}}},
+    }
 
     with patch("app.main.DatabaseAgentClient", return_value=db_client), \
             patch("app.main._analyze_single_asset", AsyncMock(return_value=analysis)), \
