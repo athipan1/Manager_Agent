@@ -5,6 +5,7 @@ class DatabaseEndpoints:
     ORDERS = "/accounts/{account_id}/orders"
     EXECUTE_ORDER = "/accounts/{account_id}/orders/{order_id}/execute"
     TRADE_HISTORY = "/accounts/{account_id}/trades"
+    SESSION_RISK = "/accounts/{account_id}/risk/session"
     PORTFOLIO_METRICS = "/accounts/{account_id}/portfolio_metrics"
     PRICE_HISTORY = "/accounts/{account_id}/prices/{symbol}"
     SIGNALS = "/signals"
