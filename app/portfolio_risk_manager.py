@@ -86,11 +86,15 @@ def _technical_stop_from_result(result: Dict[str, Any]):
     return indicators.get("stop_loss")
 
 
+def _dict_or_empty(value: Any) -> Dict[str, Any]:
+    return value if isinstance(value, dict) else {}
+
+
 def _symbol_session_context(base_context: Optional[Dict[str, Any]], symbol: str) -> Dict[str, Any]:
-    context = dict(base_context or {})
-    symbol_contexts = context.pop("symbol_contexts", {}) or {}
+    context = dict(_dict_or_empty(base_context))
+    symbol_contexts = _dict_or_empty(context.pop("symbol_contexts", {}))
     symbol_override = symbol_contexts.get(symbol.upper()) or symbol_contexts.get(symbol) or {}
-    context.update(symbol_override)
+    context.update(_dict_or_empty(symbol_override))
     return context
 
 
