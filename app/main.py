@@ -172,7 +172,17 @@ async def _fetch_session_risk_context(db_client: DatabaseAgentClient, account_id
         if config.TRADING_MODE == "LIVE":
             raise AgentUnavailable(f"Required session risk context unavailable for {symbol}: {exc}") from exc
         report_logger.warning(f"Session risk context unavailable in PAPER mode for {symbol}; using safe zero context. correlation_id={correlation_id}: {exc}")
-        return {"daily_realized_pnl": 0.0, "weekly_realized_pnl": 0.0, "consecutive_losses": 0, "trades_today": 0, "symbol_trades_today": 0, "minutes_since_last_loss": None, "minutes_since_last_symbol_trade": None, "emergency_halt": bool(getattr(config, "MANAGER_EMERGENCY_HALT", False)), "source": "manager_fallback"}
+        return {
+            "daily_realized_pnl": 0.0,
+            "weekly_realized_pnl": 0.0,
+            "consecutive_losses": 0,
+            "trades_today": 0,
+            "symbol_trades_today": 0,
+            "minutes_since_last_loss": None,
+            "minutes_since_last_symbol_trade": None,
+            "emergency_halt": bool(getattr(config, "MANAGER_EMERGENCY_HALT", False)),
+            "source": "manager_fallback",
+        }
 
 
 async def _fetch_session_risk_contexts(db_client: DatabaseAgentClient, account_id: Union[int, str], symbols: List[str], correlation_id: str) -> Dict[str, Any]:
@@ -350,12 +360,12 @@ async def _run_single_analysis_flow(request: AgentRequestBody, *, dry_run: bool 
                 else:
                     entry_price, technical_stop = _extract_current_price_and_stop(analysis_result)
                     trade_decision = assess_trade(portfolio_value=Decimal(portfolio_value), risk_per_trade=Decimal(config_manager.get("RISK_PER_TRADE")), fixed_stop_loss_pct=Decimal(config_manager.get("STOP_LOSS_PERCENTAGE")), enable_technical_stop=config_manager.get("ENABLE_TECHNICAL_STOP"), max_position_pct=Decimal(config_manager.get("MAX_POSITION_PERCENTAGE")), symbol=ticker, action=final_verdict, entry_price=Decimal(entry_price), technical_stop_loss=Decimal(technical_stop) if technical_stop is not None else None, current_position_size=current_position.quantity if current_position else 0, current_symbol_exposure=_position_exposure(current_position), current_total_exposure=_total_position_exposure(positions), open_orders_exposure=context_value, margin_multiplier=Decimal(str(config.DEFAULT_MARGIN_MULTIPLIER)), session_risk_context=session_context)
+                    _ensure_risk_approval_id(trade_decision, correlation_id)
                     if dry_run:
-                        _ensure_risk_approval_id(trade_decision, correlation_id)
                         execution_result = {"status": "dry_run", "reason": "Execution skipped by dry-run mode.", "risk_approval_id": trade_decision.get("risk_approval_id")}
                     elif trade_decision.get("approved"):
                         if config.MANUAL_APPROVAL_REQUIRED:
-                            execution_result = {"status": "manual_approval_required", "reason": "Manual approval is required before live stock execution."}
+                            execution_result = {"status": "manual_approval_required", "reason": "Manual approval is required before live stock execution.", "risk_approval_id": trade_decision.get("risk_approval_id")}
                         else:
                             async with ExecutionAgentClient() as exec_client:
                                 execution_result = await _execute_trade(exec_client, trade_decision, account_id, correlation_id, db_client=db_client)
@@ -435,6 +445,8 @@ async def _process_multi_asset_analysis(tickers: List[str], account_id: Union[in
             for result in valid_results:
                 await _persist_signal(db_client, account_id, result, correlation_id, extra_metadata={"batch": True})
             trade_decisions = assess_portfolio_trades(analysis_results=valid_results, cash_balance=Decimal(cash_balance), existing_positions=positions, per_request_risk_budget=Decimal(config_manager.get("PER_REQUEST_RISK_BUDGET", "0.1")), max_total_exposure=Decimal(config_manager.get("MAX_TOTAL_EXPOSURE", "0.8")), risk_per_trade=Decimal(config_manager.get("RISK_PER_TRADE", "0.01")), fixed_stop_loss_pct=Decimal(config_manager.get("STOP_LOSS_PERCENTAGE", "0.1")), enable_technical_stop=config_manager.get("ENABLE_TECHNICAL_STOP", True), max_position_pct=Decimal(config_manager.get("MAX_POSITION_PERCENTAGE", "0.2")), min_position_value=Decimal(config_manager.get("MIN_POSITION_VALUE", "500")), open_orders_exposure=context_value, margin_multiplier=Decimal(str(config.DEFAULT_MARGIN_MULTIPLIER)), session_risk_context=session_context)
+            for decision in trade_decisions:
+                _ensure_risk_approval_id(decision, correlation_id)
             approved_trades = [d for d in trade_decisions if d.get("approved")]
             execution_outcomes = []
             if approved_trades and not config.MANUAL_APPROVAL_REQUIRED:
@@ -525,9 +537,10 @@ async def discover_analyze_trade_endpoint(request: DiscoverAnalyzeTradeRequest):
             if request.execute and eligible_verdict and eligible_score:
                 validate_trade_action(winner_symbol, final_verdict, current_position)
                 trade_decision = assess_trade(portfolio_value=Decimal(portfolio_value), risk_per_trade=Decimal(config_manager.get("RISK_PER_TRADE")), fixed_stop_loss_pct=Decimal(config_manager.get("STOP_LOSS_PERCENTAGE")), enable_technical_stop=config_manager.get("ENABLE_TECHNICAL_STOP"), max_position_pct=Decimal(config_manager.get("MAX_POSITION_PERCENTAGE")), symbol=winner_symbol, action=final_verdict, entry_price=Decimal(entry_price), technical_stop_loss=Decimal(technical_stop) if technical_stop is not None else None, current_position_size=current_position.quantity if current_position else 0, current_symbol_exposure=_position_exposure(current_position), current_total_exposure=_total_position_exposure(positions), open_orders_exposure=context_value, margin_multiplier=Decimal(str(config.DEFAULT_MARGIN_MULTIPLIER)), session_risk_context=session_context)
+                _ensure_risk_approval_id(trade_decision, correlation_id)
                 if trade_decision.get("approved"):
                     if config.MANUAL_APPROVAL_REQUIRED:
-                        execution_result = {"status": "manual_approval_required", "reason": "Manual approval is required before live stock execution."}
+                        execution_result = {"status": "manual_approval_required", "reason": "Manual approval is required before live stock execution.", "risk_approval_id": trade_decision.get("risk_approval_id")}
                     else:
                         async with ExecutionAgentClient() as exec_client:
                             execution_result = await _execute_trade(exec_client, trade_decision, account_id, correlation_id, db_client=db_client)
