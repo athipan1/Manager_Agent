@@ -13,6 +13,7 @@ Risk payload exposure contract:
 - current_total_exposure: existing filled portfolio position exposure only; it must not include open/pending orders.
 - open_orders_exposure: outstanding order exposure for pending/placed/partially-filled orders.
 - requested_quantity: desired quantity for the new order being reviewed.
+- session_risk_context: daily/weekly PnL, trade counters, cooldown age, and emergency halt state.
 
 Risk_Agent owns the projected exposure calculation:
 current_total_exposure + open_orders_exposure + new_order_position_value.
@@ -91,7 +92,8 @@ def _build_result(
     entry_price: Decimal,
     position_size: int = 0,
     protection_price: Optional[Decimal] = None,
-    risk_response: Optional[Dict[str, Any]] = None
+    risk_response: Optional[Dict[str, Any]] = None,
+    session_risk_context: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     risk_amount = Decimal("0")
     if protection_price is not None and position_size > 0:
@@ -107,6 +109,7 @@ def _build_result(
         "risk_amount": risk_amount,
         "risk_agent_response": risk_response or {},
         "guard_plan": (risk_response or {}).get("data", {}).get("guard_plan"),
+        "session_risk_context": session_risk_context or {},
     }
 
 
@@ -131,15 +134,17 @@ def assess_trade(
     open_orders_exposure: Optional[Decimal] = None,
     margin_multiplier: Optional[Decimal] = None,
     requested_quantity: Optional[int] = None,
+    session_risk_context: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     side = _normalise_action(action)
+    session_risk_context = session_risk_context or {}
 
     if side == "hold":
-        return _build_result(False, "Risk_Agent check skipped because action is hold or unsupported.", symbol, str(action).lower(), entry_price)
+        return _build_result(False, "Risk_Agent check skipped because action is hold or unsupported.", symbol, str(action).lower(), entry_price, session_risk_context=session_risk_context)
     if portfolio_value <= Decimal("0"):
-        return _build_result(False, "Risk_Agent check failed: portfolio_value must be greater than zero.", symbol, side, entry_price)
+        return _build_result(False, "Risk_Agent check failed: portfolio_value must be greater than zero.", symbol, side, entry_price, session_risk_context=session_risk_context)
     if entry_price <= Decimal("0"):
-        return _build_result(False, "Risk_Agent check failed: entry_price must be greater than zero.", symbol, side, entry_price)
+        return _build_result(False, "Risk_Agent check failed: entry_price must be greater than zero.", symbol, side, entry_price, session_risk_context=session_risk_context)
 
     if not config.TRADING_ENABLED:
         return _build_result(
@@ -148,14 +153,17 @@ def assess_trade(
             symbol,
             side,
             entry_price,
+            session_risk_context=session_risk_context,
         )
 
     if config.TRADING_MODE not in {"PAPER", "LIVE"}:
-        return _build_result(False, f"Invalid TRADING_MODE={config.TRADING_MODE}; rejecting trade.", symbol, side, entry_price)
+        return _build_result(False, f"Invalid TRADING_MODE={config.TRADING_MODE}; rejecting trade.", symbol, side, entry_price, session_risk_context=session_risk_context)
     if config.TRADING_MODE == "LIVE" and not config.ALLOW_LIVE_TRADING:
-        return _build_result(False, "LIVE mode requires ALLOW_LIVE_TRADING=true; rejecting trade.", symbol, side, entry_price)
+        return _build_result(False, "LIVE mode requires ALLOW_LIVE_TRADING=true; rejecting trade.", symbol, side, entry_price, session_risk_context=session_risk_context)
     if config.TRADING_MODE == "LIVE" and (current_symbol_exposure is None or current_total_exposure is None or open_orders_exposure is None):
-        return _build_result(False, "LIVE risk context incomplete: symbol exposure, total exposure, and open orders exposure are required.", symbol, side, entry_price)
+        return _build_result(False, "LIVE risk context incomplete: symbol exposure, total exposure, and open orders exposure are required.", symbol, side, entry_price, session_risk_context=session_risk_context)
+    if config.TRADING_MODE == "LIVE" and not session_risk_context:
+        return _build_result(False, "LIVE session risk context incomplete: daily/weekly loss and cooldown counters are required.", symbol, side, entry_price, session_risk_context=session_risk_context)
 
     protection_price = technical_stop_loss if enable_technical_stop and technical_stop_loss is not None and technical_stop_loss > Decimal("0") else _default_protection_price(side, entry_price, fixed_stop_loss_pct)
     if side == "buy" and protection_price >= entry_price:
@@ -170,9 +178,9 @@ def assess_trade(
     margin = _as_decimal(margin_multiplier, Decimal(str(config.DEFAULT_MARGIN_MULTIPLIER)))
 
     if symbol_exposure < 0 or total_exposure < 0 or pending_exposure < 0:
-        return _build_result(False, "Risk_Agent check failed: exposure values must be non-negative.", symbol, side, entry_price, protection_price=protection_price)
+        return _build_result(False, "Risk_Agent check failed: exposure values must be non-negative.", symbol, side, entry_price, protection_price=protection_price, session_risk_context=session_risk_context)
     if margin <= Decimal("0"):
-        return _build_result(False, "Risk_Agent check failed: margin/leverage multiplier must be greater than zero.", symbol, side, entry_price, protection_price=protection_price)
+        return _build_result(False, "Risk_Agent check failed: margin/leverage multiplier must be greater than zero.", symbol, side, entry_price, protection_price=protection_price, session_risk_context=session_risk_context)
 
     desired_quantity = int(requested_quantity) if requested_quantity is not None else _default_requested_quantity(
         side=side,
@@ -198,6 +206,7 @@ def assess_trade(
         "open_orders_exposure": _as_float(pending_exposure),
         "margin_multiplier": _as_float(margin, 1.0),
         "trading_mode": config.TRADING_MODE,
+        **session_risk_context,
     }
 
     try:
@@ -210,10 +219,11 @@ def assess_trade(
             side,
             entry_price,
             protection_price=protection_price,
+            session_risk_context=session_risk_context,
         )
 
     data = risk_response.get("data") or {}
     approved = bool(data.get("approved")) and str(risk_response.get("status", "")).lower() == "approved"
     final_quantity = int(data.get("final_quantity") or data.get("approved_quantity") or 0)
     reason = "Approved by external Risk_Agent." if approved else f"Rejected by external Risk_Agent: {data.get('violations') or risk_response.get('error')}"
-    return _build_result(approved, reason, symbol, side, entry_price, final_quantity if approved else 0, protection_price, risk_response)
+    return _build_result(approved, reason, symbol, side, entry_price, final_quantity if approved else 0, protection_price, risk_response, session_risk_context)
