@@ -20,6 +20,7 @@ DEFAULT_ACCOUNT_ID = int(os.getenv("DEFAULT_ACCOUNT_ID", 1))
 TRADING_ENABLED = _env_bool("TRADING_ENABLED", False)
 TRADING_MODE = os.getenv("TRADING_MODE", "PAPER").strip().upper()
 ALLOW_LIVE_TRADING = _env_bool("ALLOW_LIVE_TRADING", False)
+MANAGER_EMERGENCY_HALT = _env_bool("MANAGER_EMERGENCY_HALT", False)
 
 if TRADING_MODE not in {"PAPER", "LIVE"}:
     raise RuntimeError("TRADING_MODE must be explicitly set to PAPER or LIVE.")
