@@ -159,6 +159,75 @@ def test_approve_sell_order_existing_position(mock_evaluate_risk):
     assert payload["protection_price"] == 162.75
 
 
+@patch("app.risk_manager.config.TRADING_ENABLED", True)
+@patch("app.risk_manager.config.TRADING_MODE", "LIVE")
+@patch("app.risk_manager.config.ALLOW_LIVE_TRADING", True)
+@patch("app.risk_manager.evaluate_risk")
+def test_live_payload_includes_session_risk_context(mock_evaluate_risk):
+    mock_evaluate_risk.return_value = approved_response(quantity=10, symbol="AAPL")
+    session_context = {
+        "daily_realized_pnl": -12.5,
+        "weekly_realized_pnl": -20.0,
+        "consecutive_losses": 1,
+        "trades_today": 2,
+        "symbol_trades_today": 1,
+        "minutes_since_last_loss": 80,
+        "minutes_since_last_symbol_trade": 45,
+        "emergency_halt": False,
+    }
+
+    decision = assess_trade(
+        portfolio_value=Decimal("100000"),
+        risk_per_trade=Decimal("0.01"),
+        fixed_stop_loss_pct=Decimal("0.05"),
+        enable_technical_stop=False,
+        max_position_pct=Decimal("0.20"),
+        symbol="AAPL",
+        action="buy",
+        entry_price=Decimal("150.00"),
+        current_symbol_exposure=Decimal("0"),
+        current_total_exposure=Decimal("0"),
+        open_orders_exposure=Decimal("0"),
+        margin_multiplier=Decimal("1"),
+        session_risk_context=session_context,
+    )
+
+    assert decision["approved"] is True
+    assert decision["session_risk_context"] == session_context
+    payload = mock_evaluate_risk.call_args.args[0]
+    assert payload["daily_realized_pnl"] == -12.5
+    assert payload["weekly_realized_pnl"] == -20.0
+    assert payload["consecutive_losses"] == 1
+    assert payload["trades_today"] == 2
+    assert payload["symbol_trades_today"] == 1
+    assert payload["emergency_halt"] is False
+
+
+@patch("app.risk_manager.config.TRADING_ENABLED", True)
+@patch("app.risk_manager.config.TRADING_MODE", "LIVE")
+@patch("app.risk_manager.config.ALLOW_LIVE_TRADING", True)
+def test_live_rejects_missing_session_risk_context_before_calling_risk_agent():
+    with patch("app.risk_manager.evaluate_risk") as mock_evaluate_risk:
+        decision = assess_trade(
+            portfolio_value=Decimal("100000"),
+            risk_per_trade=Decimal("0.01"),
+            fixed_stop_loss_pct=Decimal("0.05"),
+            enable_technical_stop=False,
+            max_position_pct=Decimal("0.20"),
+            symbol="AAPL",
+            action="buy",
+            entry_price=Decimal("150.00"),
+            current_symbol_exposure=Decimal("0"),
+            current_total_exposure=Decimal("0"),
+            open_orders_exposure=Decimal("0"),
+            margin_multiplier=Decimal("1"),
+        )
+
+    assert decision["approved"] is False
+    assert "LIVE session risk context incomplete" in decision["reason"]
+    mock_evaluate_risk.assert_not_called()
+
+
 def test_reject_invalid_action_without_calling_risk_agent():
     with patch("app.risk_manager.evaluate_risk") as mock_evaluate_risk:
         decision = assess_trade(
