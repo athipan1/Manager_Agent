@@ -75,6 +75,18 @@ class DatabaseAgentClient(ResilientAgentClient):
         standard_resp = self.validate_standard_response(response_data)
         return [_coerce_dict(row) for row in (standard_resp.data or [])]
 
+    async def get_session_risk_snapshot(
+        self,
+        account_id: Union[int, str],
+        correlation_id: str,
+        symbol: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        params = {"symbol": symbol} if symbol else None
+        url = DatabaseEndpoints.SESSION_RISK.format(account_id=account_id)
+        response_data = await self._get(url, correlation_id, params=params)
+        standard_resp = self.validate_standard_response(response_data)
+        return _coerce_dict(standard_resp.data)
+
     async def create_order(
         self,
         account_id: Union[int, str],
