@@ -66,7 +66,7 @@ async def test_get_account_balance_reconciles_broker_once(monkeypatch):
     balance = await client.get_account_balance(1, "corr-1")
     positions = await client.get_positions(1, "corr-1")
 
-    assert balance.cash_balance == 102037.87
+    assert str(balance.cash_balance) == "102037.87"
     assert len(positions) == 2
     assert FakeExecutionClient.calls == [{"account_id": "1", "correlation_id": "corr-1", "push_to_database": True}]
     assert [call["url"] for call in client.calls] == ["/accounts/1/balance", "/accounts/1/positions"]
