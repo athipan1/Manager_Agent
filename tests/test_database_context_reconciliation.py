@@ -14,11 +14,20 @@ def standard(data):
     }
 
 
+class FakeResponse:
+    def __init__(self, data):
+        self.data = data
+
+    def model_dump(self, mode="json"):
+        return standard(self.data)
+
+
 class FakeDatabaseClient(DatabaseAgentClient):
     def __init__(self):
         self.calls = []
         self.base_url = "fake-database"
         self._broker_context_reconciled_accounts = set()
+        self._broker_context_by_account = {}
 
     async def _get(self, url, correlation_id, **kwargs):
         self.calls.append({"method": "GET", "url": url})
@@ -51,7 +60,7 @@ class FakeExecutionClient:
             "correlation_id": correlation_id,
             "push_to_database": push_to_database,
         })
-        return standard({"ok": True, "database_sync": {"status": "success"}})
+        return FakeResponse({"ok": True, "database_sync": {"status": "success"}})
 
 
 @pytest.mark.asyncio
