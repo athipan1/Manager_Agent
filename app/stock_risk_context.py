@@ -91,14 +91,17 @@ def sector_from_analysis(result: Optional[Dict[str, Any]]) -> Optional[str]:
     return None
 
 
-def current_sector_exposure(positions: Iterable[Any], sector: Optional[str]) -> Decimal:
+def current_sector_exposure(positions: Iterable[Any], sector: Optional[str], *, inferred_symbol: Optional[str] = None) -> Decimal:
     if not sector:
         return Decimal("0")
     sector_norm = str(sector).strip().lower()
+    inferred_symbol_upper = str(inferred_symbol or "").upper()
     total = Decimal("0")
     for position in positions or []:
         pos_sector = _position_sector(position)
         if pos_sector and pos_sector.strip().lower() == sector_norm:
+            total += _position_exposure(position)
+        elif inferred_symbol_upper and _position_symbol(position) == inferred_symbol_upper:
             total += _position_exposure(position)
     return total
 
@@ -112,5 +115,5 @@ def build_stock_risk_context(symbol: str, positions: Iterable[Any], analysis_res
         "sector": sector,
         "owned_quantity": float(abs(_position_quantity(current_position))) if current_position else 0.0,
         "current_symbol_exposure": float(_position_exposure(current_position)) if current_position else 0.0,
-        "current_sector_exposure": float(current_sector_exposure(positions or [], sector)),
+        "current_sector_exposure": float(current_sector_exposure(positions or [], sector, inferred_symbol=symbol_upper)),
     }
