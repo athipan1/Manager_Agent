@@ -8,6 +8,7 @@ from . import config
 _STOCK_SYMBOL_RE = re.compile(r"^[A-Z]{1,5}(?:[.-][A-Z])?$")
 _CRYPTO_HINTS = {"BTC", "ETH", "SOL", "DOGE", "USDT", "USDC", "BNB", "XRP", "ADA"}
 _FOREX_HINTS = {"XAU", "XAG", "USD", "EUR", "JPY", "GBP", "AUD", "CAD", "CHF", "NZD"}
+_NON_TRADABLE_STOCK_SYMBOLS = {"CASH", "USD", "USDT", "USDC"}
 
 
 class StockGuardError(ValueError):
@@ -21,6 +22,8 @@ def normalize_symbol(symbol: str) -> str:
 def is_stock_symbol(symbol: str) -> bool:
     symbol = normalize_symbol(symbol)
     if not symbol or "/" in symbol or ":" in symbol:
+        return False
+    if symbol in _NON_TRADABLE_STOCK_SYMBOLS:
         return False
     if "-" in symbol and not symbol.endswith(('-A', '-B')):
         return False
