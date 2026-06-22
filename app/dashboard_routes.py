@@ -9,6 +9,7 @@ from .alerts import alert_service
 from .config_manager import config_manager
 from .contracts import StandardAgentResponse
 from .database_client import DatabaseAgentClient
+from .execution_client import ExecutionAgentClient
 
 router = APIRouter(tags=["Thai Trading Dashboard"])
 
@@ -46,6 +47,57 @@ def _response(data: Dict[str, Any]) -> StandardAgentResponse:
     )
 
 
+def _broker_state_from_response(response: Any) -> Dict[str, Any]:
+    payload = response.data if hasattr(response, "data") else None
+    if hasattr(payload, "model_dump"):
+        payload = payload.model_dump(mode="json")
+    return payload if isinstance(payload, dict) else {}
+
+
+def _balance_from_broker_account(account: Dict[str, Any], account_id: Union[int, str]) -> Dict[str, Any]:
+    return {
+        "account_id": account_id,
+        "cash_balance": account.get("cash"),
+        "cash": account.get("cash"),
+        "buying_power": account.get("buying_power"),
+        "equity": account.get("equity"),
+        "portfolio_value": account.get("portfolio_value"),
+        "source": "broker_fallback",
+    }
+
+
+def _db_context_looks_stale(balance: Any, positions: List[Any], orders: List[Dict[str, Any]], broker_state: Dict[str, Any]) -> bool:
+    if not broker_state:
+        return False
+    broker_positions = broker_state.get("positions") or []
+    broker_orders = broker_state.get("open_orders") or []
+    broker_account = broker_state.get("account") or {}
+    db_balance = _jsonable(balance) or {}
+    if broker_positions and not positions:
+        return True
+    if broker_orders and not orders:
+        return True
+    broker_cash = str(broker_account.get("cash") or "")
+    db_cash = str(db_balance.get("cash_balance") or db_balance.get("cash") or "")
+    if broker_cash and db_cash and broker_cash != db_cash:
+        return True
+    return False
+
+
+async def _load_broker_state(account_id: Union[int, str], correlation_id: str) -> Dict[str, Any]:
+    try:
+        async with ExecutionAgentClient() as exec_client:
+            reconcile = await exec_client.reconcile_broker_state(account_id, correlation_id)
+            reconcile_payload = _broker_state_from_response(reconcile)
+            broker_state = reconcile_payload.get("broker_state") or {}
+            if broker_state:
+                return {"status": "success", "mode": "reconcile", "payload": reconcile_payload, "broker_state": broker_state}
+            state = await exec_client.broker_state(account_id, correlation_id)
+            return {"status": "success", "mode": "state", "payload": _broker_state_from_response(state), "broker_state": _broker_state_from_response(state)}
+    except Exception as exc:
+        return {"status": "failed", "error": str(exc), "payload": {}, "broker_state": {}}
+
+
 async def _dashboard_payload(account_id: Optional[Union[int, str]], correlation_id: str) -> Dict[str, Any]:
     account_id = account_id if account_id is not None else config_manager.get("DEFAULT_ACCOUNT_ID")
     problems = alert_service.list_events(limit=50)
@@ -54,6 +106,9 @@ async def _dashboard_payload(account_id: Optional[Union[int, str]], correlation_
     orders: List[Dict[str, Any]] = []
     trade_history: List[Any] = []
     data_errors: List[str] = []
+
+    broker_sync = await _load_broker_state(account_id, correlation_id)
+    broker_state = broker_sync.get("broker_state") or {}
 
     try:
         async with DatabaseAgentClient() as db_client:
@@ -76,6 +131,23 @@ async def _dashboard_payload(account_id: Optional[Union[int, str]], correlation_
     except Exception as exc:
         data_errors.append(f"เชื่อมต่อ Database Agent ไม่สำเร็จ: {exc}")
 
+    data_source = "database"
+    if _db_context_looks_stale(balance, positions, orders, broker_state):
+        account = broker_state.get("account") or {}
+        balance = _balance_from_broker_account(account, account_id)
+        positions = broker_state.get("positions") or []
+        orders = broker_state.get("open_orders") or []
+        data_source = "broker_fallback"
+        problems = [
+            {
+                "alert_type": "dashboard_broker_fallback",
+                "severity": "warning",
+                "message": "Dashboard ใช้ข้อมูล broker โดยตรง เพราะ Database context ยังไม่ตรงกับ broker",
+                "created_at": _now().isoformat(),
+                "metadata": {"source": "dashboard", "broker_sync_status": broker_sync.get("status")},
+            }
+        ] + problems
+
     open_orders = [order for order in orders if _is_open_order(order)]
     if data_errors:
         problems = [
@@ -92,6 +164,8 @@ async def _dashboard_payload(account_id: Optional[Union[int, str]], correlation_
     return {
         "account_id": str(account_id),
         "generated_at": _now().isoformat(),
+        "data_source": data_source,
+        "broker_sync": _jsonable(broker_sync.get("payload") or {"status": broker_sync.get("status"), "error": broker_sync.get("error")}),
         "problems": _jsonable(problems),
         "balance": _jsonable(balance),
         "positions": _jsonable(positions),
@@ -106,7 +180,7 @@ async def _dashboard_payload(account_id: Optional[Union[int, str]], correlation_
     }
 
 
-@router.get("/dashboard/data", response_model=StandardAgentResponse)
+@app_placeholder@router.get("/dashboard/data", response_model=StandardAgentResponse)
 async def dashboard_data(account_id: Optional[str] = Query(default=None)):
     correlation_id = str(uuid.uuid4())
     return _response(await _dashboard_payload(account_id, correlation_id))
@@ -192,7 +266,7 @@ async function loadDashboard() {
   const res = await fetch(url);
   const body = await res.json();
   const data = body.data || {};
-  document.getElementById('updated').textContent = `อัปเดต: ${new Date(data.generated_at || Date.now()).toLocaleString('th-TH')}`;
+  document.getElementById('updated').textContent = `อัปเดต: ${new Date(data.generated_at || Date.now()).toLocaleString('th-TH')} | Source: ${data.data_source || '-'}`;
   document.getElementById('problemCount').textContent = data.summary?.problem_count ?? 0;
   document.getElementById('positionCount').textContent = data.summary?.position_count ?? 0;
   document.getElementById('openOrderCount').textContent = data.summary?.open_order_count ?? 0;
@@ -209,11 +283,10 @@ async function loadDashboard() {
     {label:'Order ID', keys:['order_id','id']}, {label:'หุ้น', keys:['symbol']}, {label:'ฝั่ง', keys:['side']}, {label:'จำนวน', keys:['quantity','qty']}, {label:'สถานะ', render:r=>badge(pick(r,['status','order_status']))}, {label:'เวลา', keys:['created_at','submitted_at']}
   ]);
   document.getElementById('trades').innerHTML = table(data.trade_history, [
-    {label:'Trade ID', keys:['trade_id','id']}, {label:'หุ้น', keys:['symbol']}, {label:'ฝั่ง', keys:['side']}, {label:'จำนวน', keys:['quantity','qty']}, {label:'ราคา', render:r=>fmtMoney(pick(r,['price','fill_price','entry_price']))}, {label:'เวลา', keys:['executed_at','created_at','timestamp']}
+    {label:'Trade ID', keys:['trade_id','id']}, {label:'หุ้น', keys:['symbol']}, {label:'ฝั่ง', keys:['side']}, {label:'จำนวน', keys:['quantity','qty']}, {label:'ราคา', render:r=>fmtMoney(pick(r,['price','fill_price','entry_price']))}, {label:'เวลา', keys:['executed_at','filled_at','timestamp']}
   ]);
 }
 loadDashboard();
-setInterval(loadDashboard, 30000);
 </script>
 </body>
 </html>
