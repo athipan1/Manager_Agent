@@ -74,4 +74,5 @@ def test_build_stock_risk_context_supports_broker_dict_sector_from_analysis():
     context = build_stock_risk_context("ACGL", positions, result)
 
     assert context["owned_quantity"] == 2190.0
-    assert context["current_sector_exposure"] == 7500.0
+    assert context["current_symbol_exposure"] == 202224.6
+    assert context["current_sector_exposure"] == 209724.6
