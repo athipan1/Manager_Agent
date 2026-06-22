@@ -96,6 +96,14 @@ def _build_result(approved: bool, reason: str, symbol: str, action: str, entry_p
     }
 
 
+def _default_stock_context(current_position_size: int) -> Dict[str, Any]:
+    return {
+        "asset_class": config.ASSET_CLASS,
+        "owned_quantity": float(abs(int(current_position_size or 0))),
+        "current_sector_exposure": 0.0,
+    }
+
+
 def assess_trade(
     portfolio_value: Decimal,
     risk_per_trade: Decimal,
@@ -122,7 +130,7 @@ def assess_trade(
 ) -> Dict[str, Any]:
     side = _normalise_action(action)
     session_risk_context = session_risk_context or {}
-    stock_risk_context = stock_risk_context or {"asset_class": config.ASSET_CLASS}
+    stock_risk_context = {**_default_stock_context(current_position_size), **(stock_risk_context or {})}
 
     if side == "hold":
         return _build_result(False, "Risk_Agent check skipped because action is hold or unsupported.", symbol, str(action).lower(), entry_price, session_risk_context=session_risk_context, stock_risk_context=stock_risk_context)
