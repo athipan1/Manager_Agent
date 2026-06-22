@@ -104,6 +104,17 @@ def _default_stock_context(current_position_size: int) -> Dict[str, Any]:
     }
 
 
+def _normalize_stock_context(stock_risk_context: Dict[str, Any], *, current_position_size: int, symbol_exposure: Decimal) -> Dict[str, Any]:
+    context = {**_default_stock_context(current_position_size), **(stock_risk_context or {})}
+    context.setdefault("asset_class", config.ASSET_CLASS)
+    context.setdefault("owned_quantity", float(abs(int(current_position_size or 0))))
+    if _as_decimal(context.get("current_symbol_exposure"), Decimal("0")) <= Decimal("0") and symbol_exposure > Decimal("0"):
+        context["current_symbol_exposure"] = float(symbol_exposure)
+    if _as_decimal(context.get("current_sector_exposure"), Decimal("0")) <= Decimal("0") and symbol_exposure > Decimal("0"):
+        context["current_sector_exposure"] = float(symbol_exposure)
+    return context
+
+
 def assess_trade(
     portfolio_value: Decimal,
     risk_per_trade: Decimal,
@@ -130,7 +141,9 @@ def assess_trade(
 ) -> Dict[str, Any]:
     side = _normalise_action(action)
     session_risk_context = session_risk_context or {}
-    stock_risk_context = {**_default_stock_context(current_position_size), **(stock_risk_context or {})}
+    derived_symbol_exposure = abs(Decimal(int(current_position_size or 0)) * entry_price)
+    symbol_exposure = _as_decimal(current_symbol_exposure, derived_symbol_exposure)
+    stock_risk_context = _normalize_stock_context(stock_risk_context or {}, current_position_size=current_position_size, symbol_exposure=symbol_exposure)
 
     if side == "hold":
         return _build_result(False, "Risk_Agent check skipped because action is hold or unsupported.", symbol, str(action).lower(), entry_price, session_risk_context=session_risk_context, stock_risk_context=stock_risk_context)
@@ -157,8 +170,6 @@ def assess_trade(
     if side == "sell" and protection_price <= entry_price:
         protection_price = _default_protection_price(side, entry_price, fixed_stop_loss_pct)
 
-    derived_symbol_exposure = abs(Decimal(int(current_position_size or 0)) * entry_price)
-    symbol_exposure = _as_decimal(current_symbol_exposure, derived_symbol_exposure)
     total_exposure = _as_decimal(current_total_exposure, symbol_exposure)
     pending_exposure = _as_decimal(open_orders_exposure, Decimal("0"))
     margin = _as_decimal(margin_multiplier, Decimal(str(config.DEFAULT_MARGIN_MULTIPLIER)))
