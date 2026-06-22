@@ -6,9 +6,25 @@ from typing import Any, Dict, Iterable, Optional
 from . import config
 
 
+def _get(position: Any, *names: str, default: Any = None) -> Any:
+    if position is None:
+        return default
+    if isinstance(position, dict):
+        for name in names:
+            value = position.get(name)
+            if value is not None:
+                return value
+        return default
+    for name in names:
+        value = getattr(position, name, None)
+        if value is not None:
+            return value
+    return default
+
+
 def _as_decimal(value: Any) -> Decimal:
     try:
-        if value is None:
+        if value is None or value == "":
             return Decimal("0")
         return Decimal(str(value))
     except Exception:
@@ -16,27 +32,34 @@ def _as_decimal(value: Any) -> Decimal:
 
 
 def _position_symbol(position: Any) -> str:
-    return str(getattr(position, "symbol", "") or "").upper()
+    return str(_get(position, "symbol", default="") or "").upper()
 
 
 def _position_quantity(position: Any) -> Decimal:
-    return _as_decimal(getattr(position, "quantity", 0))
+    return _as_decimal(_get(position, "quantity", "qty", "owned_quantity", default=0))
 
 
 def _position_price(position: Any) -> Decimal:
-    return _as_decimal(getattr(position, "current_market_price", None) or getattr(position, "average_cost", None))
+    return _as_decimal(_get(position, "current_market_price", "current_price", "market_price", "average_cost", "avg_entry_price", default=0))
+
+
+def _position_market_value(position: Any) -> Decimal:
+    market_value = _as_decimal(_get(position, "market_value", "value", default=None))
+    if market_value:
+        return abs(market_value)
+    return abs(_position_quantity(position) * _position_price(position))
 
 
 def _position_exposure(position: Any) -> Decimal:
-    return abs(_position_quantity(position) * _position_price(position))
+    return _position_market_value(position)
 
 
 def _position_sector(position: Any) -> Optional[str]:
     for attr in ("sector", "industry_sector"):
-        value = getattr(position, attr, None)
+        value = _get(position, attr, default=None)
         if value:
             return str(value)
-    metadata = getattr(position, "metadata", None)
+    metadata = _get(position, "metadata", default=None)
     if isinstance(metadata, dict):
         value = metadata.get("sector") or metadata.get("industry_sector")
         if value:
@@ -68,14 +91,17 @@ def sector_from_analysis(result: Optional[Dict[str, Any]]) -> Optional[str]:
     return None
 
 
-def current_sector_exposure(positions: Iterable[Any], sector: Optional[str]) -> Decimal:
+def current_sector_exposure(positions: Iterable[Any], sector: Optional[str], *, inferred_symbol: Optional[str] = None) -> Decimal:
     if not sector:
         return Decimal("0")
     sector_norm = str(sector).strip().lower()
+    inferred_symbol_upper = str(inferred_symbol or "").upper()
     total = Decimal("0")
     for position in positions or []:
         pos_sector = _position_sector(position)
         if pos_sector and pos_sector.strip().lower() == sector_norm:
+            total += _position_exposure(position)
+        elif inferred_symbol_upper and _position_symbol(position) == inferred_symbol_upper:
             total += _position_exposure(position)
     return total
 
@@ -88,5 +114,6 @@ def build_stock_risk_context(symbol: str, positions: Iterable[Any], analysis_res
         "asset_class": config.ASSET_CLASS,
         "sector": sector,
         "owned_quantity": float(abs(_position_quantity(current_position))) if current_position else 0.0,
-        "current_sector_exposure": float(current_sector_exposure(positions or [], sector)),
+        "current_symbol_exposure": float(_position_exposure(current_position)) if current_position else 0.0,
+        "current_sector_exposure": float(current_sector_exposure(positions or [], sector, inferred_symbol=symbol_upper)),
     }
