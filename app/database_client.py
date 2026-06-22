@@ -14,8 +14,10 @@ from .contracts import (
     DatabaseEndpoints,
     StandardAgentResponse
 )
+from . import config
 from .config import DATABASE_AGENT_URL
 from .resilient_client import ResilientAgentClient, AgentUnavailable
+from .logger import report_logger
 
 T = TypeVar("T", bound=BaseModel)
 
@@ -38,6 +40,11 @@ def _coerce_dict(value: Any) -> Dict[str, Any]:
     return {}
 
 
+def _broker_reconciliation_ok(response: StandardAgentResponse) -> bool:
+    data = _coerce_dict(response.data)
+    return bool(data.get("ok", False))
+
+
 class DatabaseAgentClient(ResilientAgentClient):
     """
     A client for the Database Agent service, built on top of ResilientAgentClient.
@@ -46,30 +53,62 @@ class DatabaseAgentClient(ResilientAgentClient):
         api_key = os.getenv("DATABASE_AGENT_API_KEY")
         headers = {"X-API-KEY": api_key} if api_key else {}
         super().__init__(base_url=DATABASE_AGENT_URL, headers=headers)
+        self._broker_context_reconciled_accounts: set[str] = set()
+
+    async def _reconcile_broker_before_context(self, account_id: Union[int, str], correlation_id: str) -> Optional[StandardAgentResponse]:
+        if not config.BROKER_RECONCILE_BEFORE_CONTEXT:
+            return None
+        account_key = str(account_id)
+        if account_key in self._broker_context_reconciled_accounts:
+            return None
+        try:
+            # Local import avoids an import cycle at module load time.
+            from .execution_client import ExecutionAgentClient
+            async with ExecutionAgentClient() as execution_client:
+                result = await execution_client.reconcile_broker_state(
+                    account_id,
+                    correlation_id,
+                    push_to_database=config.BROKER_RECONCILE_PUSH_TO_DATABASE,
+                )
+            report_logger.info(f"Broker reconciliation before Database context read for account {account_id}: {result}, correlation_id={correlation_id}")
+            if config.BROKER_RECONCILE_CONTEXT_REQUIRED and not _broker_reconciliation_ok(result):
+                raise AgentUnavailable(f"Broker reconciliation returned ok=false before Database context read for account {account_id}")
+            self._broker_context_reconciled_accounts.add(account_key)
+            return result
+        except Exception as exc:
+            report_logger.warning(f"Broker reconciliation before Database context read failed for account {account_id}: {exc}, correlation_id={correlation_id}")
+            self._broker_context_reconciled_accounts.add(account_key)
+            if config.BROKER_RECONCILE_CONTEXT_REQUIRED:
+                raise AgentUnavailable(f"Broker reconciliation failed before Database context read for account {account_id}: {exc}") from exc
+            return None
 
     async def health(self, correlation_id: str) -> StandardAgentResponse:
         response_data = await self._get(DatabaseEndpoints.HEALTH, correlation_id)
         return self.validate_standard_response(response_data)
 
     async def get_account_balance(self, account_id: Union[int, str], correlation_id: str) -> AccountBalance:
+        await self._reconcile_broker_before_context(account_id, correlation_id)
         url = DatabaseEndpoints.BALANCE.format(account_id=account_id)
         response_data = await self._get(url, correlation_id)
         standard_resp = self.validate_standard_response(response_data)
         return _coerce_model(AccountBalance, standard_resp.data)
 
     async def get_positions(self, account_id: Union[int, str], correlation_id: str) -> List[Position]:
+        await self._reconcile_broker_before_context(account_id, correlation_id)
         url = DatabaseEndpoints.POSITIONS.format(account_id=account_id)
         response_data = await self._get(url, correlation_id)
         standard_resp = self.validate_standard_response(response_data)
         return [_coerce_model(Position, p) for p in standard_resp.data]
 
     async def get_orders(self, account_id: Union[int, str], correlation_id: str) -> List[Dict[str, Any]]:
+        await self._reconcile_broker_before_context(account_id, correlation_id)
         url = DatabaseEndpoints.ORDERS.format(account_id=account_id)
         response_data = await self._get(url, correlation_id)
         standard_resp = self.validate_standard_response(response_data)
         return [_coerce_dict(row) for row in (standard_resp.data or [])]
 
     async def get_session_risk_snapshot(self, account_id: Union[int, str], correlation_id: str, symbol: Optional[str] = None) -> Dict[str, Any]:
+        await self._reconcile_broker_before_context(account_id, correlation_id)
         params = {"symbol": symbol} if symbol else None
         url = DatabaseEndpoints.SESSION_RISK.format(account_id=account_id)
         response_data = await self._get(url, correlation_id, params=params)
@@ -95,6 +134,7 @@ class DatabaseAgentClient(ResilientAgentClient):
         return _coerce_model(Order, standard_resp.data)
 
     async def get_trade_history(self, account_id: Union[int, str], correlation_id: str) -> List[Trade]:
+        await self._reconcile_broker_before_context(account_id, correlation_id)
         url = DatabaseEndpoints.TRADE_HISTORY.format(account_id=account_id)
         response_data = await self._get(url, correlation_id)
         standard_resp = self.validate_standard_response(response_data)

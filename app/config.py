@@ -63,10 +63,12 @@ EXECUTION_API_KEY = os.getenv("EXECUTION_API_KEY", os.getenv("EXECUTION_AGENT_AP
 DEFAULT_MARGIN_MULTIPLIER = float(os.getenv("DEFAULT_MARGIN_MULTIPLIER", 1.0))
 
 # Broker reconciliation guardrails. Manager asks Execution_Agent to pull broker truth
-# and push it into Database_Agent before order submission.
+# and push it into Database_Agent before order submission and before DB context reads.
 BROKER_RECONCILE_BEFORE_EXECUTION = _env_bool("BROKER_RECONCILE_BEFORE_EXECUTION", True)
+BROKER_RECONCILE_BEFORE_CONTEXT = _env_bool("BROKER_RECONCILE_BEFORE_CONTEXT", True)
 BROKER_RECONCILE_PUSH_TO_DATABASE = _env_bool("BROKER_RECONCILE_PUSH_TO_DATABASE", True)
 BROKER_RECONCILE_REQUIRED = _env_bool("BROKER_RECONCILE_REQUIRED", False)
+BROKER_RECONCILE_CONTEXT_REQUIRED = _env_bool("BROKER_RECONCILE_CONTEXT_REQUIRED", False)
 
 
 # Resilient Agent Client Parameters
