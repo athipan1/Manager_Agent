@@ -1,5 +1,6 @@
 import os
 from typing import List, Any, Dict, Union, Type, TypeVar, Optional
+from decimal import Decimal
 from pydantic import BaseModel
 
 from .contracts import (
@@ -45,6 +46,30 @@ def _broker_reconciliation_ok(response: StandardAgentResponse) -> bool:
     return bool(data.get("ok", False))
 
 
+def _broker_state_from_reconcile(response: Optional[StandardAgentResponse]) -> Dict[str, Any]:
+    if not response:
+        return {}
+    data = _coerce_dict(response.data)
+    broker_state = data.get("broker_state") or data.get("state") or {}
+    return broker_state if isinstance(broker_state, dict) else {}
+
+
+def _broker_position_to_position(position: Dict[str, Any]) -> Position:
+    return Position(
+        symbol=str(position.get("symbol") or "").upper(),
+        quantity=int(Decimal(str(position.get("quantity") or position.get("qty") or 0))),
+        average_cost=Decimal(str(position.get("average_cost") or position.get("avg_entry_price") or position.get("current_price") or 0)),
+        current_market_price=Decimal(str(position.get("current_market_price") or position.get("current_price") or position.get("market_price") or position.get("avg_entry_price") or 0)),
+    )
+
+
+def _broker_account_to_balance(account: Dict[str, Any]) -> AccountBalance:
+    # Prefer equity/portfolio value for portfolio calculations when cash can be negative
+    # in margin/paper accounts. Fall back to cash when equity is unavailable.
+    value = account.get("equity") or account.get("portfolio_value") or account.get("cash") or account.get("buying_power") or 0
+    return AccountBalance(cash_balance=Decimal(str(value)))
+
+
 class DatabaseAgentClient(ResilientAgentClient):
     """
     A client for the Database Agent service, built on top of ResilientAgentClient.
@@ -54,6 +79,7 @@ class DatabaseAgentClient(ResilientAgentClient):
         headers = {"X-API-KEY": api_key} if api_key else {}
         super().__init__(base_url=DATABASE_AGENT_URL, headers=headers)
         self._broker_context_reconciled_accounts: set[str] = set()
+        self._broker_context_by_account: Dict[str, Dict[str, Any]] = {}
 
     async def _reconcile_broker_before_context(self, account_id: Union[int, str], correlation_id: str) -> Optional[StandardAgentResponse]:
         if not config.BROKER_RECONCILE_BEFORE_CONTEXT:
@@ -71,6 +97,9 @@ class DatabaseAgentClient(ResilientAgentClient):
                     push_to_database=config.BROKER_RECONCILE_PUSH_TO_DATABASE,
                 )
             report_logger.info(f"Broker reconciliation before Database context read for account {account_id}: {result}, correlation_id={correlation_id}")
+            broker_state = _broker_state_from_reconcile(result)
+            if broker_state:
+                self._broker_context_by_account[account_key] = broker_state
             if config.BROKER_RECONCILE_CONTEXT_REQUIRED and not _broker_reconciliation_ok(result):
                 raise AgentUnavailable(f"Broker reconciliation returned ok=false before Database context read for account {account_id}")
             self._broker_context_reconciled_accounts.add(account_key)
@@ -82,6 +111,9 @@ class DatabaseAgentClient(ResilientAgentClient):
                 raise AgentUnavailable(f"Broker reconciliation failed before Database context read for account {account_id}: {exc}") from exc
             return None
 
+    def _cached_broker_state(self, account_id: Union[int, str]) -> Dict[str, Any]:
+        return self._broker_context_by_account.get(str(account_id), {})
+
     async def health(self, correlation_id: str) -> StandardAgentResponse:
         response_data = await self._get(DatabaseEndpoints.HEALTH, correlation_id)
         return self.validate_standard_response(response_data)
@@ -91,21 +123,43 @@ class DatabaseAgentClient(ResilientAgentClient):
         url = DatabaseEndpoints.BALANCE.format(account_id=account_id)
         response_data = await self._get(url, correlation_id)
         standard_resp = self.validate_standard_response(response_data)
-        return _coerce_model(AccountBalance, standard_resp.data)
+        db_balance = _coerce_model(AccountBalance, standard_resp.data)
+        broker_state = self._cached_broker_state(account_id)
+        broker_account = broker_state.get("account") or {}
+        if broker_account:
+            broker_balance = _broker_account_to_balance(broker_account)
+            db_cash = str(db_balance.cash_balance)
+            broker_cash = str(broker_account.get("cash") or "")
+            if broker_cash and db_cash != broker_cash:
+                report_logger.warning(f"Database balance looks stale for account {account_id}; using broker equity for trade context. db_cash={db_cash}, broker_cash={broker_cash}, correlation_id={correlation_id}")
+                return broker_balance
+        return db_balance
 
     async def get_positions(self, account_id: Union[int, str], correlation_id: str) -> List[Position]:
         await self._reconcile_broker_before_context(account_id, correlation_id)
         url = DatabaseEndpoints.POSITIONS.format(account_id=account_id)
         response_data = await self._get(url, correlation_id)
         standard_resp = self.validate_standard_response(response_data)
-        return [_coerce_model(Position, p) for p in standard_resp.data]
+        db_positions = [_coerce_model(Position, p) for p in (standard_resp.data or [])]
+        broker_state = self._cached_broker_state(account_id)
+        broker_positions = broker_state.get("positions") or []
+        if broker_positions and not db_positions:
+            report_logger.warning(f"Database positions look stale for account {account_id}; using broker positions for trade context. broker_positions={len(broker_positions)}, correlation_id={correlation_id}")
+            return [_broker_position_to_position(position) for position in broker_positions]
+        return db_positions
 
     async def get_orders(self, account_id: Union[int, str], correlation_id: str) -> List[Dict[str, Any]]:
         await self._reconcile_broker_before_context(account_id, correlation_id)
         url = DatabaseEndpoints.ORDERS.format(account_id=account_id)
         response_data = await self._get(url, correlation_id)
         standard_resp = self.validate_standard_response(response_data)
-        return [_coerce_dict(row) for row in (standard_resp.data or [])]
+        db_orders = [_coerce_dict(row) for row in (standard_resp.data or [])]
+        broker_state = self._cached_broker_state(account_id)
+        broker_orders = broker_state.get("open_orders") or []
+        if broker_orders and not db_orders:
+            report_logger.warning(f"Database orders look stale for account {account_id}; using broker open orders for trade context. broker_orders={len(broker_orders)}, correlation_id={correlation_id}")
+            return broker_orders
+        return db_orders
 
     async def get_session_risk_snapshot(self, account_id: Union[int, str], correlation_id: str, symbol: Optional[str] = None) -> Dict[str, Any]:
         await self._reconcile_broker_before_context(account_id, correlation_id)
