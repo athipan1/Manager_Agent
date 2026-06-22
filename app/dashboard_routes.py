@@ -180,7 +180,7 @@ async def _dashboard_payload(account_id: Optional[Union[int, str]], correlation_
     }
 
 
-@app_placeholder@router.get("/dashboard/data", response_model=StandardAgentResponse)
+@router.get("/dashboard/data", response_model=StandardAgentResponse)
 async def dashboard_data(account_id: Optional[str] = Query(default=None)):
     correlation_id = str(uuid.uuid4())
     return _response(await _dashboard_payload(account_id, correlation_id))
