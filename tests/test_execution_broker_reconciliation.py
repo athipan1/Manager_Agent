@@ -5,25 +5,33 @@ from app.contracts import CreateOrderRequest
 from app.execution_client import ExecutionAgentClient
 
 
+def standard(data):
+    return {
+        "status": "success",
+        "agent_type": "execution-agent",
+        "version": "1.0.0",
+        "timestamp": "2026-06-22T00:00:00Z",
+        "data": data,
+    }
+
+
 class FakeExecutionClient(ExecutionAgentClient):
     def __init__(self, *, reconcile_payload=None):
         self.calls = []
-        self.reconcile_payload = reconcile_payload or {"status": "success", "data": {"ok": True, "database_sync": {"status": "success"}}}
+        self.base_url = "fake-execution"
+        self.reconcile_payload = reconcile_payload or standard({"ok": True, "database_sync": {"status": "success"}})
 
     async def _post(self, url, correlation_id, json_data=None, extra_headers=None):
         self.calls.append({"url": url, "json_data": json_data, "extra_headers": extra_headers})
         if url.startswith("/broker/reconcile"):
             return self.reconcile_payload
         if url == "/execute":
-            return {
-                "status": "success",
-                "data": {
-                    "order_id": "order-1",
-                    "trade_id": "client-1",
-                    "status": "placed",
-                    "reason": None,
-                },
-            }
+            return standard({
+                "order_id": "order-1",
+                "trade_id": "client-1",
+                "status": "placed",
+                "reason": None,
+            })
         raise AssertionError(f"Unexpected URL {url}")
 
 
@@ -60,7 +68,7 @@ async def test_create_order_blocks_execute_when_required_reconciliation_fails(mo
     monkeypatch.setattr(config, "BROKER_RECONCILE_BEFORE_EXECUTION", True)
     monkeypatch.setattr(config, "BROKER_RECONCILE_PUSH_TO_DATABASE", True)
     monkeypatch.setattr(config, "BROKER_RECONCILE_REQUIRED", True)
-    client = FakeExecutionClient(reconcile_payload={"status": "success", "data": {"ok": False, "database_sync": {"status": "failed"}}})
+    client = FakeExecutionClient(reconcile_payload=standard({"ok": False, "database_sync": {"status": "failed"}}))
 
     response = await client.create_order(order_request(), "corr-1")
 
