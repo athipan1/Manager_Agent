@@ -2,6 +2,7 @@ from typing import List, Dict, Any, Optional
 from decimal import Decimal
 from .risk_manager import assess_trade
 from .models import Position
+from .stock_risk_context import build_stock_risk_context
 
 
 class PortfolioRiskManager:
@@ -115,7 +116,8 @@ def assess_portfolio_trades(analysis_results: List[Dict[str, Any]], cash_balance
     for result in sell_verdicts:
         ticker = result["ticker"]
         current_position = next((p for p in existing_positions if p.symbol == ticker), None)
-        sell_decision = assess_trade(portfolio_value=portfolio_value, risk_per_trade=risk_per_trade, fixed_stop_loss_pct=fixed_stop_loss_pct, enable_technical_stop=False, max_position_pct=max_position_pct, symbol=ticker, action=result["final_verdict"], entry_price=_position_price(current_position), current_position_size=current_position.quantity if current_position else 0, current_symbol_exposure=_position_exposure(current_position), current_total_exposure=manager.exposure_before_next_trade(), open_orders_exposure=open_orders_exposure, margin_multiplier=margin_multiplier, session_risk_context=_symbol_session_context(session_risk_context, ticker))
+        stock_context = build_stock_risk_context(ticker, existing_positions, result)
+        sell_decision = assess_trade(portfolio_value=portfolio_value, risk_per_trade=risk_per_trade, fixed_stop_loss_pct=fixed_stop_loss_pct, enable_technical_stop=False, max_position_pct=max_position_pct, symbol=ticker, action=result["final_verdict"], entry_price=_position_price(current_position), current_position_size=current_position.quantity if current_position else 0, current_symbol_exposure=_position_exposure(current_position), current_total_exposure=manager.exposure_before_next_trade(), open_orders_exposure=open_orders_exposure, margin_multiplier=margin_multiplier, session_risk_context=_symbol_session_context(session_risk_context, ticker), stock_risk_context=stock_context)
         manager.evaluate_sell(sell_decision)
         final_decisions.append(sell_decision)
 
@@ -124,7 +126,8 @@ def assess_portfolio_trades(analysis_results: List[Dict[str, Any]], cash_balance
         current_position = next((p for p in existing_positions if p.symbol == ticker), None)
         entry_price_raw = _current_price_from_result(result)
         technical_stop_loss_raw = _technical_stop_from_result(result)
-        initial_buy_decision = assess_trade(portfolio_value=portfolio_value, risk_per_trade=risk_per_trade, fixed_stop_loss_pct=fixed_stop_loss_pct, enable_technical_stop=enable_technical_stop, max_position_pct=max_position_pct, symbol=ticker, action=result["final_verdict"], entry_price=entry_price_raw, technical_stop_loss=Decimal(str(technical_stop_loss_raw)) if technical_stop_loss_raw is not None else None, current_position_size=current_position.quantity if current_position else 0, current_symbol_exposure=_position_exposure(current_position), current_total_exposure=manager.exposure_before_next_trade(), open_orders_exposure=open_orders_exposure, margin_multiplier=margin_multiplier, session_risk_context=_symbol_session_context(session_risk_context, ticker))
+        stock_context = build_stock_risk_context(ticker, existing_positions, result)
+        initial_buy_decision = assess_trade(portfolio_value=portfolio_value, risk_per_trade=risk_per_trade, fixed_stop_loss_pct=fixed_stop_loss_pct, enable_technical_stop=enable_technical_stop, max_position_pct=max_position_pct, symbol=ticker, action=result["final_verdict"], entry_price=entry_price_raw, technical_stop_loss=Decimal(str(technical_stop_loss_raw)) if technical_stop_loss_raw is not None else None, current_position_size=current_position.quantity if current_position else 0, current_symbol_exposure=_position_exposure(current_position), current_total_exposure=manager.exposure_before_next_trade(), open_orders_exposure=open_orders_exposure, margin_multiplier=margin_multiplier, session_risk_context=_symbol_session_context(session_risk_context, ticker), stock_risk_context=stock_context)
         final_buy_decision = manager.evaluate_buy(initial_buy_decision)
         final_decisions.append(final_buy_decision)
 
