@@ -28,6 +28,32 @@ async def _check_execution(correlation_id: str) -> Dict[str, Any]:
         return {"status": "fail", "details": str(exc)}
 
 
+async def _check_broker_reconciliation(account_id: Union[int, str], correlation_id: str) -> Dict[str, Any]:
+    try:
+        async with ExecutionAgentClient() as client:
+            result = await client.reconcile_broker_state(account_id, correlation_id, push_to_database=config.BROKER_RECONCILE_PUSH_TO_DATABASE)
+        payload = result.data if isinstance(result.data, dict) else {}
+        ok = bool(payload.get("ok", False))
+        database_sync = payload.get("database_sync") or {}
+        broker_state = payload.get("broker_state") or {}
+        summary = broker_state.get("summary") or {}
+        status = "pass" if ok else "warn"
+        if config.BROKER_RECONCILE_REQUIRED and not ok:
+            status = "fail"
+        return {
+            "status": status,
+            "details": "Broker reconciliation completed." if ok else "Broker reconciliation returned non-ok status.",
+            "database_sync_status": database_sync.get("status"),
+            "position_count": summary.get("position_count"),
+            "open_order_count": summary.get("open_order_count"),
+            "stale_order_count": summary.get("stale_order_count"),
+            "buying_power_unavailable": summary.get("buying_power_unavailable"),
+            "cash_negative": summary.get("cash_negative"),
+        }
+    except Exception as exc:
+        return {"status": "fail" if config.BROKER_RECONCILE_REQUIRED else "warn", "details": str(exc)}
+
+
 async def _check_risk() -> Dict[str, Any]:
     try:
         async with httpx.AsyncClient(base_url=RISK_AGENT_URL, timeout=RISK_AGENT_TIMEOUT) as client:
@@ -45,6 +71,7 @@ def _check_config() -> Dict[str, Any]:
         "trading_enabled": bool(config.TRADING_ENABLED),
         "emergency_halt_off": not bool(config.MANAGER_EMERGENCY_HALT),
         "manual_approval_flag_known": isinstance(config.MANUAL_APPROVAL_REQUIRED, bool),
+        "broker_reconcile_before_execution": bool(config.BROKER_RECONCILE_BEFORE_EXECUTION),
     }
     return {"status": "pass" if all(checks.values()) else "fail", "checks": checks}
 
@@ -65,6 +92,7 @@ async def run_stock_live_preflight(account_id: Union[int, str], sample_symbol: s
             "database": await _check_database(db_client, account_id, correlation_id, sample_symbol),
             "risk_agent": await _check_risk(),
             "execution_agent": await _check_execution(correlation_id),
+            "broker_reconciliation": await _check_broker_reconciliation(account_id, correlation_id),
         }
     approved = all(item.get("status") == "pass" for item in checks.values())
     return {
