@@ -15,6 +15,8 @@ class DatabaseEndpoints:
 class ExecutionEndpoints:
     HEALTH = "/health"
     EXECUTE = "/execute"
+    BROKER_STATE = "/broker/state"
+    BROKER_RECONCILE = "/broker/reconcile"
 
 class AnalysisEndpoints:
     ANALYZE = "/analyze"
