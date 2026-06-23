@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import httpx
-from typing import Any, Dict, Union
+from functools import wraps
+from typing import Any, Dict, List, Union
 
 from . import config
 from .database_client import DatabaseAgentClient
@@ -104,3 +105,77 @@ async def run_stock_live_preflight(account_id: Union[int, str], sample_symbol: s
         "manual_approval_required": config.MANUAL_APPROVAL_REQUIRED,
         "checks": checks,
     }
+
+
+def _response_data(response: Any) -> Dict[str, Any] | None:
+    data = getattr(response, "data", None)
+    if isinstance(data, dict):
+        return data
+    if isinstance(response, dict):
+        data = response.get("data")
+        return data if isinstance(data, dict) else None
+    return None
+
+
+def _ranked_rows_to_items(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    items: List[Dict[str, Any]] = []
+    for row in rows or []:
+        symbol = row.get("symbol")
+        if not symbol:
+            continue
+        items.append({
+            "symbol": symbol,
+            "analysis": {"ticker": symbol, "final_verdict": row.get("final_verdict") or "hold", "status": row.get("analysis_status"), "details": {}},
+            "scanner_candidate": row.get("scanner_candidate") or {},
+            "score_breakdown": dict(row.get("score_breakdown") or {}),
+        })
+    return items
+
+
+def _attach_discover_allocation_response(response: Any) -> Any:
+    data = _response_data(response)
+    if not data or data.get("flow") != "discover_analyze_trade" or data.get("allocation_plan"):
+        return response
+    try:
+        from .discover_report_builder import build_discover_allocation_report
+        items = _ranked_rows_to_items(data.get("ranked_candidates") or [])
+        if not items:
+            return response
+        report = build_discover_allocation_report(ranked=items, portfolio_value=0, min_final_score=0)
+        data["allocation_plan"] = report.get("allocation_plan")
+        data["bucket_selection"] = report.get("bucket_selection")
+        data["ranked_candidates"] = report.get("ranked_candidates") or data.get("ranked_candidates")
+        winner = data.get("winner") or {}
+        patched_winner = report.get("winner") or {}
+        winner["strategy_bucket"] = patched_winner.get("strategy_bucket") or (patched_winner.get("score_breakdown") or {}).get("strategy_bucket")
+        data["winner"] = winner
+    except Exception:
+        return response
+    return response
+
+
+def _install_discover_allocation_response_patch() -> None:
+    try:
+        from fastapi import FastAPI
+    except Exception:
+        return
+    if getattr(FastAPI, "_discover_allocation_response_patch", False):
+        return
+    original_add_api_route = FastAPI.add_api_route
+
+    def patched_add_api_route(self, path, endpoint, *args, **kwargs):
+        if path == "/discover-analyze-trade":
+            original_endpoint = endpoint
+
+            @wraps(original_endpoint)
+            async def wrapped_endpoint(*endpoint_args, **endpoint_kwargs):
+                return _attach_discover_allocation_response(await original_endpoint(*endpoint_args, **endpoint_kwargs))
+
+            endpoint = wrapped_endpoint
+        return original_add_api_route(self, path, endpoint, *args, **kwargs)
+
+    FastAPI.add_api_route = patched_add_api_route
+    FastAPI._discover_allocation_response_patch = True
+
+
+_install_discover_allocation_response_patch()
