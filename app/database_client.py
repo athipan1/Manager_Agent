@@ -41,6 +41,15 @@ def _coerce_dict(value: Any) -> Dict[str, Any]:
     return {}
 
 
+def _as_decimal(value: Any, default: Decimal = Decimal("0")) -> Decimal:
+    try:
+        if value is None or value == "":
+            return default
+        return Decimal(str(value))
+    except Exception:
+        return default
+
+
 def _broker_reconciliation_ok(response: StandardAgentResponse) -> bool:
     data = _coerce_dict(response.data)
     return bool(data.get("ok", False))
@@ -64,9 +73,10 @@ def _broker_position_to_position(position: Dict[str, Any]) -> Position:
 
 
 def _broker_account_to_balance(account: Dict[str, Any]) -> AccountBalance:
-    # Prefer equity/portfolio value for portfolio calculations when cash can be negative
-    # in margin/paper accounts. Fall back to cash when equity is unavailable.
-    value = account.get("equity") or account.get("portfolio_value") or account.get("cash") or account.get("buying_power") or 0
+    # Portfolio sizing and Risk_Agent equity checks must use account equity/portfolio
+    # value, not raw cash. Cash can be negative in margin/paper accounts while
+    # portfolio equity is healthy and buying power remains available.
+    value = account.get("equity") or account.get("portfolio_value") or account.get("buying_power") or account.get("cash") or 0
     return AccountBalance(cash_balance=Decimal(str(value)))
 
 
@@ -128,10 +138,18 @@ class DatabaseAgentClient(ResilientAgentClient):
         broker_account = broker_state.get("account") or {}
         if broker_account:
             broker_balance = _broker_account_to_balance(broker_account)
-            db_cash = str(db_balance.cash_balance)
-            broker_cash = str(broker_account.get("cash") or "")
+            db_cash = _as_decimal(db_balance.cash_balance)
+            broker_cash = _as_decimal(broker_account.get("cash"))
+            broker_equity = _as_decimal(broker_account.get("equity") or broker_account.get("portfolio_value"))
+            if broker_equity > Decimal("0"):
+                report_logger.info(
+                    f"Using broker equity for trade balance context. account={account_id}, "
+                    f"db_cash={db_cash}, broker_cash={broker_cash}, broker_equity={broker_equity}, "
+                    f"correlation_id={correlation_id}"
+                )
+                return broker_balance
             if broker_cash and db_cash != broker_cash:
-                report_logger.warning(f"Database balance looks stale for account {account_id}; using broker equity for trade context. db_cash={db_cash}, broker_cash={broker_cash}, correlation_id={correlation_id}")
+                report_logger.warning(f"Database balance looks stale for account {account_id}; using broker account value for trade context. db_cash={db_cash}, broker_cash={broker_cash}, correlation_id={correlation_id}")
                 return broker_balance
         return db_balance
 
