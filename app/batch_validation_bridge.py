@@ -65,3 +65,34 @@ async def validate_bucket_batch(*, execution_client, bucket_risk_decisions: Dict
         "requests": [request.model_dump(mode="json") for request in requests],
         "execution_validation": data,
     }
+
+
+async def maybe_execute_validated_batch(
+    *,
+    execution_client,
+    validation_result: Dict[str, Any],
+    enabled: bool,
+    manual_approval_required: bool,
+    correlation_id: str,
+) -> Dict[str, Any]:
+    """Run the guarded batch endpoint only after validation and explicit opt-in."""
+    requests_data = validation_result.get("requests") or []
+    if not enabled:
+        return {"approved": False, "status": "not_attempted", "reason": "batch execution disabled"}
+    if manual_approval_required:
+        return {"approved": False, "status": "not_attempted", "reason": "manual approval required"}
+    if not validation_result.get("approved"):
+        return {"approved": False, "status": "not_attempted", "reason": "batch validation not approved"}
+    if not requests_data:
+        return {"approved": False, "status": "not_attempted", "reason": "no batch requests"}
+
+    requests = [CreateOrderRequest(**request) for request in requests_data]
+    response = await execution_client.execute_order_batch(requests, correlation_id)
+    data = response.data or {}
+    if hasattr(data, "model_dump"):
+        data = data.model_dump(mode="json")
+    return {
+        "approved": bool((data or {}).get("approved")),
+        "status": "attempted",
+        "execution": data,
+    }
