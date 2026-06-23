@@ -1,0 +1,292 @@
+name: Broker Sync Check
+
+on:
+  workflow_dispatch:
+    inputs:
+      broker_mode:
+        description: "Broker mode to verify"
+        required: false
+        default: "ALPACA"
+      fail_on_mismatch:
+        description: "Fail workflow when Database does not match latest broker snapshot"
+        required: false
+        default: "true"
+  schedule:
+    - cron: "35 * * * *"
+
+concurrency:
+  group: broker-sync-check
+  cancel-in-progress: false
+
+jobs:
+  broker-sync-check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    env:
+      BROKER_MODE: ${{ github.event.inputs.broker_mode || 'ALPACA' }}
+      DRY_RUN: "false"
+      TRADING_ENABLED: "false"
+      TRADING_MODE: "PAPER"
+      ALLOW_LIVE_TRADING: "false"
+      FAIL_ON_MISMATCH: ${{ github.event.inputs.fail_on_mismatch || 'true' }}
+      ALPACA_API_KEY_ID: ${{ secrets.ALPACA_API_KEY_ID }}
+      ALPACA_SECRET_KEY: ${{ secrets.ALPACA_SECRET_KEY }}
+      ALPACA_API_URL: ${{ secrets.ALPACA_API_URL || 'https://paper-api.alpaca.markets' }}
+
+    steps:
+      - name: Checkout Manager_Agent
+        uses: actions/checkout@v4
+        with:
+          path: Manager_Agent
+
+      - name: Checkout Scanner_Agent
+        uses: actions/checkout@v4
+        with:
+          repository: athipan1/Scanner_Agent
+          ref: main
+          path: Scanner_Agent
+          fetch-depth: 1
+
+      - name: Checkout Technical_Agent
+        uses: actions/checkout@v4
+        with:
+          repository: athipan1/Technical_Agent
+          ref: main
+          path: Technical_Agent
+          fetch-depth: 1
+
+      - name: Checkout Fundamental_Agent
+        uses: actions/checkout@v4
+        with:
+          repository: athipan1/Fundamental_Agent
+          ref: main
+          path: Fundamental_Agent
+          fetch-depth: 1
+
+      - name: Checkout Database_Agent
+        uses: actions/checkout@v4
+        with:
+          repository: athipan1/Database_Agent
+          ref: main
+          path: Database_Agent
+          fetch-depth: 1
+
+      - name: Checkout Learning_Agent
+        uses: actions/checkout@v4
+        with:
+          repository: athipan1/Learning_Agent
+          ref: main
+          path: Learning_Agent
+          fetch-depth: 1
+
+      - name: Checkout Execution_Agent
+        uses: actions/checkout@v4
+        with:
+          repository: athipan1/Execution_Agent
+          ref: main
+          path: Execution_Agent
+          fetch-depth: 1
+
+      - name: Show checked out agent commits
+        run: |
+          echo "Manager_Agent=$(git -C Manager_Agent rev-parse HEAD)"
+          echo "Scanner_Agent=$(git -C Scanner_Agent rev-parse HEAD)"
+          echo "Technical_Agent=$(git -C Technical_Agent rev-parse HEAD)"
+          echo "Fundamental_Agent=$(git -C Fundamental_Agent rev-parse HEAD)"
+          echo "Database_Agent=$(git -C Database_Agent rev-parse HEAD)"
+          echo "Learning_Agent=$(git -C Learning_Agent rev-parse HEAD)"
+          echo "Execution_Agent=$(git -C Execution_Agent rev-parse HEAD)"
+          echo "BROKER_MODE=${BROKER_MODE}"
+
+      - name: Validate Alpaca paper configuration
+        run: |
+          if [ "${BROKER_MODE}" = "ALPACA" ]; then
+            if [ -z "${ALPACA_API_KEY_ID}" ] || [ -z "${ALPACA_SECRET_KEY}" ]; then
+              echo "Missing GitHub Secrets: ALPACA_API_KEY_ID or ALPACA_SECRET_KEY"
+              exit 1
+            fi
+            echo "Alpaca paper mode configured."
+          else
+            echo "Simulator mode configured."
+          fi
+
+      - name: Build and start trading stack
+        working-directory: Manager_Agent
+        run: |
+          docker compose up --build -d
+
+      - name: Wait for services
+        working-directory: Manager_Agent
+        run: |
+          runtime_services="database-agent execution-agent manager-agent db"
+          for i in {1..60}; do
+            docker compose ps
+            exited=$(docker compose ps --status exited -q $runtime_services | wc -l | tr -d ' ')
+            if [ "$exited" != "0" ]; then
+              echo "One or more runtime containers exited."
+              for service in $runtime_services; do
+                echo "---- ${service} logs tail ----"
+                docker compose logs --tail=160 "$service" || true
+              done
+              exit 1
+            fi
+            manager=$(docker compose exec -T manager-agent python /app/healthcheck.py >/dev/null && echo ok || echo wait)
+            database=$(curl -fsS http://localhost:8004/health >/dev/null && echo ok || echo wait)
+            execution=$(curl -fsS http://localhost:8006/health >/dev/null && echo ok || echo wait)
+            echo "health: manager=$manager database=$database execution=$execution"
+            if [ "$manager$database$execution" = "okokok" ]; then
+              echo "Core sync services are reachable."
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "Services did not become reachable in time."
+          docker compose ps
+          for service in $runtime_services; do
+            echo "---- ${service} logs tail ----"
+            docker compose logs --tail=160 "$service" || true
+          done
+          exit 1
+
+      - name: Reconcile broker and verify database sync
+        working-directory: Manager_Agent
+        run: |
+          mkdir -p reports
+          docker compose exec -T manager-agent python - <<'PY' > reports/broker-sync-check.json
+          import json
+          import os
+          import sys
+          import urllib.error
+          import urllib.request
+          from datetime import datetime, timezone
+
+          execution_api_key = os.getenv("EXECUTION_API_KEY", "dev_execution_key")
+          database_api_key = os.getenv("DATABASE_AGENT_API_KEY", "dev_database_key")
+          fail_on_mismatch = os.getenv("FAIL_ON_MISMATCH", "true").lower() == "true"
+
+          def request_json(base_url, path, payload=None, method="GET", api_key=None, timeout=120):
+              data = None
+              headers = {}
+              if api_key:
+                  headers["X-API-KEY"] = api_key
+              if payload is not None:
+                  data = json.dumps(payload).encode("utf-8")
+                  headers["Content-Type"] = "application/json"
+              req = urllib.request.Request(f"{base_url}{path}", data=data, headers=headers, method=method)
+              try:
+                  with urllib.request.urlopen(req, timeout=timeout) as resp:
+                      body = resp.read().decode("utf-8")
+                      return json.loads(body) if body else None
+              except urllib.error.HTTPError as exc:
+                  body = exc.read().decode("utf-8")
+                  return {"status": "error", "http_status": exc.code, "body": body}
+              except Exception as exc:
+                  return {"status": "error", "error": str(exc)}
+
+          reconcile = request_json(
+              "http://execution-agent:8006",
+              "/broker/reconcile?account_id=1&push_to_database=true",
+              method="POST",
+              api_key=execution_api_key,
+              timeout=180,
+          )
+          status = request_json(
+              "http://database-agent:8004",
+              "/broker-sync/status?account_id=1",
+              api_key=database_api_key,
+              timeout=120,
+          )
+          account = request_json("http://execution-agent:8006", "/account", api_key=execution_api_key)
+          positions = request_json("http://execution-agent:8006", "/positions", api_key=execution_api_key)
+          orders = request_json("http://execution-agent:8006", "/orders", api_key=execution_api_key)
+
+          report = {
+              "generated_at": datetime.now(timezone.utc).isoformat(),
+              "broker_mode": os.getenv("BROKER_MODE"),
+              "reconcile": reconcile,
+              "database_sync_status": status,
+              "broker_snapshot": {
+                  "account": account,
+                  "positions": positions,
+                  "orders": orders,
+              },
+          }
+          print(json.dumps(report, ensure_ascii=False, indent=2, default=str))
+
+          status_data = status.get("data", status) if isinstance(status, dict) else {}
+          mismatch = status_data.get("mismatch") or {}
+          has_snapshot = bool(status_data.get("has_snapshot"))
+          is_synced = bool(mismatch.get("is_synced"))
+          reconcile_data = reconcile.get("data", reconcile) if isinstance(reconcile, dict) else {}
+          database_sync = reconcile_data.get("database_sync") or {}
+          database_sync_status = str(database_sync.get("status", "")).lower()
+
+          if database_sync_status in {"failed", "error", "skipped"}:
+              print(f"database_sync status is not healthy: {database_sync_status}", file=sys.stderr)
+              sys.exit(1)
+          if fail_on_mismatch and (not has_snapshot or not is_synced):
+              print("Database is not synced with the latest broker snapshot.", file=sys.stderr)
+              print(json.dumps(mismatch, ensure_ascii=False, indent=2, default=str), file=sys.stderr)
+              sys.exit(1)
+          PY
+
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          report_path = Path("reports/broker-sync-check.json")
+          report = json.loads(report_path.read_text())
+          status = report.get("database_sync_status") or {}
+          status_data = status.get("data", status) if isinstance(status, dict) else {}
+          mismatch = status_data.get("mismatch") or {}
+
+          lines = [
+              "# Broker Sync Check",
+              "",
+              f"Generated at UTC: `{report.get('generated_at')}`",
+              f"Broker Mode: `{report.get('broker_mode')}`",
+              "",
+              "## Result",
+              f"- Has snapshot: `{status_data.get('has_snapshot')}`",
+              f"- Is synced: `{mismatch.get('is_synced')}`",
+              f"- Mismatch count: `{mismatch.get('mismatch_count')}`",
+              "",
+              "## Database Sync Status",
+              "```json",
+              json.dumps(status, ensure_ascii=False, indent=2, default=str),
+              "```",
+              "",
+              "## Broker Reconcile Response",
+              "```json",
+              json.dumps(report.get("reconcile"), ensure_ascii=False, indent=2, default=str),
+              "```",
+          ]
+          Path("reports/broker-sync-check.md").write_text("\n".join(lines), encoding="utf-8")
+          print("\n".join(lines))
+          PY
+
+      - name: Upload broker sync reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: broker-sync-check-reports
+          path: |
+            Manager_Agent/reports/broker-sync-check.json
+            Manager_Agent/reports/broker-sync-check.md
+          if-no-files-found: warn
+
+      - name: Show logs on failure
+        if: failure()
+        working-directory: Manager_Agent
+        run: |
+          docker compose ps || true
+          for service in database-agent execution-agent manager-agent db; do
+            echo "---- ${service} logs tail ----"
+            docker compose logs --tail=220 "$service" || true
+          done
+
+      - name: Stop stack
+        if: always()
+        working-directory: Manager_Agent
+        run: docker compose down -v
