@@ -9,6 +9,7 @@ CORE_DIVIDEND = "core_dividend"
 VALUE_REBOUND = "value_rebound"
 NEWS_MOMENTUM = "news_momentum"
 UNASSIGNED = "unassigned"
+KNOWN_BUCKETS = {CORE_DIVIDEND, VALUE_REBOUND, NEWS_MOMENTUM}
 
 
 @dataclass(frozen=True)
@@ -102,14 +103,33 @@ def _raw_scores(item: Mapping[str, Any]) -> Mapping[str, Any]:
     return {}
 
 
+def _scanner_primary_bucket_hint(item: Mapping[str, Any]) -> Optional[str]:
+    metadata = _scanner_metadata(item)
+    hint = str(metadata.get("primary_strategy_bucket_hint") or "").strip().lower()
+    if hint in KNOWN_BUCKETS:
+        return hint
+
+    hints = metadata.get("strategy_bucket_hints") or []
+    if isinstance(hints, list):
+        for value in hints:
+            candidate = str(value or "").strip().lower()
+            if candidate in KNOWN_BUCKETS:
+                return candidate
+    return None
+
+
 def classify_strategy_bucket(item: Mapping[str, Any]) -> str:
     """
     Classify a ranked candidate into one of the user's 3 allocation buckets.
 
-    This is intentionally deterministic and conservative. Later agents can provide
-    richer explicit labels, but Manager can already bucket candidates from the
-    current scanner/fundamental payload.
+    Scanner can now provide non-binding strategy bucket hints. Manager trusts a
+    valid explicit Scanner hint first, then falls back to deterministic local
+    heuristics for backward compatibility with older Scanner payloads.
     """
+    explicit_hint = _scanner_primary_bucket_hint(item)
+    if explicit_hint:
+        return explicit_hint
+
     analysis = item.get("analysis") or {}
     if hasattr(analysis, "model_dump"):
         analysis = analysis.model_dump(mode="json")
