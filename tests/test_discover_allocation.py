@@ -5,7 +5,9 @@ from app.discover_allocation import (
     choose_bucket_aware_winner,
     enrich_ranked_candidates_with_buckets,
     ranked_response_rows,
+    select_candidates_by_bucket,
 )
+from app.discover_report_builder import build_discover_allocation_report
 
 
 def _item(symbol, score, verdict="buy", tags=None, raw_scores=None):
@@ -73,3 +75,42 @@ def test_ranked_response_rows_include_strategy_bucket():
 
     assert rows[0]["strategy_bucket"] == "news_momentum"
     assert rows[0]["score_breakdown"]["strategy_bucket"] == "news_momentum"
+
+
+def test_select_candidates_by_bucket_uses_default_limits():
+    ranked = [
+        _item("KO", 0.80, tags=["dividend"]),
+        _item("JNJ", 0.75, tags=["dividend"]),
+        _item("PEP", 0.70, tags=["dividend"]),
+        _item("ACGL", 0.82, raw_scores={"pe_ratio": 12}),
+        _item("ADBE", 0.78, raw_scores={"pe_ratio": 14}),
+        _item("AMZN", 0.76, raw_scores={"pe_ratio": 16}),
+        _item("NEWS1", 0.90, tags=["news"]),
+        _item("NEWS2", 0.88, tags=["news"]),
+    ]
+
+    selection = select_candidates_by_bucket(ranked, min_final_score=0.55)
+
+    assert selection["core_dividend"]["selected_count"] == 2
+    assert [row["symbol"] for row in selection["core_dividend"]["selected"]] == ["KO", "JNJ"]
+    assert selection["value_rebound"]["selected_count"] == 2
+    assert [row["symbol"] for row in selection["value_rebound"]["selected"]] == ["ACGL", "ADBE"]
+    assert selection["news_momentum"]["selected_count"] == 1
+    assert [row["symbol"] for row in selection["news_momentum"]["selected"]] == ["NEWS1"]
+    assert selection["summary"]["total_selected"] == 5
+
+
+def test_build_discover_allocation_report_includes_bucket_selection():
+    ranked = [
+        _item("KO", 0.80, tags=["dividend"]),
+        _item("ACGL", 0.82, raw_scores={"pe_ratio": 12}),
+        _item("NEWS1", 0.90, tags=["news"]),
+    ]
+
+    report = build_discover_allocation_report(ranked=ranked, portfolio_value=Decimal("100000"), min_final_score=0.55)
+
+    assert "bucket_selection" in report
+    assert report["bucket_selection"]["summary"]["total_selected"] == 3
+    assert report["bucket_selection"]["core_dividend"]["selected"][0]["symbol"] == "KO"
+    assert report["bucket_selection"]["value_rebound"]["selected"][0]["symbol"] == "ACGL"
+    assert report["bucket_selection"]["news_momentum"]["selected"][0]["symbol"] == "NEWS1"
