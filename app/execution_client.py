@@ -47,6 +47,17 @@ class ExecutionAgentClient(ResilientAgentClient):
         response_data = await self._post(url=endpoint, correlation_id=correlation_id, json_data={})
         return self.validate_standard_response(response_data)
 
+    async def validate_order_batch(self, order_details: list[CreateOrderRequest], correlation_id: str) -> StandardAgentResponse:
+        """Validate a controlled batch with Execution_Agent without creating orders."""
+        payload = []
+        for order in order_details:
+            row = order.model_dump(mode="json")
+            if "client_order_id" in row and "trade_id" not in row:
+                row["trade_id"] = row.pop("client_order_id")
+            payload.append(row)
+        response_data = await self._post(url=ExecutionEndpoints.BATCH_VALIDATE, correlation_id=correlation_id, json_data=payload)
+        return self.validate_standard_response(response_data)
+
     async def _reconcile_before_execution(self, account_id: str | int, correlation_id: str, symbol: str) -> StandardAgentResponse | None:
         if not config.BROKER_RECONCILE_BEFORE_EXECUTION:
             return None
