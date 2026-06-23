@@ -10,11 +10,16 @@ from app.discover_allocation import (
 from app.discover_report_builder import build_discover_allocation_report
 
 
-def _item(symbol, score, verdict="buy", tags=None, raw_scores=None):
+def _item(symbol, score, verdict="buy", tags=None, raw_scores=None, bucket_hint=None):
+    metadata = {"tags": tags or []}
+    if bucket_hint:
+        metadata["primary_strategy_bucket_hint"] = bucket_hint
+        metadata["strategy_bucket_hints"] = [bucket_hint]
+        metadata["bucket_hint_scores"] = {bucket_hint: 0.9}
     return {
         "symbol": symbol,
         "analysis": {"ticker": symbol, "final_verdict": verdict, "status": "complete", "details": {}},
-        "scanner_candidate": {"metadata": {"tags": tags or []}, "raw_scores": raw_scores or {}},
+        "scanner_candidate": {"metadata": metadata, "raw_scores": raw_scores or {}},
         "score_breakdown": {"final_opportunity_score": score},
     }
 
@@ -27,6 +32,17 @@ def test_enrich_ranked_candidates_adds_strategy_bucket():
     assert enriched[0]["strategy_bucket"] == "core_dividend"
     assert enriched[0]["score_breakdown"]["strategy_bucket"] == "core_dividend"
     assert enriched[1]["strategy_bucket"] == "news_momentum"
+
+
+def test_scanner_primary_bucket_hint_overrides_heuristics():
+    ranked = [
+        _item("ACGL", 0.66, tags=["dividend", "quality"], raw_scores={"pe_ratio": 10}, bucket_hint="news_momentum"),
+    ]
+
+    enriched = enrich_ranked_candidates_with_buckets(ranked)
+
+    assert enriched[0]["strategy_bucket"] == "news_momentum"
+    assert enriched[0]["score_breakdown"]["strategy_bucket"] == "news_momentum"
 
 
 def test_build_discover_allocation_plan_contains_50_30_20_buckets():
@@ -55,6 +71,20 @@ def test_choose_bucket_aware_winner_prefers_core_when_eligible():
     winner = choose_bucket_aware_winner(ranked, plan, min_final_score=0.55)
 
     assert winner["symbol"] == "KO"
+    assert winner["strategy_bucket"] == "core_dividend"
+
+
+def test_choose_bucket_aware_winner_uses_scanner_hint_bucket_priority():
+    ranked = [
+        _item("NEWS", 0.90, bucket_hint="news_momentum"),
+        _item("CORE", 0.66, bucket_hint="core_dividend"),
+        _item("VALUE", 0.80, bucket_hint="value_rebound"),
+    ]
+    plan = build_discover_allocation_plan(ranked, Decimal("100000"))
+
+    winner = choose_bucket_aware_winner(ranked, plan, min_final_score=0.55)
+
+    assert winner["symbol"] == "CORE"
     assert winner["strategy_bucket"] == "core_dividend"
 
 
