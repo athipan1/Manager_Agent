@@ -1,4 +1,8 @@
+import pytest
+
 from app.batch_validation_bridge import build_batch_validation_requests, validate_bucket_batch
+
+pytestmark = pytest.mark.asyncio
 
 
 class FakeExecutionClient:
