@@ -15,6 +15,7 @@ class DatabaseEndpoints:
 class ExecutionEndpoints:
     HEALTH = "/health"
     EXECUTE = "/execute"
+    BATCH_VALIDATE = "/execute/batch/validate"
     BROKER_STATE = "/broker/state"
     BROKER_RECONCILE = "/broker/reconcile"
 

@@ -132,23 +132,54 @@ def _ranked_rows_to_items(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     return items
 
 
-def _attach_discover_allocation_response(response: Any) -> Any:
+async def _attach_batch_validation_result(data: Dict[str, Any]) -> None:
+    if data.get("batch_validation_result"):
+        return
+    decisions = data.get("bucket_risk_decisions") or {}
+    if not decisions:
+        data["batch_validation_result"] = {
+            "approved": False,
+            "status": "not_attempted",
+            "reason": "bucket_risk_decisions missing",
+        }
+        return
+    try:
+        from .batch_validation_bridge import validate_bucket_batch
+        account_id = data.get("account_id") or "1"
+        correlation_id = data.get("report_id") or data.get("correlation_id") or "discover-analyze-trade"
+        async with ExecutionAgentClient() as client:
+            data["batch_validation_result"] = await validate_bucket_batch(
+                execution_client=client,
+                bucket_risk_decisions=decisions,
+                account_id=account_id,
+                correlation_id=str(correlation_id),
+            )
+    except Exception as exc:
+        data["batch_validation_result"] = {
+            "approved": False,
+            "status": "error",
+            "reason": str(exc),
+        }
+
+
+async def _attach_discover_allocation_response(response: Any) -> Any:
     data = _response_data(response)
-    if not data or data.get("flow") != "discover_analyze_trade" or data.get("allocation_plan"):
+    if not data or data.get("flow") != "discover_analyze_trade":
         return response
     try:
-        from .discover_report_builder import build_discover_allocation_report
-        items = _ranked_rows_to_items(data.get("ranked_candidates") or [])
-        if not items:
-            return response
-        report = build_discover_allocation_report(ranked=items, portfolio_value=0, min_final_score=0)
-        data["allocation_plan"] = report.get("allocation_plan")
-        data["bucket_selection"] = report.get("bucket_selection")
-        data["ranked_candidates"] = report.get("ranked_candidates") or data.get("ranked_candidates")
-        winner = data.get("winner") or {}
-        patched_winner = report.get("winner") or {}
-        winner["strategy_bucket"] = patched_winner.get("strategy_bucket") or (patched_winner.get("score_breakdown") or {}).get("strategy_bucket")
-        data["winner"] = winner
+        if not data.get("allocation_plan"):
+            from .discover_report_builder import build_discover_allocation_report
+            items = _ranked_rows_to_items(data.get("ranked_candidates") or [])
+            if items:
+                report = build_discover_allocation_report(ranked=items, portfolio_value=0, min_final_score=0)
+                data["allocation_plan"] = report.get("allocation_plan")
+                data["bucket_selection"] = report.get("bucket_selection")
+                data["ranked_candidates"] = report.get("ranked_candidates") or data.get("ranked_candidates")
+                winner = data.get("winner") or {}
+                patched_winner = report.get("winner") or {}
+                winner["strategy_bucket"] = patched_winner.get("strategy_bucket") or (patched_winner.get("score_breakdown") or {}).get("strategy_bucket")
+                data["winner"] = winner
+        await _attach_batch_validation_result(data)
     except Exception:
         return response
     return response
@@ -169,7 +200,7 @@ def _install_discover_allocation_response_patch() -> None:
 
             @wraps(original_endpoint)
             async def wrapped_endpoint(*endpoint_args, **endpoint_kwargs):
-                return _attach_discover_allocation_response(await original_endpoint(*endpoint_args, **endpoint_kwargs))
+                return await _attach_discover_allocation_response(await original_endpoint(*endpoint_args, **endpoint_kwargs))
 
             endpoint = wrapped_endpoint
         return original_add_api_route(self, path, endpoint, *args, **kwargs)

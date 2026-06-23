@@ -4,6 +4,8 @@ from decimal import Decimal
 from enum import Enum
 import datetime
 
+StrategyBucket = Literal["core_dividend", "value_rebound", "news_momentum", "unassigned"]
+
 class OrderSide(str, Enum):
     BUY = "buy"
     SELL = "sell"
@@ -34,6 +36,7 @@ class CreateOrderRequest(BaseModel):
     price: Optional[float] = None
     quantity: int
     time_in_force: TimeInForce = TimeInForce.GTC
+    strategy_bucket: StrategyBucket = "unassigned"
     risk_approval_id: str
     final_quantity: int
     guard_plan: Optional[Dict[str, Any]] = None
