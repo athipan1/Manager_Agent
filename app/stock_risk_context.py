@@ -4,6 +4,7 @@ from decimal import Decimal
 from typing import Any, Dict, Iterable, Optional
 
 from . import config
+from .portfolio_allocation import UNASSIGNED, classify_strategy_bucket
 
 
 def _get(position: Any, *names: str, default: Any = None) -> Any:
@@ -67,6 +68,19 @@ def _position_sector(position: Any) -> Optional[str]:
     return None
 
 
+def _position_strategy_bucket(position: Any) -> Optional[str]:
+    for attr in ("strategy_bucket", "bucket", "allocation_bucket"):
+        value = _get(position, attr, default=None)
+        if value:
+            return str(value)
+    metadata = _get(position, "metadata", default=None)
+    if isinstance(metadata, dict):
+        value = metadata.get("strategy_bucket") or metadata.get("bucket") or metadata.get("allocation_bucket")
+        if value:
+            return str(value)
+    return None
+
+
 def _agent_data(result: Dict[str, Any], agent_name: str) -> Dict[str, Any]:
     raw = (result.get("raw_data") or {}).get(agent_name) or {}
     if hasattr(raw, "model_dump"):
@@ -91,6 +105,15 @@ def sector_from_analysis(result: Optional[Dict[str, Any]]) -> Optional[str]:
     return None
 
 
+def strategy_bucket_from_analysis(result: Optional[Dict[str, Any]], current_position: Any = None) -> str:
+    if result:
+        try:
+            return classify_strategy_bucket({"analysis": result, "scanner_candidate": result.get("scanner_candidate"), "score_breakdown": result.get("score_breakdown") or {}})
+        except Exception:
+            pass
+    return _position_strategy_bucket(current_position) or UNASSIGNED
+
+
 def current_sector_exposure(positions: Iterable[Any], sector: Optional[str], *, inferred_symbol: Optional[str] = None) -> Decimal:
     if not sector:
         return Decimal("0")
@@ -106,14 +129,32 @@ def current_sector_exposure(positions: Iterable[Any], sector: Optional[str], *, 
     return total
 
 
+def current_bucket_exposure(positions: Iterable[Any], strategy_bucket: str, *, inferred_symbol: Optional[str] = None) -> Decimal:
+    if not strategy_bucket or strategy_bucket == UNASSIGNED:
+        return Decimal("0")
+    bucket_norm = str(strategy_bucket).strip().lower()
+    inferred_symbol_upper = str(inferred_symbol or "").upper()
+    total = Decimal("0")
+    for position in positions or []:
+        pos_bucket = _position_strategy_bucket(position)
+        if pos_bucket and pos_bucket.strip().lower() == bucket_norm:
+            total += _position_exposure(position)
+        elif inferred_symbol_upper and _position_symbol(position) == inferred_symbol_upper:
+            total += _position_exposure(position)
+    return total
+
+
 def build_stock_risk_context(symbol: str, positions: Iterable[Any], analysis_result: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     symbol_upper = str(symbol or "").upper()
     current_position = next((p for p in positions or [] if _position_symbol(p) == symbol_upper), None)
     sector = sector_from_analysis(analysis_result) or _position_sector(current_position)
+    strategy_bucket = strategy_bucket_from_analysis(analysis_result, current_position)
     return {
         "asset_class": config.ASSET_CLASS,
         "sector": sector,
+        "strategy_bucket": strategy_bucket,
         "owned_quantity": float(abs(_position_quantity(current_position))) if current_position else 0.0,
         "current_symbol_exposure": float(_position_exposure(current_position)) if current_position else 0.0,
         "current_sector_exposure": float(current_sector_exposure(positions or [], sector, inferred_symbol=symbol_upper)),
+        "current_bucket_exposure": float(current_bucket_exposure(positions or [], strategy_bucket, inferred_symbol=symbol_upper)),
     }
