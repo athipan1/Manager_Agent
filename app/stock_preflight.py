@@ -162,6 +162,26 @@ async def _attach_batch_validation_result(data: Dict[str, Any]) -> None:
         }
 
 
+async def _attach_batch_execution_result(data: Dict[str, Any]) -> None:
+    if data.get("batch_execution_result"):
+        return
+    try:
+        from .batch_execution_settings import ENABLE_BATCH_EXECUTION
+        from .batch_validation_bridge import maybe_execute_validated_batch
+        validation = data.get("batch_validation_result") or {}
+        correlation_id = data.get("report_id") or data.get("correlation_id") or "discover-analyze-trade"
+        async with ExecutionAgentClient() as client:
+            data["batch_execution_result"] = await maybe_execute_validated_batch(
+                execution_client=client,
+                validation_result=validation,
+                enabled=bool(ENABLE_BATCH_EXECUTION),
+                manual_approval_required=bool(config.MANUAL_APPROVAL_REQUIRED),
+                correlation_id=str(correlation_id),
+            )
+    except Exception as exc:
+        data["batch_execution_result"] = {"approved": False, "status": "error", "reason": str(exc)}
+
+
 async def _attach_discover_allocation_response(response: Any) -> Any:
     data = _response_data(response)
     if not data or data.get("flow") != "discover_analyze_trade":
@@ -180,6 +200,7 @@ async def _attach_discover_allocation_response(response: Any) -> Any:
                 winner["strategy_bucket"] = patched_winner.get("strategy_bucket") or (patched_winner.get("score_breakdown") or {}).get("strategy_bucket")
                 data["winner"] = winner
         await _attach_batch_validation_result(data)
+        await _attach_batch_execution_result(data)
     except Exception:
         return response
     return response
