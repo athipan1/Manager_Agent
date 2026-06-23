@@ -143,6 +143,7 @@ def _attach_discover_allocation_response(response: Any) -> Any:
             return response
         report = build_discover_allocation_report(ranked=items, portfolio_value=0, min_final_score=0)
         data["allocation_plan"] = report.get("allocation_plan")
+        data["bucket_selection"] = report.get("bucket_selection")
         data["ranked_candidates"] = report.get("ranked_candidates") or data.get("ranked_candidates")
         winner = data.get("winner") or {}
         patched_winner = report.get("winner") or {}
