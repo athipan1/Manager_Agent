@@ -3,6 +3,7 @@ from decimal import Decimal, ROUND_FLOOR
 from typing import Any, Dict, Optional
 
 from . import config
+from .portfolio_allocation import UNASSIGNED, VALUE_REBOUND
 from .risk_agent_client import evaluate_risk
 
 
@@ -14,7 +15,8 @@ Risk payload exposure contract:
 - open_orders_exposure: outstanding order exposure for pending/placed/partially-filled orders.
 - requested_quantity: desired quantity for the new order being reviewed.
 - session_risk_context: daily/weekly PnL, trade counters, cooldown age, and emergency halt state.
-- stock_risk_context: asset_class, sector, owned quantity, and current sector exposure.
+- stock_risk_context: asset_class, sector, owned quantity, current sector exposure,
+  strategy bucket, and current bucket exposure.
 
 Risk_Agent owns the projected exposure calculation:
 current_total_exposure + open_orders_exposure + new_order_position_value.
@@ -101,17 +103,33 @@ def _default_stock_context(current_position_size: int) -> Dict[str, Any]:
         "asset_class": config.ASSET_CLASS,
         "owned_quantity": float(abs(int(current_position_size or 0))),
         "current_sector_exposure": 0.0,
+        # Conservative fallback for direct single-winner flows such as
+        # /discover-analyze-trade. Richer flows may override this with the
+        # allocation classifier from stock_risk_context.py.
+        "strategy_bucket": VALUE_REBOUND,
+        "current_bucket_exposure": 0.0,
     }
+
+
+def _normalize_strategy_bucket(value: Any) -> str:
+    bucket = str(value or "").strip().lower()
+    return bucket if bucket else VALUE_REBOUND
 
 
 def _normalize_stock_context(stock_risk_context: Dict[str, Any], *, current_position_size: int, symbol_exposure: Decimal, has_explicit_symbol_exposure: bool) -> Dict[str, Any]:
     context = {**_default_stock_context(current_position_size), **(stock_risk_context or {})}
     context.setdefault("asset_class", config.ASSET_CLASS)
     context.setdefault("owned_quantity", float(abs(int(current_position_size or 0))))
+    context["strategy_bucket"] = _normalize_strategy_bucket(context.get("strategy_bucket"))
+    if context["strategy_bucket"] == UNASSIGNED:
+        context["strategy_bucket"] = VALUE_REBOUND
+    context.setdefault("current_bucket_exposure", 0.0)
     if _as_decimal(context.get("current_symbol_exposure"), Decimal("0")) <= Decimal("0") and symbol_exposure > Decimal("0"):
         context["current_symbol_exposure"] = float(symbol_exposure)
     if has_explicit_symbol_exposure and _as_decimal(context.get("current_sector_exposure"), Decimal("0")) <= Decimal("0") and symbol_exposure > Decimal("0"):
         context["current_sector_exposure"] = float(symbol_exposure)
+    if has_explicit_symbol_exposure and _as_decimal(context.get("current_bucket_exposure"), Decimal("0")) <= Decimal("0") and symbol_exposure > Decimal("0"):
+        context["current_bucket_exposure"] = float(symbol_exposure)
     return context
 
 
