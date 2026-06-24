@@ -17,7 +17,7 @@ class FakeScannerAgentClient:
         candidates = [
             _candidate("KO", "core_dividend"),
             _candidate("ACGL", "value_rebound"),
-            _candidate("NEWS1", "news_momentum"),
+            _candidate("MSFT", "news_momentum"),
         ]
         return SimpleNamespace(data={"candidates": candidates, "metadata": {"source": "fake_scanner"}}, error=None)
 
@@ -111,7 +111,7 @@ async def fake_call_agents(ticker, correlation_id):
             "action": "buy",
             "confidence_score": 0.88,
             "reason": f"{ticker} fundamental buy",
-            "sector": "Technology" if ticker == "NEWS1" else "Consumer Defensive",
+            "sector": "Technology" if ticker == "MSFT" else "Consumer Defensive",
         },
     }
     return technical, fundamental
@@ -167,7 +167,7 @@ def test_discover_analyze_trade_returns_portfolio_contract(monkeypatch):
     assert data["allocation_plan"]["buckets"]["value_rebound"]["target_weight"] == 0.3
     assert data["allocation_plan"]["buckets"]["news_momentum"]["target_weight"] == 0.2
 
-    assert [position["symbol"] for position in data["selected_positions"]] == ["KO", "ACGL", "NEWS1"]
+    assert [position["symbol"] for position in data["selected_positions"]] == ["KO", "ACGL", "MSFT"]
     assert {position["strategy_bucket"] for position in data["selected_positions"]} == {"core_dividend", "value_rebound", "news_momentum"}
 
     assert len(data["risk_approvals"]) == 3
