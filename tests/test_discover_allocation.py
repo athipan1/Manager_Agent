@@ -7,7 +7,7 @@ from app.discover_allocation import (
     ranked_response_rows,
     select_candidates_by_bucket,
 )
-from app.discover_report_builder import build_discover_allocation_report
+from app.discover_report_builder import build_discover_allocation_report, build_selected_positions
 
 
 def _item(symbol, score, verdict="buy", tags=None, raw_scores=None):
@@ -100,7 +100,30 @@ def test_select_candidates_by_bucket_uses_default_limits():
     assert selection["summary"]["total_selected"] == 5
 
 
-def test_build_discover_allocation_report_includes_bucket_selection():
+def test_build_selected_positions_exports_portfolio_contract():
+    ranked = [
+        _item("KO", 0.80, tags=["dividend"]),
+        _item("ACGL", 0.82, raw_scores={"pe_ratio": 12}),
+        _item("NEWS1", 0.90, tags=["news"]),
+    ]
+    plan = build_discover_allocation_plan(ranked, Decimal("100000"))
+    selection = select_candidates_by_bucket(ranked, min_final_score=0.55)
+
+    selected_positions = build_selected_positions(
+        ranked=enrich_ranked_candidates_with_buckets(ranked),
+        allocation_plan=plan,
+        bucket_selection=selection,
+    )
+
+    assert [position["symbol"] for position in selected_positions] == ["KO", "ACGL", "NEWS1"]
+    assert selected_positions[0]["strategy_bucket"] == "core_dividend"
+    assert selected_positions[0]["target_weight"] == 0.5
+    assert selected_positions[0]["allocation_pct"] == 50.0
+    assert selected_positions[1]["strategy_bucket"] == "value_rebound"
+    assert selected_positions[2]["strategy_bucket"] == "news_momentum"
+
+
+def test_build_discover_allocation_report_includes_bucket_selection_and_selected_positions():
     ranked = [
         _item("KO", 0.80, tags=["dividend"]),
         _item("ACGL", 0.82, raw_scores={"pe_ratio": 12}),
@@ -110,7 +133,9 @@ def test_build_discover_allocation_report_includes_bucket_selection():
     report = build_discover_allocation_report(ranked=ranked, portfolio_value=Decimal("100000"), min_final_score=0.55)
 
     assert "bucket_selection" in report
+    assert "selected_positions" in report
     assert report["bucket_selection"]["summary"]["total_selected"] == 3
     assert report["bucket_selection"]["core_dividend"]["selected"][0]["symbol"] == "KO"
     assert report["bucket_selection"]["value_rebound"]["selected"][0]["symbol"] == "ACGL"
     assert report["bucket_selection"]["news_momentum"]["selected"][0]["symbol"] == "NEWS1"
+    assert [position["symbol"] for position in report["selected_positions"]] == ["KO", "ACGL", "NEWS1"]
