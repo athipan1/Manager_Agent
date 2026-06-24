@@ -40,7 +40,7 @@ def build_selected_positions(
     """Build the portfolio-first selected_positions contract for Manager.
 
     This is the new source of truth for discover-analyze-trade. It converts the
-    bucket selection output into position-level metadata that Risk and Execution
+    bucket selection output into position-level metadata that downstream agents
     can consume for portfolio allocation mode.
     """
     ranked_by_symbol = {str(item.get("symbol") or "").upper(): item for item in ranked}
@@ -73,6 +73,41 @@ def build_selected_positions(
     return selected_positions
 
 
+def build_position_analysis_payloads(
+    *,
+    ranked: List[Dict[str, Any]],
+    selected_positions: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    """Attach portfolio allocation metadata to each selected analysis result.
+
+    Manager should pass these payloads into portfolio validation instead of
+    handing downstream agents a single winner symbol.
+    """
+    ranked_by_symbol = {str(item.get("symbol") or "").upper(): item for item in ranked}
+    payloads: List[Dict[str, Any]] = []
+
+    for position in selected_positions:
+        symbol = str(position.get("symbol") or "").upper()
+        item = ranked_by_symbol.get(symbol)
+        if not item:
+            continue
+        analysis = dict(item.get("analysis") or {})
+        analysis["scanner_candidate"] = item.get("scanner_candidate")
+        analysis["score_breakdown"] = item.get("score_breakdown")
+        analysis["strategy_bucket"] = position.get("strategy_bucket") or position.get("bucket")
+        analysis["portfolio_context"] = {
+            "bucket": position.get("bucket"),
+            "strategy_bucket": position.get("strategy_bucket"),
+            "target_weight": position.get("target_weight"),
+            "allocation_pct": position.get("allocation_pct"),
+            "target_value": position.get("target_value"),
+            "suggested_max_value": position.get("suggested_max_value"),
+            "suggested_equal_weight_value": position.get("suggested_equal_weight_value"),
+        }
+        payloads.append(analysis)
+    return payloads
+
+
 def build_discover_allocation_report(
     *,
     ranked: List[Dict[str, Any]],
@@ -85,6 +120,7 @@ def build_discover_allocation_report(
     - allocation_plan: 50/30/20 policy by bucket
     - bucket_selection: eligible selected rows per bucket
     - selected_positions: multi-position portfolio contract
+    - position_analysis_payloads: selected analysis rows with allocation metadata
     - ranked_candidates: full explainability rows
 
     winner remains only as a backward-compatible legacy field while Manager's
@@ -101,6 +137,10 @@ def build_discover_allocation_report(
         "allocation_plan": allocation_plan,
         "bucket_selection": bucket_selection,
         "selected_positions": selected_positions,
+        "position_analysis_payloads": build_position_analysis_payloads(
+            ranked=ranked,
+            selected_positions=selected_positions,
+        ),
         "winner": choose_bucket_aware_winner(ranked, allocation_plan, min_final_score=min_final_score),
         "ranked_candidates": ranked_response_rows(ranked),
     }
