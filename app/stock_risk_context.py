@@ -107,6 +107,9 @@ def sector_from_analysis(result: Optional[Dict[str, Any]]) -> Optional[str]:
 
 def strategy_bucket_from_analysis(result: Optional[Dict[str, Any]], current_position: Any = None) -> str:
     if result:
+        explicit_bucket = result.get("strategy_bucket") or (result.get("portfolio_context") or {}).get("strategy_bucket") or (result.get("portfolio_context") or {}).get("bucket")
+        if explicit_bucket:
+            return str(explicit_bucket)
         try:
             return classify_strategy_bucket({"analysis": result, "scanner_candidate": result.get("scanner_candidate"), "score_breakdown": result.get("score_breakdown") or {}})
         except Exception:
@@ -147,9 +150,11 @@ def current_bucket_exposure(positions: Iterable[Any], strategy_bucket: str, *, i
 def build_stock_risk_context(symbol: str, positions: Iterable[Any], analysis_result: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     symbol_upper = str(symbol or "").upper()
     current_position = next((p for p in positions or [] if _position_symbol(p) == symbol_upper), None)
+    analysis_result = analysis_result or {}
+    portfolio_context = analysis_result.get("portfolio_context") or {}
     sector = sector_from_analysis(analysis_result) or _position_sector(current_position)
     strategy_bucket = strategy_bucket_from_analysis(analysis_result, current_position)
-    return {
+    context = {
         "asset_class": config.ASSET_CLASS,
         "sector": sector,
         "strategy_bucket": strategy_bucket,
@@ -158,3 +163,7 @@ def build_stock_risk_context(symbol: str, positions: Iterable[Any], analysis_res
         "current_sector_exposure": float(current_sector_exposure(positions or [], sector, inferred_symbol=symbol_upper)),
         "current_bucket_exposure": float(current_bucket_exposure(positions or [], strategy_bucket, inferred_symbol=symbol_upper)),
     }
+    for key in ("target_weight", "allocation_pct", "target_value", "suggested_max_value", "suggested_equal_weight_value"):
+        if key in portfolio_context and portfolio_context.get(key) is not None:
+            context[key] = portfolio_context.get(key)
+    return context
