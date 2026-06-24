@@ -104,13 +104,13 @@ def test_multi_analyze_sends_context_value_to_portfolio_risk(mock_db_class, mock
 
 
 @patch("app.main.config_manager")
-@patch("app.main._execute_trade", new_callable=AsyncMock)
-@patch("app.main.assess_trade")
+@patch("app.main._execute_portfolio_batch", new_callable=AsyncMock)
+@patch("app.main.assess_portfolio_trades")
 @patch("app.main._fetch_context_value", new_callable=AsyncMock)
 @patch("app.main._analyze_single_asset", new_callable=AsyncMock)
 @patch("app.main.ScannerAgentClient", autospec=True)
 @patch("app.main.DatabaseAgentClient", autospec=True)
-def test_discover_analyze_trade_sends_context_value(mock_db_class, mock_scanner_class, mock_analyze, mock_context, mock_assess, mock_exec, mock_config):
+def test_discover_analyze_trade_sends_context_value(mock_db_class, mock_scanner_class, mock_analyze, mock_context, mock_portfolio, mock_exec_batch, mock_config):
     mock_config.get.side_effect = config_value
     configure_db(mock_db_class)
     mock_context.return_value = Decimal("200")
@@ -123,12 +123,12 @@ def test_discover_analyze_trade_sends_context_value(mock_db_class, mock_scanner_
         data={"candidates": [{"symbol": "AAPL", "candidate_score": 0.9}]},
     )
     mock_analyze.return_value = analysis_result("AAPL", "buy")
-    mock_assess.return_value = {"approved": False, "reason": "test", "symbol": "AAPL", "action": "buy", "position_size": 0}
+    mock_portfolio.return_value = [{"approved": False, "reason": "test", "symbol": "AAPL", "action": "buy", "position_size": 0}]
 
     response = client.post("/discover-analyze-trade", json={"execute": True, "min_final_score": 0.1})
 
     assert response.status_code == 200
-    assert mock_assess.call_args.kwargs["open_orders_exposure"] == Decimal("200")
+    assert mock_portfolio.call_args.kwargs["open_orders_exposure"] == Decimal("200")
 
 
 @patch("app.main.config.TRADING_MODE", "LIVE")
