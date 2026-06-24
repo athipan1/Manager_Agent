@@ -22,6 +22,9 @@ services:
       retries: 5
       start_period: 30s
     environment:
+      TRADING_ENABLED: ${TRADING_ENABLED:-true}
+      TRADING_MODE: ${TRADING_MODE:-PAPER}
+      ALLOW_LIVE_TRADING: ${ALLOW_LIVE_TRADING:-false}
       DRY_RUN: ${DRY_RUN:-true}
       BROKER_MODE: ${BROKER_MODE:-SIMULATOR}
       TECHNICAL_AGENT_URL: http://technical-agent:8002
