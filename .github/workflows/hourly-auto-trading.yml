@@ -1,354 +1,559 @@
 name: Hourly Auto Trading
 
 on:
+
   workflow_dispatch:
+
     inputs:
+
       max_universe:
+
         description: "Maximum symbols Scanner_Agent should analyze from NASDAQ/S&P500 universe"
+
         required: false
+
         default: "1000"
+
       top_n:
+
         description: "Number of fundamentally strong candidates Scanner_Agent returns to Manager_Agent"
+
         required: false
+
         default: "10"
+
       min_final_score:
+
         description: "Minimum final opportunity score required before Manager sends to Execution_Agent"
+
         required: false
+
         default: "0.55"
+
       dry_run:
+
         description: "Keep execution in simulator/safety mode"
+
         required: false
+
         default: "false"
+
   schedule:
+
     - cron: "5 * * * *"
 
 concurrency:
+
   group: hourly-auto-trading
+
   cancel-in-progress: false
 
 jobs:
+
   hourly-auto-trading:
+
     runs-on: ubuntu-latest
+
     timeout-minutes: 60
 
     env:
+
       MAX_UNIVERSE: ${{ github.event.inputs.max_universe || '1000' }}
+
       TOP_N: ${{ github.event.inputs.top_n || '10' }}
+
       MIN_FINAL_SCORE: ${{ github.event.inputs.min_final_score || '0.55' }}
+
       DRY_RUN: ${{ github.event.inputs.dry_run || 'false' }}
+
       BROKER_MODE: ${{ (github.event.inputs.dry_run || 'false') == 'false' && 'ALPACA' || 'SIMULATOR' }}
+
       ALPACA_API_KEY_ID: ${{ secrets.ALPACA_API_KEY_ID }}
+
       ALPACA_SECRET_KEY: ${{ secrets.ALPACA_SECRET_KEY }}
+
       ALPACA_API_URL: ${{ secrets.ALPACA_API_URL || 'https://paper-api.alpaca.markets' }}
 
     steps:
+
       - name: Checkout Manager_Agent
+
         uses: actions/checkout@v4
+
         with:
+
           path: Manager_Agent
 
       - name: Checkout Scanner_Agent
+
         uses: actions/checkout@v4
+
         with:
+
           repository: athipan1/Scanner_Agent
+
           ref: main
+
           path: Scanner_Agent
+
           fetch-depth: 1
 
       - name: Checkout Technical_Agent
+
         uses: actions/checkout@v4
+
         with:
+
           repository: athipan1/Technical_Agent
+
           path: Technical_Agent
 
       - name: Checkout Fundamental_Agent
+
         uses: actions/checkout@v4
+
         with:
+
           repository: athipan1/Fundamental_Agent
+
           path: Fundamental_Agent
 
       - name: Checkout Database_Agent
+
         uses: actions/checkout@v4
+
         with:
+
           repository: athipan1/Database_Agent
+
           path: Database_Agent
 
       - name: Checkout Learning_Agent
+
         uses: actions/checkout@v4
+
         with:
+
           repository: athipan1/Learning_Agent
+
           path: Learning_Agent
 
       - name: Checkout Execution_Agent
+
         uses: actions/checkout@v4
+
         with:
+
           repository: athipan1/Execution_Agent
+
           ref: main
+
           path: Execution_Agent
+
           fetch-depth: 1
 
       - name: Show checked out agent commits
+
         run: |
+
           echo "Manager_Agent=$(git -C Manager_Agent rev-parse HEAD)"
+
           echo "Scanner_Agent=$(git -C Scanner_Agent rev-parse HEAD)"
+
           echo "Technical_Agent=$(git -C Technical_Agent rev-parse HEAD)"
+
           echo "Fundamental_Agent=$(git -C Fundamental_Agent rev-parse HEAD)"
+
           echo "Database_Agent=$(git -C Database_Agent rev-parse HEAD)"
+
           echo "Learning_Agent=$(git -C Learning_Agent rev-parse HEAD)"
+
           echo "Execution_Agent=$(git -C Execution_Agent rev-parse HEAD)"
+
           echo "DRY_RUN=${DRY_RUN}"
+
           echo "BROKER_MODE=${BROKER_MODE}"
 
       - name: Validate Alpaca paper configuration
+
         run: |
+
           if [ "${BROKER_MODE}" = "ALPACA" ]; then
+
             if [ -z "${ALPACA_API_KEY_ID}" ] || [ -z "${ALPACA_SECRET_KEY}" ]; then
+
               echo "Missing GitHub Secrets: ALPACA_API_KEY_ID or ALPACA_SECRET_KEY"
+
               exit 1
+
             fi
+
             echo "Alpaca paper mode configured."
+
           else
+
             echo "Simulator mode."
+
           fi
 
       - name: Build and start trading stack
+
         working-directory: Manager_Agent
+
         run: |
+
           echo "Starting stack. DRY_RUN=${DRY_RUN} BROKER_MODE=${BROKER_MODE}"
+
           docker compose up --build -d
 
       - name: Wait for all services
+
         working-directory: Manager_Agent
+
         run: |
+
           runtime_services="database-agent technical-agent scanner-agent fundamental-agent learning-agent execution-agent manager-agent db"
+
           for i in {1..60}; do
+
             docker compose ps
+
             exited=$(docker compose ps --status exited -q $runtime_services | wc -l | tr -d ' ')
+
             if [ "$exited" != "0" ]; then
+
               echo "One or more runtime containers exited."
+
               for service in $runtime_services; do
+
                 echo "---- ${service} logs tail ----"
+
                 docker compose logs --tail=160 "$service" || true
+
               done
+
               exit 1
+
             fi
+
             manager=$(docker compose exec -T manager-agent python /app/healthcheck.py >/dev/null && echo ok || echo wait)
+
             fundamental=$(curl -fsS http://localhost:8001/health >/dev/null && echo ok || echo wait)
+
             technical=$(curl -fsS http://localhost:8002/health >/dev/null && echo ok || echo wait)
+
             scanner=$(curl -fsS http://localhost:8003/health >/dev/null && echo ok || echo wait)
+
             database=$(curl -fsS http://localhost:8004/health >/dev/null && echo ok || echo wait)
+
             learning=$(curl -fsS http://localhost:8005/health >/dev/null && echo ok || echo wait)
+
             execution=$(curl -fsS http://localhost:8006/health >/dev/null && echo ok || echo wait)
+
             manager_to_scanner=$(docker compose exec -T manager-agent python - <<'PY' >/dev/null 2>&1 && echo ok || echo wait
+
           import urllib.request
+
           urllib.request.urlopen("http://scanner-agent:8003/health", timeout=5).read()
+
           PY
+
           )
+
             echo "health: manager=$manager fundamental=$fundamental technical=$technical scanner=$scanner database=$database learning=$learning execution=$execution manager_to_scanner=$manager_to_scanner"
+
             if [ "$manager$fundamental$technical$scanner$database$learning$execution$manager_to_scanner" = "okokokokokokokok" ]; then
+
               echo "All services are reachable, including manager-agent -> scanner-agent."
+
               exit 0
+
             fi
+
             sleep 5
+
           done
+
           echo "Services did not become reachable in time."
+
           docker compose ps
+
           for service in $runtime_services; do
+
             echo "---- ${service} logs tail ----"
+
             docker compose logs --tail=160 "$service" || true
+
           done
+
           exit 1
 
-      - name: Run hourly discover, deep analysis, winner selection, risk check, execution, and broker snapshot
+      - name: Run hourly portfolio discovery, risk checks, execution, and broker snapshot
+
         working-directory: Manager_Agent
+
         run: |
+
           mkdir -p reports
+
           docker compose exec -T manager-agent python - <<'PY' > reports/hourly-auto-trading-report.json
+
           import json
+
           import os
+
           import time
+
           import urllib.error
+
           import urllib.request
+
           from datetime import datetime, timezone
+
           max_universe = int(os.getenv("MAX_UNIVERSE", "1000"))
+
           top_n = int(os.getenv("TOP_N", "10"))
+
           min_final_score = float(os.getenv("MIN_FINAL_SCORE", "0.55"))
+
           dry_run = os.getenv("DRY_RUN", "true").lower() != "false"
+
           broker_mode = os.getenv("BROKER_MODE", "SIMULATOR")
+
           execution_api_key = os.getenv("EXECUTION_API_KEY", "dev_execution_key")
+
           def request_json(base_url, path, payload=None, method="GET", api_key=None, timeout=900):
+
               data = None
+
               headers = {}
+
               if api_key:
+
                   headers["X-API-KEY"] = api_key
+
               if payload is not None:
+
                   data = json.dumps(payload).encode("utf-8")
+
                   headers["Content-Type"] = "application/json"
-              req = urllib.request.Request(f"{base_url}{path}", data=data, headers=headers, method=method)
+
+              req = urllib.request.Request(
+
+                  f"{base_url}{path}",
+
+                  data=data,
+
+                  headers=headers,
+
+                  method=method
+
+              )
+
               try:
+
                   with urllib.request.urlopen(req, timeout=timeout) as resp:
+
                       body = resp.read().decode("utf-8")
+
                       return json.loads(body) if body else None
+
               except urllib.error.HTTPError as exc:
+
                   body = exc.read().decode("utf-8")
-                  return {"status": "error", "http_status": exc.code, "body": body}
+
+                  return {
+
+                      "status": "error",
+
+                      "http_status": exc.code,
+
+                      "body": body
+
+                  }
+
               except Exception as exc:
-                  return {"status": "error", "error": str(exc)}
+
+                  return {
+
+                      "status": "error",
+
+                      "error": str(exc)
+
+                  }
+
           def request_manager(path, payload=None, method="GET"):
-              return request_json("http://localhost", path, payload=payload, method=method)
+
+              return request_json(
+
+                  "http://localhost",
+
+                  path,
+
+                  payload=payload,
+
+                  method=method
+
+              )
+
           def request_execution(path):
-              return request_json("http://execution-agent:8006", path, api_key=execution_api_key, timeout=120)
-          payload = {"account_id": 1, "max_universe": max_universe, "top_n": top_n, "exchange": "NASDAQ", "max_workers": 10, "min_final_score": min_final_score, "execute": True}
-          response = request_manager("/discover-analyze-trade", payload, method="POST")
+
+              return request_json(
+
+                  "http://execution-agent:8006",
+
+                  path,
+
+                  api_key=execution_api_key,
+
+                  timeout=120
+
+              )
+
+          payload = {
+
+              "account_id": 1,
+
+              "max_universe": max_universe,
+
+              "top_n": top_n,
+
+              "exchange": "NASDAQ",
+
+              "max_workers": 10,
+
+              "min_final_score": min_final_score,
+
+              "execute": True
+
+          }
+
+          response = request_manager(
+
+              "/discover-analyze-trade",
+
+              payload,
+
+              method="POST"
+
+          )
+
           time.sleep(10)
-          broker_snapshot = {"account": request_execution("/account"), "orders": request_execution("/orders"), "positions": request_execution("/positions"), "portfolio": request_execution("/portfolio")}
+
+          broker_snapshot = {
+
+              "account": request_execution("/account"),
+
+              "orders": request_execution("/orders"),
+
+              "positions": request_execution("/positions"),
+
+              "portfolio": request_execution("/portfolio")
+
+          }
+
           dashboard_data = request_manager("/dashboard/data?account_id=1")
-          report = {"generated_at": datetime.now(timezone.utc).isoformat(), "mode": "ALPACA_PAPER" if broker_mode == "ALPACA" and not dry_run else "SIMULATOR", "broker_mode": broker_mode, "flow": "discover_analyze_trade", "warning": "DRY_RUN=false with BROKER_MODE=ALPACA sends orders to Alpaca Paper.", "request": payload, "response": response, "broker_snapshot": broker_snapshot, "dashboard_data": dashboard_data}
+
+          report = {
+
+              "generated_at": datetime.now(timezone.utc).isoformat(),
+
+              "mode": "ALPACA_PAPER" if broker_mode == "ALPACA" and not dry_run else "SIMULATOR",
+
+              "broker_mode": broker_mode,
+
+              "flow": "discover_analyze_trade",
+
+              "warning": "DRY_RUN=false with BROKER_MODE=ALPACA sends orders to Alpaca Paper.",
+
+              "request": payload,
+
+              "response": response,
+
+              "broker_snapshot": broker_snapshot,
+
+              "dashboard_data": dashboard_data
+
+          }
+
           print(json.dumps(report, ensure_ascii=False, indent=2, default=str))
-          PY
-          python - <<'PY'
-          import json
-          import sys
-          from pathlib import Path
-          report_path = Path("reports/hourly-auto-trading-report.json")
-          report = json.loads(report_path.read_text())
-          response = report.get("response") or {}
-          data = response.get("data") if isinstance(response, dict) else {}
-          snapshot = report.get("broker_snapshot") or {}
-          dashboard = report.get("dashboard_data") or {}
-          dashboard_data = dashboard.get("data") if isinstance(dashboard, dict) else {}
-          def th_verdict(value):
-              return {"strong_buy": "ซื้อแรง", "buy": "ซื้อ", "hold": "ถือ/รอดู", "sell": "ขาย", "strong_sell": "ขายแรง", "unknown": "ไม่ทราบผล"}.get(str(value).lower(), str(value))
-          def th_execution(value):
-              return {"submitted": "ส่งออเดอร์แล้ว", "rejected": "ไม่ส่งออเดอร์ / ถูกปฏิเสธ", "failed": "ส่งออเดอร์ไม่สำเร็จ", "not_attempted": "ยังไม่ส่งออเดอร์", "unknown": "ไม่ทราบสถานะ"}.get(str(value).lower(), str(value))
-          def unwrap_data(value):
-              if isinstance(value, dict) and "data" in value:
-                  return value.get("data")
-              return value
-          lines = []
-          lines.append("# รายงานระบบเทรดอัตโนมัติรายชั่วโมง")
-          lines.append("")
-          lines.append(f"Generated at UTC: `{report.get('generated_at')}`")
-          lines.append(f"Mode: `{report.get('mode')}`")
-          lines.append(f"Broker Mode: `{report.get('broker_mode')}`")
-          lines.append(f"Flow: `{report.get('flow')}`")
-          lines.append("")
-          if isinstance(dashboard_data, dict):
-              summary = dashboard_data.get("summary") or {}
-              balance = dashboard_data.get("balance") or {}
-              lines.append("## Dashboard Snapshot")
-              lines.append(f"- ปัญหาระบบ: `{summary.get('problem_count', 0)}`")
-              lines.append(f"- ยอดเงินคงเหลือ: `{balance.get('cash_balance') or balance.get('cash') or balance.get('buying_power') or '-'}`")
-              lines.append(f"- หุ้นที่ถืออยู่: `{summary.get('position_count', 0)}`")
-              lines.append(f"- ออเดอร์ที่เปิดอยู่: `{summary.get('open_order_count', 0)}`")
-              lines.append(f"- ประวัติการซื้อขาย: `{summary.get('trade_count', 0)}`")
-              lines.append("")
-              problems = dashboard_data.get("problems") or []
-              if problems:
-                  lines.append("### ปัญหา / Alerts")
-                  lines.append("| ระดับ | ประเภท | ข้อความ | เวลา |")
-                  lines.append("|---|---|---|---|")
-                  for item in problems[:10]:
-                      lines.append(f"| {item.get('severity', '-')} | {item.get('alert_type', '-')} | {item.get('message', '-')} | {item.get('created_at', '-')} |")
-                  lines.append("")
-          lines.append("## Request")
-          lines.append("```json")
-          lines.append(json.dumps(report.get("request"), ensure_ascii=False, indent=2))
-          lines.append("```")
-          lines.append("")
-          if response.get("status") == "error":
-              lines.append("## Error")
-              lines.append("```json")
-              lines.append(json.dumps(response, ensure_ascii=False, indent=2))
-              lines.append("```")
-          else:
-              winner = data.get("winner") or {}
-              execution = data.get("execution") or {}
-              trade_decision = data.get("trade_decision")
-              ranked = data.get("ranked_candidates") or []
-              lines.append("## Winner")
-              lines.append(f"- Symbol: `{winner.get('symbol', '-')}`")
-              lines.append(f"- Verdict: {th_verdict(winner.get('final_verdict', 'unknown'))}")
-              score = (winner.get("score_breakdown") or {}).get("final_opportunity_score")
-              lines.append(f"- Final Opportunity Score: `{score}`")
-              lines.append(f"- Execution: {th_execution(execution.get('status', 'unknown'))}")
-              lines.append(f"- Execution Reason: {execution.get('reason', '-')}")
-              lines.append("")
-              lines.append("## Ranked Candidates")
-              if not ranked:
-                  lines.append("No ranked candidates returned by Manager_Agent.")
-              else:
-                  lines.append("| Rank | Symbol | Verdict | Final Score | Scanner | Fundamental | Technical |")
-                  lines.append("|---:|---|---|---:|---:|---:|---:|")
-                  for item in ranked:
-                      scores = item.get("score_breakdown") or {}
-                      lines.append(f"| {item.get('rank')} | {item.get('symbol')} | {th_verdict(item.get('final_verdict'))} | {scores.get('final_opportunity_score')} | {scores.get('scanner_score')} | {scores.get('fundamental_score')} | {scores.get('technical_score')} |")
-              lines.append("")
-              lines.append("## Trade Decision")
-              lines.append("```json")
-              lines.append(json.dumps(trade_decision, ensure_ascii=False, indent=2, default=str))
-              lines.append("```")
-          account = unwrap_data(snapshot.get("account")) or {}
-          orders = unwrap_data(snapshot.get("orders")) or []
-          positions = unwrap_data(snapshot.get("positions")) or []
-          lines.append("")
-          lines.append("## Broker Snapshot")
-          lines.append(f"- Account Status: `{account.get('status', '-') if isinstance(account, dict) else '-'}`")
-          lines.append(f"- Equity: `{account.get('equity', '-') if isinstance(account, dict) else '-'}`")
-          lines.append(f"- Cash: `{account.get('cash', '-') if isinstance(account, dict) else '-'}`")
-          lines.append(f"- Buying Power: `{account.get('buying_power', '-') if isinstance(account, dict) else '-'}`")
-          lines.append(f"- Open Orders: `{len(orders) if isinstance(orders, list) else '-'}`")
-          lines.append(f"- Positions: `{len(positions) if isinstance(positions, list) else '-'}`")
-          lines.append("")
-          lines.append("### Raw Broker Snapshot")
-          lines.append("```json")
-          lines.append(json.dumps(snapshot, ensure_ascii=False, indent=2, default=str))
-          lines.append("```")
-          Path("reports/dashboard-data.json").write_text(json.dumps(dashboard, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
-          Path("reports/hourly-auto-trading-report.md").write_text("\n".join(lines), encoding="utf-8")
-          print("\n".join(lines))
-          if response.get("status") == "error":
-              sys.exit(1)
+
           PY
 
+          python scripts/render_hourly_portfolio_report.py
+
       - name: Upload hourly trading report
+
         if: always()
+
         uses: actions/upload-artifact@v4
+
         with:
+
           name: hourly-auto-trading-report
+
           path: Manager_Agent/reports/
+
           if-no-files-found: warn
 
       - name: Send hourly trading email
+
         if: always()
+
         working-directory: Manager_Agent
+
         env:
+
           SMTP_SERVER: ${{ secrets.SMTP_SERVER }}
+
           SMTP_PORT: ${{ secrets.SMTP_PORT }}
+
           SMTP_USERNAME: ${{ secrets.SMTP_USERNAME }}
+
           SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+
           SMTP_USE_SSL: ${{ secrets.SMTP_USE_SSL }}
+
           EMAIL_FROM: ${{ secrets.EMAIL_FROM }}
+
           EMAIL_TO: ${{ secrets.EMAIL_TO || 'terdoomcom@gmail.com' }}
+
           EMAIL_CC: ${{ secrets.EMAIL_CC }}
+
           EMAIL_SUBJECT: "รายงานระบบเทรดอัตโนมัติรายชั่วโมง - ${{ github.run_number }}"
+
           GITHUB_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+
           REPORTS_DIR: reports
+
         run: |
+
           python scripts/send_workflow_email.py
 
       - name: Show logs on failure
+
         if: failure()
+
         working-directory: Manager_Agent
+
         run: |
+
           docker compose ps || true
+
           for service in database-agent technical-agent scanner-agent fundamental-agent learning-agent execution-agent manager-agent db; do
+
             echo "---- ${service} logs tail ----"
+
             docker compose logs --tail=180 "$service" || true
+
           done
 
       - name: Stop stack
+
         if: always()
+
         working-directory: Manager_Agent
+
         run: |
+
           docker compose down -v || true
