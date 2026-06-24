@@ -1,0 +1,25 @@
+services:
+  manager-agent:
+    environment:
+      RISK_AGENT_URL: http://risk-agent:8007
+    depends_on:
+      risk-agent:
+        condition: service_healthy
+
+  risk-agent:
+    build:
+      context: ../Risk_Agent
+      dockerfile: Dockerfile
+    image: painaidee/risk-agent:latest
+    restart: always
+    ports:
+      - "8007:8007"
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8007/health', timeout=5).read()\""]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    environment:
+      PORT: 8007
+      PYTHONPATH: /app
