@@ -6,6 +6,7 @@ from typing import Any, Dict, List
 from .discover_allocation import (
     build_discover_allocation_plan,
     choose_bucket_aware_winner,
+    enrich_ranked_candidates_with_buckets,
     ranked_response_rows,
     select_candidates_by_bucket,
 )
@@ -126,10 +127,11 @@ def build_discover_allocation_report(
     winner remains only as a backward-compatible legacy field while Manager's
     primary response migrates to selected_positions/allocation_plan.
     """
-    allocation_plan = build_discover_allocation_plan(ranked, Decimal(str(portfolio_value or 0)))
-    bucket_selection = select_candidates_by_bucket(ranked, min_final_score=min_final_score)
+    enriched_ranked = enrich_ranked_candidates_with_buckets(ranked)
+    allocation_plan = build_discover_allocation_plan(enriched_ranked, Decimal(str(portfolio_value or 0)))
+    bucket_selection = select_candidates_by_bucket(enriched_ranked, min_final_score=min_final_score)
     selected_positions = build_selected_positions(
-        ranked=ranked,
+        ranked=enriched_ranked,
         allocation_plan=allocation_plan,
         bucket_selection=bucket_selection,
     )
@@ -138,9 +140,9 @@ def build_discover_allocation_report(
         "bucket_selection": bucket_selection,
         "selected_positions": selected_positions,
         "position_analysis_payloads": build_position_analysis_payloads(
-            ranked=ranked,
+            ranked=enriched_ranked,
             selected_positions=selected_positions,
         ),
-        "winner": choose_bucket_aware_winner(ranked, allocation_plan, min_final_score=min_final_score),
-        "ranked_candidates": ranked_response_rows(ranked),
+        "winner": choose_bucket_aware_winner(enriched_ranked, allocation_plan, min_final_score=min_final_score),
+        "ranked_candidates": ranked_response_rows(enriched_ranked),
     }
