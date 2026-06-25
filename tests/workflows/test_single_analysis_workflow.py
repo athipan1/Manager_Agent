@@ -46,6 +46,14 @@ def analysis_result(final_verdict="hold", status="complete"):
     }
 
 
+async def fake_fetch_context_value(db_client, account_id, correlation_id):
+    return Decimal("0")
+
+
+async def fake_fetch_session_risk_context(db_client, account_id, symbol, correlation_id):
+    return {"trades_today": 0}
+
+
 def test_manager_metadata_preserves_legacy_shape(monkeypatch):
     monkeypatch.setattr("app.workflows.single_analysis_workflow.config.TRADING_MODE", "PAPER")
     monkeypatch.setattr("app.workflows.single_analysis_workflow.config.TRADING_ENABLED", True)
@@ -120,8 +128,8 @@ async def test_run_single_analysis_flow_dry_run_hold(monkeypatch):
     monkeypatch.setattr("app.workflows.single_analysis_workflow.DatabaseAgentClient", FakeDbClient)
     monkeypatch.setattr("app.workflows.single_analysis_workflow.validate_stock_scope", lambda ticker: None)
     monkeypatch.setattr("app.workflows.single_analysis_workflow.config_manager.get", lambda key: 1 if key == "DEFAULT_ACCOUNT_ID" else None)
-    monkeypatch.setattr("app.workflows.single_analysis_workflow.fetch_context_value", lambda db, account, cid: Decimal("0"))
-    monkeypatch.setattr("app.workflows.single_analysis_workflow.fetch_session_risk_context", lambda db, account, symbol, cid: {"trades_today": 0})
+    monkeypatch.setattr("app.workflows.single_analysis_workflow.fetch_context_value", fake_fetch_context_value)
+    monkeypatch.setattr("app.workflows.single_analysis_workflow.fetch_session_risk_context", fake_fetch_session_risk_context)
 
     async def fake_analyze_single_asset(ticker, correlation_id):
         return analysis_result("hold")
@@ -151,8 +159,8 @@ async def test_run_single_analysis_flow_executes_approved_trade(monkeypatch):
     monkeypatch.setattr("app.workflows.single_analysis_workflow.validate_stock_scope", lambda ticker: None)
     monkeypatch.setattr("app.workflows.single_analysis_workflow.config.MANUAL_APPROVAL_REQUIRED", False)
     monkeypatch.setattr("app.workflows.single_analysis_workflow.config_manager.get", lambda key: 1 if key == "DEFAULT_ACCOUNT_ID" else None)
-    monkeypatch.setattr("app.workflows.single_analysis_workflow.fetch_context_value", lambda db, account, cid: Decimal("0"))
-    monkeypatch.setattr("app.workflows.single_analysis_workflow.fetch_session_risk_context", lambda db, account, symbol, cid: {"trades_today": 0})
+    monkeypatch.setattr("app.workflows.single_analysis_workflow.fetch_context_value", fake_fetch_context_value)
+    monkeypatch.setattr("app.workflows.single_analysis_workflow.fetch_session_risk_context", fake_fetch_session_risk_context)
 
     async def fake_analyze_single_asset(ticker, correlation_id):
         return analysis_result("buy")
@@ -191,8 +199,8 @@ async def test_run_single_analysis_flow_raises_500_when_agents_fail(monkeypatch)
     monkeypatch.setattr("app.workflows.single_analysis_workflow.DatabaseAgentClient", FakeDbClient)
     monkeypatch.setattr("app.workflows.single_analysis_workflow.validate_stock_scope", lambda ticker: None)
     monkeypatch.setattr("app.workflows.single_analysis_workflow.config_manager.get", lambda key: 1 if key == "DEFAULT_ACCOUNT_ID" else None)
-    monkeypatch.setattr("app.workflows.single_analysis_workflow.fetch_context_value", lambda db, account, cid: Decimal("0"))
-    monkeypatch.setattr("app.workflows.single_analysis_workflow.fetch_session_risk_context", lambda db, account, symbol, cid: {})
+    monkeypatch.setattr("app.workflows.single_analysis_workflow.fetch_context_value", fake_fetch_context_value)
+    monkeypatch.setattr("app.workflows.single_analysis_workflow.fetch_session_risk_context", fake_fetch_session_risk_context)
 
     async def fake_analyze_single_asset(ticker, correlation_id):
         return {"ticker": ticker, "error": "All agents failed", "raw_data": {}}
