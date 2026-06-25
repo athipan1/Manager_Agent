@@ -73,9 +73,6 @@ def _broker_position_to_position(position: Dict[str, Any]) -> Position:
 
 
 def _broker_account_to_balance(account: Dict[str, Any]) -> AccountBalance:
-    # Portfolio sizing and Risk_Agent equity checks must use account equity/portfolio
-    # value, not raw cash. Cash can be negative in margin/paper accounts while
-    # portfolio equity is healthy and buying power remains available.
     value = account.get("equity") or account.get("portfolio_value") or account.get("buying_power") or account.get("cash") or 0
     return AccountBalance(cash_balance=Decimal(str(value)))
 
@@ -98,7 +95,6 @@ class DatabaseAgentClient(ResilientAgentClient):
         if account_key in self._broker_context_reconciled_accounts:
             return None
         try:
-            # Local import avoids an import cycle at module load time.
             from .execution_client import ExecutionAgentClient
             async with ExecutionAgentClient() as execution_client:
                 result = await execution_client.reconcile_broker_state(
@@ -184,6 +180,11 @@ class DatabaseAgentClient(ResilientAgentClient):
         params = {"symbol": symbol} if symbol else None
         url = DatabaseEndpoints.SESSION_RISK.format(account_id=account_id)
         response_data = await self._get(url, correlation_id, params=params)
+        standard_resp = self.validate_standard_response(response_data)
+        return _coerce_dict(standard_resp.data)
+
+    async def get_broker_sync_status(self, account_id: Union[int, str], correlation_id: str) -> Dict[str, Any]:
+        response_data = await self._get(DatabaseEndpoints.BROKER_SYNC_STATUS, correlation_id, params={"account_id": account_id})
         standard_resp = self.validate_standard_response(response_data)
         return _coerce_dict(standard_resp.data)
 
