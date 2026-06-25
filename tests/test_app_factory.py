@@ -19,17 +19,45 @@ def test_create_app_registers_single_analysis_routes_by_default():
     assert "POST" in methods["/dry-run/analyze"]
 
 
+def test_create_app_registers_system_routes_by_default():
+    app = create_app()
+
+    methods = route_methods(app)
+    assert "/health" in methods
+    assert "/preflight/live" in methods
+    assert "GET" in methods["/health"]
+    assert "GET" in methods["/preflight/live"]
+
+
 def test_create_app_can_skip_single_analysis_routes():
     app = create_app(include_single_analysis=False)
 
     methods = route_methods(app)
     assert "/analyze" not in methods
     assert "/dry-run/analyze" not in methods
+    assert "/health" in methods
+    assert "/preflight/live" in methods
+
+
+def test_create_app_can_skip_system_routes():
+    app = create_app(include_system=False)
+
+    methods = route_methods(app)
+    assert "/health" not in methods
+    assert "/preflight/live" not in methods
+    assert "/analyze" in methods
+    assert "/dry-run/analyze" in methods
 
 
 def test_create_app_does_not_duplicate_registered_paths():
     app = create_app()
 
-    paths = [route.path for route in app.routes if route.path in {"/analyze", "/dry-run/analyze"}]
+    paths = [
+        route.path
+        for route in app.routes
+        if route.path in {"/analyze", "/dry-run/analyze", "/health", "/preflight/live"}
+    ]
     assert paths.count("/analyze") == 1
     assert paths.count("/dry-run/analyze") == 1
+    assert paths.count("/health") == 1
+    assert paths.count("/preflight/live") == 1
