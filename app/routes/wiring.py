@@ -1,0 +1,16 @@
+"""Route registration helpers for Manager_Agent.
+
+Keeping route registration in a small module lets `app.main` migrate from
+inline route declarations to modular routers one router at a time.
+"""
+
+from __future__ import annotations
+
+from fastapi import FastAPI
+
+from .single_analysis import router as single_analysis_router
+
+
+def register_single_analysis_routes(app: FastAPI) -> None:
+    """Register the single-symbol analysis router on a FastAPI app."""
+    app.include_router(single_analysis_router)
