@@ -66,7 +66,11 @@ def _balance_from_broker_account(account: Dict[str, Any], account_id: Union[int,
     }
 
 
-def _db_context_looks_stale(balance: Any, positions: List[Any], orders: List[Dict[str, Any]], broker_state: Dict[str, Any]) -> bool:
+def _db_context_looks_stale(balance: Any, positions: List[Any], orders: List[Dict[str, Any]], broker_state: Dict[str, Any], database_sync: Dict[str, Any]) -> bool:
+    mismatch = database_sync.get("mismatch") if isinstance(database_sync, dict) else {}
+    summary = mismatch.get("summary") if isinstance(mismatch, dict) else {}
+    if summary.get("status") == "mismatch":
+        return True
     if not broker_state:
         return False
     broker_positions = broker_state.get("positions") or []
@@ -79,9 +83,7 @@ def _db_context_looks_stale(balance: Any, positions: List[Any], orders: List[Dic
         return True
     broker_cash = str(broker_account.get("cash") or "")
     db_cash = str(db_balance.get("cash_balance") or db_balance.get("cash") or "")
-    if broker_cash and db_cash and broker_cash != db_cash:
-        return True
-    return False
+    return bool(broker_cash and db_cash and broker_cash != db_cash)
 
 
 async def _load_broker_state(account_id: Union[int, str], correlation_id: str) -> Dict[str, Any]:
@@ -93,9 +95,37 @@ async def _load_broker_state(account_id: Union[int, str], correlation_id: str) -
             if broker_state:
                 return {"status": "success", "mode": "reconcile", "payload": reconcile_payload, "broker_state": broker_state}
             state = await exec_client.broker_state(account_id, correlation_id)
-            return {"status": "success", "mode": "state", "payload": _broker_state_from_response(state), "broker_state": _broker_state_from_response(state)}
+            state_payload = _broker_state_from_response(state)
+            return {"status": "success", "mode": "state", "payload": state_payload, "broker_state": state_payload}
     except Exception as exc:
         return {"status": "failed", "error": str(exc), "payload": {}, "broker_state": {}}
+
+
+async def _load_database_sync_status(db_client: DatabaseAgentClient, account_id: Union[int, str], correlation_id: str, data_errors: List[str]) -> Dict[str, Any]:
+    try:
+        return await db_client.get_broker_sync_status(account_id, correlation_id)
+    except Exception as exc:
+        data_errors.append(f"ดึงสถานะ Broker/Database sync ไม่สำเร็จ: {exc}")
+        return {}
+
+
+def _broker_fallback_alert(broker_sync: Dict[str, Any], database_sync: Dict[str, Any]) -> Dict[str, Any]:
+    mismatch = database_sync.get("mismatch") if isinstance(database_sync, dict) else {}
+    summary = mismatch.get("summary") if isinstance(mismatch, dict) else {}
+    diagnostics = mismatch.get("diagnostics") if isinstance(mismatch, dict) else {}
+    recommended_action = summary.get("recommended_action") or "refresh_broker_sync"
+    return {
+        "alert_type": "dashboard_broker_fallback",
+        "severity": summary.get("severity") or "warning",
+        "message": f"Dashboard ใช้ข้อมูล broker โดยตรง เพราะ Database context ยังไม่ตรงกับ broker: {recommended_action}",
+        "created_at": _now().isoformat(),
+        "metadata": {
+            "source": "dashboard",
+            "broker_sync_status": broker_sync.get("status"),
+            "database_sync_summary": summary,
+            "database_sync_diagnostics": diagnostics,
+        },
+    }
 
 
 async def _dashboard_payload(account_id: Optional[Union[int, str]], correlation_id: str) -> Dict[str, Any]:
@@ -106,12 +136,14 @@ async def _dashboard_payload(account_id: Optional[Union[int, str]], correlation_
     orders: List[Dict[str, Any]] = []
     trade_history: List[Any] = []
     data_errors: List[str] = []
+    database_sync: Dict[str, Any] = {}
 
     broker_sync = await _load_broker_state(account_id, correlation_id)
     broker_state = broker_sync.get("broker_state") or {}
 
     try:
         async with DatabaseAgentClient() as db_client:
+            database_sync = await _load_database_sync_status(db_client, account_id, correlation_id, data_errors)
             try:
                 balance = await db_client.get_account_balance(account_id, correlation_id)
             except Exception as exc:
@@ -132,21 +164,13 @@ async def _dashboard_payload(account_id: Optional[Union[int, str]], correlation_
         data_errors.append(f"เชื่อมต่อ Database Agent ไม่สำเร็จ: {exc}")
 
     data_source = "database"
-    if _db_context_looks_stale(balance, positions, orders, broker_state):
+    if _db_context_looks_stale(balance, positions, orders, broker_state, database_sync):
         account = broker_state.get("account") or {}
         balance = _balance_from_broker_account(account, account_id)
         positions = broker_state.get("positions") or []
         orders = broker_state.get("open_orders") or []
         data_source = "broker_fallback"
-        problems = [
-            {
-                "alert_type": "dashboard_broker_fallback",
-                "severity": "warning",
-                "message": "Dashboard ใช้ข้อมูล broker โดยตรง เพราะ Database context ยังไม่ตรงกับ broker",
-                "created_at": _now().isoformat(),
-                "metadata": {"source": "dashboard", "broker_sync_status": broker_sync.get("status")},
-            }
-        ] + problems
+        problems = [_broker_fallback_alert(broker_sync, database_sync)] + problems
 
     open_orders = [order for order in orders if _is_open_order(order)]
     if data_errors:
@@ -166,6 +190,7 @@ async def _dashboard_payload(account_id: Optional[Union[int, str]], correlation_
         "generated_at": _now().isoformat(),
         "data_source": data_source,
         "broker_sync": _jsonable(broker_sync.get("payload") or {"status": broker_sync.get("status"), "error": broker_sync.get("error")}),
+        "database_sync": _jsonable(database_sync),
         "problems": _jsonable(problems),
         "balance": _jsonable(balance),
         "positions": _jsonable(positions),
@@ -176,6 +201,7 @@ async def _dashboard_payload(account_id: Optional[Union[int, str]], correlation_
             "position_count": len(positions),
             "open_order_count": len(open_orders),
             "trade_count": len(trade_history),
+            "database_sync_status": ((database_sync.get("mismatch") or {}).get("summary") or {}).get("status"),
         },
     }
 
@@ -199,55 +225,40 @@ DASHBOARD_HTML = """
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>แดชบอร์ดระบบเทรด</title>
   <style>
-    :root { color-scheme: dark; --bg:#0f172a; --card:#111827; --muted:#94a3b8; --text:#e5e7eb; --border:#263244; --good:#22c55e; --warn:#f59e0b; --bad:#ef4444; --accent:#38bdf8; }
-    * { box-sizing: border-box; }
-    body { margin:0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background: radial-gradient(circle at top, #1e293b, var(--bg)); color:var(--text); }
-    header { padding:24px; border-bottom:1px solid var(--border); position:sticky; top:0; background:rgba(15,23,42,.9); backdrop-filter: blur(10px); z-index:2; }
-    h1 { margin:0 0 8px; font-size:28px; }
-    .sub { color:var(--muted); font-size:14px; }
-    .controls { margin-top:16px; display:flex; gap:10px; flex-wrap:wrap; }
-    input, button { border:1px solid var(--border); border-radius:12px; padding:10px 12px; background:#0b1220; color:var(--text); }
-    button { cursor:pointer; background:linear-gradient(135deg,#0284c7,#0369a1); border:none; font-weight:700; }
-    main { padding:24px; display:grid; gap:18px; }
+    :root { color-scheme: dark; --bg:#0f172a; --card:#111827; --muted:#94a3b8; --text:#e5e7eb; --border:#263244; }
+    body { margin:0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background:#0f172a; color:#e5e7eb; }
+    header, main { padding:24px; }
     .grid { display:grid; grid-template-columns: repeat(auto-fit, minmax(220px,1fr)); gap:14px; }
-    .card { background:rgba(17,24,39,.88); border:1px solid var(--border); border-radius:18px; padding:18px; box-shadow:0 10px 30px rgba(0,0,0,.2); }
-    .card h2 { margin:0 0 12px; font-size:18px; }
-    .metric { font-size:30px; font-weight:800; margin:6px 0; }
-    .muted { color:var(--muted); font-size:13px; }
-    table { width:100%; border-collapse:collapse; overflow:hidden; }
-    th, td { text-align:left; border-bottom:1px solid var(--border); padding:10px 8px; font-size:14px; vertical-align:top; }
-    th { color:#cbd5e1; font-size:12px; text-transform:uppercase; letter-spacing:.04em; }
-    .badge { display:inline-flex; border-radius:999px; padding:4px 8px; font-size:12px; font-weight:700; }
-    .critical,.error { background:rgba(239,68,68,.16); color:#fecaca; }
-    .warning { background:rgba(245,158,11,.16); color:#fde68a; }
-    .success { background:rgba(34,197,94,.16); color:#bbf7d0; }
-    .empty { padding:18px; color:var(--muted); border:1px dashed var(--border); border-radius:14px; }
-    .section { display:grid; gap:14px; }
-    @media (max-width: 640px) { header, main { padding:16px; } .metric { font-size:24px; } th,td { font-size:12px; } }
+    .card { background:#111827; border:1px solid #263244; border-radius:18px; padding:18px; margin-bottom:14px; }
+    .metric { font-size:30px; font-weight:800; }
+    .muted { color:#94a3b8; font-size:13px; }
+    table { width:100%; border-collapse:collapse; }
+    th, td { text-align:left; border-bottom:1px solid #263244; padding:10px 8px; font-size:14px; vertical-align:top; }
+    .badge { border-radius:999px; padding:4px 8px; font-size:12px; font-weight:700; background:#1e293b; }
+    .warning { color:#fde68a; } .critical,.error { color:#fecaca; } .success,.ok { color:#bbf7d0; }
+    .empty { padding:18px; color:#94a3b8; border:1px dashed #263244; border-radius:14px; }
   </style>
 </head>
 <body>
   <header>
     <h1>แดชบอร์ดระบบเทรด</h1>
-    <div class="sub">แสดงปัญหา ยอดเงินคงเหลือ หุ้นที่ถือ ออเดอร์เปิด และประวัติการซื้อขาย</div>
-    <div class="controls">
-      <input id="accountId" placeholder="Account ID" />
-      <button onclick="loadDashboard()">รีเฟรชข้อมูล</button>
-      <span id="updated" class="sub"></span>
-    </div>
+    <div class="muted">แสดงปัญหา ยอดเงินคงเหลือ หุ้นที่ถือ ออเดอร์เปิด และประวัติการซื้อขาย</div>
+    <input id="accountId" placeholder="Account ID" />
+    <button onclick="loadDashboard()">รีเฟรชข้อมูล</button>
+    <span id="updated" class="muted"></span>
   </header>
   <main>
     <section class="grid">
-      <div class="card"><h2>ปัญหาระบบ</h2><div id="problemCount" class="metric">-</div><div class="muted">Alert ล่าสุดจาก Manager</div></div>
+      <div class="card"><h2>ปัญหาระบบ</h2><div id="problemCount" class="metric">-</div></div>
       <div class="card"><h2>ยอดเงินคงเหลือ</h2><div id="cashBalance" class="metric">-</div><div id="accountMeta" class="muted"></div></div>
-      <div class="card"><h2>หุ้นที่ถืออยู่</h2><div id="positionCount" class="metric">-</div><div class="muted">จำนวน position</div></div>
-      <div class="card"><h2>ออเดอร์ที่เปิดอยู่</h2><div id="openOrderCount" class="metric">-</div><div class="muted">ยังไม่ปิด/ยังไม่ fill ทั้งหมด</div></div>
+      <div class="card"><h2>หุ้นที่ถืออยู่</h2><div id="positionCount" class="metric">-</div></div>
+      <div class="card"><h2>ออเดอร์ที่เปิดอยู่</h2><div id="openOrderCount" class="metric">-</div></div>
+      <div class="card"><h2>Database Sync</h2><div id="syncStatus" class="metric">-</div><div id="syncAction" class="muted"></div></div>
     </section>
-
-    <section class="card section"><h2>ปัญหา / Alert</h2><div id="problems"></div></section>
-    <section class="card section"><h2>หุ้นที่ถืออยู่</h2><div id="positions"></div></section>
-    <section class="card section"><h2>หุ้นที่กำลังเปิดออเดอร์</h2><div id="openOrders"></div></section>
-    <section class="card section"><h2>ประวัติการซื้อขาย</h2><div id="trades"></div></section>
+    <section class="card"><h2>ปัญหา / Alert</h2><div id="problems"></div></section>
+    <section class="card"><h2>หุ้นที่ถืออยู่</h2><div id="positions"></div></section>
+    <section class="card"><h2>หุ้นที่กำลังเปิดออเดอร์</h2><div id="openOrders"></div></section>
+    <section class="card"><h2>ประวัติการซื้อขาย</h2><div id="trades"></div></section>
   </main>
 <script>
 const fmtMoney = (v) => {
@@ -266,10 +277,13 @@ async function loadDashboard() {
   const res = await fetch(url);
   const body = await res.json();
   const data = body.data || {};
+  const syncSummary = data.database_sync?.mismatch?.summary || {};
   document.getElementById('updated').textContent = `อัปเดต: ${new Date(data.generated_at || Date.now()).toLocaleString('th-TH')} | Source: ${data.data_source || '-'}`;
   document.getElementById('problemCount').textContent = data.summary?.problem_count ?? 0;
   document.getElementById('positionCount').textContent = data.summary?.position_count ?? 0;
   document.getElementById('openOrderCount').textContent = data.summary?.open_order_count ?? 0;
+  document.getElementById('syncStatus').textContent = syncSummary.status || data.summary?.database_sync_status || '-';
+  document.getElementById('syncAction').textContent = syncSummary.recommended_action || '';
   const bal = data.balance || {};
   document.getElementById('cashBalance').textContent = fmtMoney(pick(bal, ['cash_balance','cash','available_cash','buying_power']));
   document.getElementById('accountMeta').textContent = `Account: ${data.account_id || '-'} | Trades: ${data.summary?.trade_count ?? 0}`;
