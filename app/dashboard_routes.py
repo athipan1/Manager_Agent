@@ -102,8 +102,11 @@ async def _load_broker_state(account_id: Union[int, str], correlation_id: str) -
 
 
 async def _load_database_sync_status(db_client: DatabaseAgentClient, account_id: Union[int, str], correlation_id: str, data_errors: List[str]) -> Dict[str, Any]:
+    getter = getattr(db_client, "get_broker_sync_status", None)
+    if getter is None:
+        return {}
     try:
-        return await db_client.get_broker_sync_status(account_id, correlation_id)
+        return await getter(account_id, correlation_id)
     except Exception as exc:
         data_errors.append(f"ดึงสถานะ Broker/Database sync ไม่สำเร็จ: {exc}")
         return {}
@@ -174,7 +177,7 @@ async def _dashboard_payload(account_id: Optional[Union[int, str]], correlation_
 
     open_orders = [order for order in orders if _is_open_order(order)]
     if data_errors:
-        problems = [
+        data_error_alerts = [
             {
                 "alert_type": "dashboard_data_error",
                 "severity": "warning",
@@ -183,7 +186,8 @@ async def _dashboard_payload(account_id: Optional[Union[int, str]], correlation_
                 "metadata": {"source": "dashboard"},
             }
             for error in data_errors
-        ] + problems
+        ]
+        problems = problems + data_error_alerts if data_source == "broker_fallback" else data_error_alerts + problems
 
     return {
         "account_id": str(account_id),
