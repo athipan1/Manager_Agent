@@ -27,6 +27,14 @@ def test_create_app_registers_multi_analysis_routes_by_default():
     assert "POST" in methods["/analyze-multi"]
 
 
+def test_create_app_registers_discovery_routes_by_default():
+    app = create_app()
+
+    methods = route_methods(app)
+    assert "/discover-analyze-trade" in methods
+    assert "POST" in methods["/discover-analyze-trade"]
+
+
 def test_create_app_registers_system_routes_by_default():
     app = create_app()
 
@@ -52,6 +60,7 @@ def test_create_app_can_skip_single_analysis_routes():
     assert "/analyze" not in methods
     assert "/dry-run/analyze" not in methods
     assert "/analyze-multi" in methods
+    assert "/discover-analyze-trade" in methods
     assert "/health" in methods
     assert "/preflight/live" in methods
     assert "/trade-replay" in methods
@@ -64,6 +73,20 @@ def test_create_app_can_skip_multi_analysis_routes():
     assert "/analyze-multi" not in methods
     assert "/analyze" in methods
     assert "/dry-run/analyze" in methods
+    assert "/discover-analyze-trade" in methods
+    assert "/health" in methods
+    assert "/preflight/live" in methods
+    assert "/trade-replay" in methods
+
+
+def test_create_app_can_skip_discovery_routes():
+    app = create_app(include_discovery=False)
+
+    methods = route_methods(app)
+    assert "/discover-analyze-trade" not in methods
+    assert "/analyze" in methods
+    assert "/dry-run/analyze" in methods
+    assert "/analyze-multi" in methods
     assert "/health" in methods
     assert "/preflight/live" in methods
     assert "/trade-replay" in methods
@@ -78,6 +101,7 @@ def test_create_app_can_skip_system_routes():
     assert "/analyze" in methods
     assert "/dry-run/analyze" in methods
     assert "/analyze-multi" in methods
+    assert "/discover-analyze-trade" in methods
     assert "/trade-replay" in methods
 
 
@@ -89,6 +113,7 @@ def test_create_app_can_skip_trade_replay_routes():
     assert "/analyze" in methods
     assert "/dry-run/analyze" in methods
     assert "/analyze-multi" in methods
+    assert "/discover-analyze-trade" in methods
     assert "/health" in methods
     assert "/preflight/live" in methods
 
@@ -103,6 +128,7 @@ def test_create_app_does_not_duplicate_registered_paths():
             "/analyze",
             "/dry-run/analyze",
             "/analyze-multi",
+            "/discover-analyze-trade",
             "/health",
             "/preflight/live",
             "/trade-replay",
@@ -111,6 +137,7 @@ def test_create_app_does_not_duplicate_registered_paths():
     assert paths.count("/analyze") == 1
     assert paths.count("/dry-run/analyze") == 1
     assert paths.count("/analyze-multi") == 1
+    assert paths.count("/discover-analyze-trade") == 1
     assert paths.count("/health") == 1
     assert paths.count("/preflight/live") == 1
     assert paths.count("/trade-replay") == 1

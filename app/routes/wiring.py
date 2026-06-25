@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from fastapi import FastAPI
 
+from .discovery import router as discovery_router
 from .multi_analysis import router as multi_analysis_router
 from .single_analysis import router as single_analysis_router
 from .system import router as system_router
@@ -22,6 +23,11 @@ def register_single_analysis_routes(app: FastAPI) -> None:
 def register_multi_analysis_routes(app: FastAPI) -> None:
     """Register the multi-symbol analysis router on a FastAPI app."""
     app.include_router(multi_analysis_router)
+
+
+def register_discovery_routes(app: FastAPI) -> None:
+    """Register discovery/analyze/trade routes on a FastAPI app."""
+    app.include_router(discovery_router)
 
 
 def register_system_routes(app: FastAPI) -> None:
