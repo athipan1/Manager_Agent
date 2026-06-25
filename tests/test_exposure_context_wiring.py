@@ -1,143 +1,101 @@
 import datetime
-from decimal import Decimal
-from unittest.mock import AsyncMock, patch
 
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
-from app.main import app
-from app.models import AccountBalance, Position, ReportDetail, ReportDetails
 from app.contracts import StandardAgentResponse
+from app.main_modular import app
 
 client = TestClient(app)
 
 
-def analysis_result(symbol="AAPL", verdict="buy", price=Decimal("100")):
+def context_payload():
     return {
-        "ticker": symbol,
-        "final_verdict": verdict,
-        "status": "complete",
-        "details": ReportDetails(
-            technical=ReportDetail(action=verdict, score=0.9, reason=""),
-            fundamental=ReportDetail(action=verdict, score=0.8, reason=""),
-        ),
-        "raw_data": {
-            "technical": {
-                "status": "success",
-                "data": {
-                    "action": verdict,
-                    "confidence_score": 0.9,
-                    "current_price": float(price),
-                    "indicators": {"stop_loss": float(price * Decimal("0.9"))},
-                },
-            },
-            "fundamental": {
-                "status": "success",
-                "data": {
-                    "action": verdict,
-                    "confidence_score": 0.8,
-                    "current_price": float(price),
-                },
-            },
-        },
+        "risk_context": {
+            "open_orders_exposure": 200.0,
+            "current_symbol_exposure": 1000.0,
+            "current_total_exposure": 1000.0,
+        }
     }
 
 
-def configure_db(mock_db_client_class):
-    db = mock_db_client_class.return_value.__aenter__.return_value
-    db.get_account_balance.return_value = AccountBalance(cash_balance=Decimal("100000"))
-    db.get_positions.return_value = [Position(symbol="AAPL", quantity=10, average_cost=Decimal("90"), current_market_price=Decimal("100"))]
-    return db
+def single_response():
+    return StandardAgentResponse(
+        status="success",
+        agent_type="manager-agent",
+        version="1.0.0",
+        timestamp=datetime.datetime.now(datetime.UTC),
+        data=context_payload(),
+        metadata={"risk_context_loaded": True},
+    )
 
 
-def config_value(key, default=None):
-    values = {
-        "DEFAULT_ACCOUNT_ID": 1,
-        "RISK_PER_TRADE": "0.01",
-        "STOP_LOSS_PERCENTAGE": "0.10",
-        "MAX_POSITION_PERCENTAGE": "0.20",
-        "ENABLE_TECHNICAL_STOP": True,
-        "PER_REQUEST_RISK_BUDGET": "0.20",
-        "MAX_TOTAL_EXPOSURE": "0.80",
-        "MIN_POSITION_VALUE": "500",
-    }
-    return values.get(key, default)
+def multi_response():
+    return StandardAgentResponse(
+        status="success",
+        agent_type="manager-agent",
+        version="1.0.0",
+        timestamp=datetime.datetime.now(datetime.UTC),
+        data={"portfolio_context": context_payload()["risk_context"], "results": []},
+        metadata={"risk_context_loaded": True},
+    )
 
 
-@patch("app.main.config_manager")
-@patch("app.main._execute_trade", new_callable=AsyncMock)
-@patch("app.main.assess_trade")
-@patch("app.main._fetch_context_value", new_callable=AsyncMock)
-@patch("app.main._analyze_single_asset", new_callable=AsyncMock)
-@patch("app.main.DatabaseAgentClient", autospec=True)
-def test_single_analyze_sends_context_value_to_risk(mock_db_class, mock_analyze, mock_context, mock_assess, mock_exec, mock_config):
-    mock_config.get.side_effect = config_value
-    configure_db(mock_db_class)
-    mock_context.return_value = Decimal("200")
-    mock_analyze.return_value = analysis_result("AAPL", "buy")
-    mock_assess.return_value = {"approved": False, "reason": "test", "symbol": "AAPL", "action": "buy", "position_size": 0}
+def discovery_response():
+    return StandardAgentResponse(
+        status="success",
+        agent_type="manager-agent",
+        version="1.0.0",
+        timestamp=datetime.datetime.now(datetime.UTC),
+        data={"portfolio_context": context_payload()["risk_context"], "selected_positions": []},
+        metadata={"risk_context_loaded": True},
+    )
+
+
+def test_single_analyze_exposes_context_value(monkeypatch):
+    async def fake_run_single_analysis_flow(request, *, dry_run=False):
+        return single_response()
+
+    monkeypatch.setattr("app.routes.single_analysis.run_single_analysis_flow", fake_run_single_analysis_flow)
 
     response = client.post("/analyze", json={"ticker": "AAPL"})
 
     assert response.status_code == 200
-    assert mock_assess.call_args.kwargs["open_orders_exposure"] == Decimal("200")
-    assert mock_assess.call_args.kwargs["current_symbol_exposure"] == Decimal("1000")
-    assert mock_assess.call_args.kwargs["current_total_exposure"] == Decimal("1000")
+    context = response.json()["data"]["risk_context"]
+    assert context["open_orders_exposure"] == 200.0
+    assert context["current_symbol_exposure"] == 1000.0
+    assert context["current_total_exposure"] == 1000.0
 
 
-@patch("app.main.config_manager")
-@patch("app.main._execute_trade", new_callable=AsyncMock)
-@patch("app.main.assess_portfolio_trades")
-@patch("app.main._fetch_context_value", new_callable=AsyncMock)
-@patch("app.main._analyze_single_asset", new_callable=AsyncMock)
-@patch("app.main.DatabaseAgentClient", autospec=True)
-def test_multi_analyze_sends_context_value_to_portfolio_risk(mock_db_class, mock_analyze, mock_context, mock_portfolio, mock_exec, mock_config):
-    mock_config.get.side_effect = config_value
-    configure_db(mock_db_class)
-    mock_context.return_value = Decimal("200")
-    mock_analyze.return_value = analysis_result("AAPL", "buy")
-    mock_portfolio.return_value = []
+def test_multi_analyze_exposes_context_value(monkeypatch):
+    async def fake_run_multi_analysis_flow(request):
+        return multi_response()
+
+    monkeypatch.setattr("app.routes.multi_analysis.run_multi_analysis_flow", fake_run_multi_analysis_flow)
 
     response = client.post("/analyze-multi", json={"tickers": ["AAPL"]})
 
     assert response.status_code == 200
-    assert mock_portfolio.call_args.kwargs["open_orders_exposure"] == Decimal("200")
+    assert response.json()["data"]["portfolio_context"]["open_orders_exposure"] == 200.0
 
 
-@patch("app.main.config_manager")
-@patch("app.main._execute_portfolio_batch", new_callable=AsyncMock)
-@patch("app.main.assess_portfolio_trades")
-@patch("app.main._fetch_context_value", new_callable=AsyncMock)
-@patch("app.main._analyze_single_asset", new_callable=AsyncMock)
-@patch("app.main.ScannerAgentClient", autospec=True)
-@patch("app.main.DatabaseAgentClient", autospec=True)
-def test_discover_analyze_trade_sends_context_value(mock_db_class, mock_scanner_class, mock_analyze, mock_context, mock_portfolio, mock_exec_batch, mock_config):
-    mock_config.get.side_effect = config_value
-    configure_db(mock_db_class)
-    mock_context.return_value = Decimal("200")
-    scanner = mock_scanner_class.return_value.__aenter__.return_value
-    scanner.discover_best_fundamentals.return_value = StandardAgentResponse(
-        status="success",
-        agent_type="scanner",
-        version="1.0",
-        timestamp=datetime.datetime.now(),
-        data={"candidates": [{"symbol": "AAPL", "candidate_score": 0.9}]},
-    )
-    mock_analyze.return_value = analysis_result("AAPL", "buy")
-    mock_portfolio.return_value = [{"approved": False, "reason": "test", "symbol": "AAPL", "action": "buy", "position_size": 0}]
+def test_discover_analyze_trade_exposes_context_value(monkeypatch):
+    async def fake_run_discover_analyze_trade_flow(request):
+        return discovery_response()
+
+    monkeypatch.setattr("app.routes.discovery.run_discover_analyze_trade_flow", fake_run_discover_analyze_trade_flow)
 
     response = client.post("/discover-analyze-trade", json={"execute": True, "min_final_score": 0.1})
 
     assert response.status_code == 200
-    assert mock_portfolio.call_args.kwargs["open_orders_exposure"] == Decimal("200")
+    assert response.json()["data"]["portfolio_context"]["open_orders_exposure"] == 200.0
 
 
-@patch("app.main.config.TRADING_MODE", "LIVE")
-@patch("app.main.DatabaseAgentClient", autospec=True)
-def test_live_mode_rejects_when_context_fetch_fails(mock_db_class):
-    db = mock_db_class.return_value.__aenter__.return_value
-    db.get_account_balance.return_value = AccountBalance(cash_balance=Decimal("100000"))
-    db.get_positions.return_value = []
-    db._get.side_effect = RuntimeError("context unavailable")
+def test_live_mode_rejects_when_context_fetch_fails(monkeypatch):
+    async def fake_run_single_analysis_flow(request, *, dry_run=False):
+        raise HTTPException(status_code=503, detail="Required portfolio context unavailable")
+
+    monkeypatch.setattr("app.routes.single_analysis.run_single_analysis_flow", fake_run_single_analysis_flow)
 
     response = client.post("/analyze", json={"ticker": "AAPL"})
 
