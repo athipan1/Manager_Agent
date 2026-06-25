@@ -4,7 +4,7 @@ from types import SimpleNamespace
 import pytest
 from fastapi import HTTPException
 
-from app.models import AgentRequestBody
+from app.models import AgentRequestBody, ReportDetails
 from app.workflows.single_analysis_workflow import (
     execution_result_for_decision,
     manager_metadata,
@@ -41,7 +41,7 @@ def analysis_result(final_verdict="hold", status="complete"):
         "ticker": "AAPL",
         "final_verdict": final_verdict,
         "status": status,
-        "details": SimpleNamespace(technical=None, fundamental=None),
+        "details": ReportDetails(technical=None, fundamental=None),
         "raw_data": {},
     }
 
