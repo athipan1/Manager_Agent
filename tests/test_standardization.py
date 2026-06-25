@@ -40,4 +40,4 @@ def test_analyze_endpoint_standard_response(monkeypatch):
     assert "data" in json_response
     assert json_response["data"]["ticker"] == "AAPL"
     assert "final_verdict" in json_response["data"]
-    assert calls == [{"request": {"ticker": "AAPL", "period": "1mo", "account_id": 1}, "dry_run": False}]
+    assert calls == [{"request": {"ticker": "AAPL", "period": "1mo", "account_id": "1"}, "dry_run": False}]
