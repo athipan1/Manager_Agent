@@ -5,6 +5,7 @@ MIGRATED_PATHS = {
     "/analyze",
     "/dry-run/analyze",
     "/analyze-multi",
+    "/discover-analyze-trade",
     "/health",
     "/preflight/live",
     "/trade-replay",
@@ -17,6 +18,7 @@ def test_main_modular_exposes_migrated_routes():
     assert "/analyze" in paths
     assert "/dry-run/analyze" in paths
     assert "/analyze-multi" in paths
+    assert "/discover-analyze-trade" in paths
     assert "/health" in paths
     assert "/preflight/live" in paths
     assert "/trade-replay" in paths
@@ -28,6 +30,7 @@ def test_main_modular_does_not_duplicate_migrated_routes():
     assert paths.count("/analyze") == 1
     assert paths.count("/dry-run/analyze") == 1
     assert paths.count("/analyze-multi") == 1
+    assert paths.count("/discover-analyze-trade") == 1
     assert paths.count("/health") == 1
     assert paths.count("/preflight/live") == 1
     assert paths.count("/trade-replay") == 1
