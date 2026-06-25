@@ -9,8 +9,14 @@ from __future__ import annotations
 from fastapi import FastAPI
 
 from .single_analysis import router as single_analysis_router
+from .system import router as system_router
 
 
 def register_single_analysis_routes(app: FastAPI) -> None:
     """Register the single-symbol analysis router on a FastAPI app."""
     app.include_router(single_analysis_router)
+
+
+def register_system_routes(app: FastAPI) -> None:
+    """Register system and operational routes on a FastAPI app."""
+    app.include_router(system_router)

@@ -1,15 +1,22 @@
 from app.main_modular import app
 
 
-def test_main_modular_exposes_single_analysis_routes():
+MIGRATED_PATHS = {"/analyze", "/dry-run/analyze", "/health", "/preflight/live"}
+
+
+def test_main_modular_exposes_migrated_routes():
     paths = {route.path for route in app.routes}
 
     assert "/analyze" in paths
     assert "/dry-run/analyze" in paths
+    assert "/health" in paths
+    assert "/preflight/live" in paths
 
 
-def test_main_modular_does_not_duplicate_single_analysis_routes():
-    paths = [route.path for route in app.routes if route.path in {"/analyze", "/dry-run/analyze"}]
+def test_main_modular_does_not_duplicate_migrated_routes():
+    paths = [route.path for route in app.routes if route.path in MIGRATED_PATHS]
 
     assert paths.count("/analyze") == 1
     assert paths.count("/dry-run/analyze") == 1
+    assert paths.count("/health") == 1
+    assert paths.count("/preflight/live") == 1

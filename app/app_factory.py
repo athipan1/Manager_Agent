@@ -9,17 +9,22 @@ from __future__ import annotations
 
 from fastapi import FastAPI
 
-from .routes.wiring import register_single_analysis_routes
+from .routes.wiring import register_single_analysis_routes, register_system_routes
 
 
-def create_app(*, include_single_analysis: bool = True) -> FastAPI:
+def create_app(*, include_single_analysis: bool = True, include_system: bool = True) -> FastAPI:
     """Create a Manager_Agent FastAPI application.
 
     Args:
         include_single_analysis: Register `/analyze` and `/dry-run/analyze`
             routes backed by `single_analysis_workflow`.
+        include_system: Register operational routes such as `/health` and
+            `/preflight/live`.
     """
     app = FastAPI()
+
+    if include_system:
+        register_system_routes(app)
 
     if include_single_analysis:
         register_single_analysis_routes(app)
