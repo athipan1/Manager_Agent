@@ -63,5 +63,5 @@ EXPOSE 80
 HEALTHCHECK --interval=10s --timeout=3s --retries=5 \
   CMD ["python", "/app/healthcheck.py"]
 
-# Set the command to run the application.
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "80"]
+# Set the command to run the modular application entrypoint.
+CMD ["uvicorn", "app.main_modular:app", "--host", "0.0.0.0", "--port", "80"]
