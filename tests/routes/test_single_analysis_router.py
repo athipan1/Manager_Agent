@@ -1,3 +1,5 @@
+import datetime
+
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -16,6 +18,7 @@ def success_response(*, dry_run):
         status="success",
         agent_type="manager-agent",
         version="1.0.0",
+        timestamp=datetime.datetime.now(datetime.UTC),
         data={"dry_run": dry_run},
     )
 
