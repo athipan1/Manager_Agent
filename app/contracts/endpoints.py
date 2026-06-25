@@ -7,6 +7,7 @@ class DatabaseEndpoints:
     TRADE_HISTORY = "/accounts/{account_id}/trades"
     SESSION_RISK = "/accounts/{account_id}/risk/session"
     RISK_APPROVALS = "/risk-approvals"
+    BROKER_SYNC_STATUS = "/broker-sync/status"
     PORTFOLIO_METRICS = "/accounts/{account_id}/portfolio_metrics"
     PRICE_HISTORY = "/accounts/{account_id}/prices/{symbol}"
     SIGNALS = "/signals"
