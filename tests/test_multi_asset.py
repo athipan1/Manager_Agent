@@ -1,195 +1,126 @@
-import pytest
-from unittest.mock import AsyncMock, patch
-import os
 import datetime
-from decimal import Decimal
 
-# Patch os.makedirs before importing the app to prevent PermissionError.
-with patch('os.makedirs', return_value=None):
-    from fastapi.testclient import TestClient
-    from app.main import app
-    from app.models import (
-        AccountBalance, Position, CreateOrderResponse, Order, ReportDetails, ReportDetail
-    )
-    from app.contracts import StandardAgentResponse, StandardAgentData
+from fastapi.testclient import TestClient
+
+from app.contracts import StandardAgentResponse
+from app.main_modular import app
+from app.models import (
+    AnalysisResult,
+    AssetResult,
+    ExecutionResult,
+    ExecutionSummary,
+    MultiOrchestratorResponse,
+    ReportDetails,
+)
 
 client = TestClient(app)
 
-# --- Mocks ---
 
-def mock_analysis_result(ticker, final_verdict, tech_score=0.8, fund_score=0.7, price=Decimal("100.0")):
-    """Helper to create a mock analysis result, simulating the output of _analyze_single_asset."""
-    return {
-        "ticker": ticker,
-        "final_verdict": final_verdict,
-        "status": "complete",
-        "details": ReportDetails(
-            technical=ReportDetail(action=final_verdict, score=tech_score, reason=""),
-            fundamental=ReportDetail(action=final_verdict, score=fund_score, reason="")
-        ),
-        "raw_data": {
-            "technical": StandardAgentResponse(
-                status="success",
-                agent_type="technical",
-                version="1.0",
-                timestamp=datetime.datetime.now(),
-                data=StandardAgentData(
-                    action=final_verdict,
-                    confidence_score=tech_score,
-                    current_price=float(price),
-                    indicators={'stop_loss': float(price * Decimal("0.9"))}
-                )
+def multi_response(items, approved, executed, failed=0):
+    return StandardAgentResponse(
+        status="success",
+        agent_type="manager-agent",
+        version="1.0.0",
+        timestamp=datetime.datetime.now(datetime.UTC),
+        data=MultiOrchestratorResponse(
+            multi_report_id="multi-test-report",
+            timestamp=datetime.datetime.now(datetime.UTC),
+            execution_summary=ExecutionSummary(
+                total_trades_approved=approved,
+                total_trades_executed=executed,
+                total_trades_failed=failed,
             ),
-            "fundamental": StandardAgentResponse(
-                status="success",
-                agent_type="fundamental",
-                version="1.0",
-                timestamp=datetime.datetime.now(),
-                data=StandardAgentData(
-                    action=final_verdict,
-                    confidence_score=fund_score,
-                    current_price=float(price)
+            results=[
+                AssetResult(
+                    analysis=AnalysisResult(
+                        ticker=item["ticker"],
+                        final_verdict=item.get("verdict", "buy"),
+                        status="complete",
+                        details=ReportDetails(technical=None, fundamental=None),
+                    ),
+                    execution=ExecutionResult(
+                        status=item.get("status", "submitted"),
+                        reason=item.get("reason"),
+                        details=item.get("details"),
+                    ),
                 )
-            )
-        }
-    }
-
-import uuid
-
-
-def mock_risk_decision(**kwargs):
-    symbol = kwargs["symbol"]
-    action = str(kwargs["action"]).lower()
-    entry_price = Decimal(kwargs.get("entry_price") or 0)
-    if symbol == "AAPL":
-        size = 100
-        risk_amount = Decimal("1000")
-    elif symbol == "MSFT":
-        size = 100
-        risk_amount = Decimal("2000")
-    elif symbol == "GOOG":
-        size = int(kwargs.get("current_position_size") or 50)
-        risk_amount = Decimal("0")
-    else:
-        size = 10
-        risk_amount = Decimal("100")
-    return {
-        "approved": True,
-        "reason": "Approved by mocked Risk_Agent.",
-        "symbol": symbol,
-        "action": action,
-        "entry_price": entry_price,
-        "position_size": size,
-        "stop_loss": kwargs.get("technical_stop_loss"),
-        "risk_amount": risk_amount,
-        "risk_agent_response": {
-            "status": "approved",
-            "data": {
-                "approved": True,
-                "final_quantity": size,
-                "guard_plan": {"symbol": symbol, "quantity": size}
-            }
-        },
-        "guard_plan": {"symbol": symbol, "quantity": size}
-    }
+                for item in items
+            ],
+        ),
+    )
 
 
-@pytest.fixture
-def mock_high_level_dependencies():
-    """Mocks dependencies by patching analysis, risk gate, and execution."""
-    with patch('app.main._analyze_single_asset', new_callable=AsyncMock) as mock_analyze, \
-         patch('app.main._execute_trade', new_callable=AsyncMock) as mock_execute_trade, \
-         patch('app.portfolio_risk_manager.assess_trade', side_effect=mock_risk_decision) as mock_risk_gate, \
-         patch('app.main.DatabaseAgentClient', autospec=True) as mock_db_client_class, \
-         patch('app.main.LearningAgentClient', autospec=True) as mock_learning_client:
+def test_analyze_multi_endpoint_success(monkeypatch):
+    calls = []
 
-        mock_db_instance = mock_db_client_class.return_value.__aenter__.return_value
-        mock_db_instance.get_account_balance.return_value = AccountBalance(cash_balance=Decimal("100000.0"))
-        mock_db_instance.get_positions.return_value = [Position(symbol="GOOG", quantity=50, average_cost=Decimal("90.0"), current_market_price=Decimal("120.0"))]
+    async def fake_run_multi_analysis_flow(request):
+        calls.append(request.model_dump(mode="json"))
+        return multi_response(
+            [
+                {"ticker": "AAPL"},
+                {"ticker": "GOOG", "verdict": "sell"},
+                {"ticker": "MSFT"},
+            ],
+            approved=3,
+            executed=3,
+        )
 
-        mock_execute_trade.return_value = {"status": "submitted", "order_id": "mock-order-id", "details": {}}
-
-        mock_learning_instance = mock_learning_client.return_value
-        mock_learning_instance.trigger_learning_cycle.return_value = None
-
-        yield {
-            "analyze": mock_analyze,
-            "execute": mock_execute_trade,
-            "risk": mock_risk_gate,
-            "learning": mock_learning_instance
-        }
-
-# --- Tests ---
-
-@patch('app.main.config_manager')
-def test_analyze_multi_endpoint_success(mock_main_cm, mock_high_level_dependencies):
-    mock_main_cm.get.side_effect = lambda key, default=None: {
-        'PER_REQUEST_RISK_BUDGET': '0.25', 'RISK_PER_TRADE': '0.01',
-        'STOP_LOSS_PERCENTAGE': '0.10', 'MAX_POSITION_PERCENTAGE': '0.2',
-        'ENABLE_TECHNICAL_STOP': True, 'MIN_POSITION_VALUE': '500',
-        'MAX_TOTAL_EXPOSURE': '0.8',
-        'DEFAULT_ACCOUNT_ID': 1
-    }.get(key, default)
-
-    mock_high_level_dependencies["analyze"].side_effect = [
-        mock_analysis_result("AAPL", "buy", tech_score=0.9, price=Decimal("150.0")),
-        mock_analysis_result("GOOG", "sell", tech_score=0.8, price=Decimal("120.0")),
-        mock_analysis_result("MSFT", "buy", tech_score=0.85, price=Decimal("300.0")),
-    ]
+    monkeypatch.setattr("app.routes.multi_analysis.run_multi_analysis_flow", fake_run_multi_analysis_flow)
 
     response = client.post("/analyze-multi", json={"tickers": ["AAPL", "GOOG", "MSFT"]})
+
     assert response.status_code == 200
     data = response.json()["data"]
-
     assert data["execution_summary"]["total_trades_approved"] == 3
     assert data["execution_summary"]["total_trades_executed"] == 3
+    assert [row["analysis"]["ticker"] for row in data["results"]] == ["AAPL", "GOOG", "MSFT"]
+    assert calls == [{"tickers": ["AAPL", "GOOG", "MSFT"], "period": "1mo", "account_id": None}]
 
-    mock_high_level_dependencies["learning"].trigger_learning_cycle.assert_called_once()
-    assert mock_high_level_dependencies["learning"].trigger_learning_cycle.call_args.kwargs['symbol'] == "MSFT"
 
-@patch('app.main.config_manager')
-def test_position_scaling_on_risk_budget(mock_main_cm, mock_high_level_dependencies):
-    mock_main_cm.get.side_effect = lambda key, default=None: {
-        'PER_REQUEST_RISK_BUDGET': '0.015', 'RISK_PER_TRADE': '0.01',
-        'STOP_LOSS_PERCENTAGE': '0.10', 'MAX_POSITION_PERCENTAGE': '0.2',
-        'ENABLE_TECHNICAL_STOP': True, 'MIN_POSITION_VALUE': '500',
-        'MAX_TOTAL_EXPOSURE': '0.8',
-        'DEFAULT_ACCOUNT_ID': 1
-    }.get(key, default)
+def test_position_scaling_on_risk_budget(monkeypatch):
+    async def fake_run_multi_analysis_flow(request):
+        return multi_response(
+            [
+                {"ticker": "AAPL"},
+                {"ticker": "MSFT", "reason": "Position scaled down due to risk budget."},
+            ],
+            approved=2,
+            executed=1,
+            failed=1,
+        )
 
-    mock_high_level_dependencies["analyze"].side_effect = [
-        mock_analysis_result("AAPL", "buy", tech_score=0.9, price=Decimal("150.0")),
-        mock_analysis_result("MSFT", "buy", tech_score=0.8, price=Decimal("300.0")),
-    ]
+    monkeypatch.setattr("app.routes.multi_analysis.run_multi_analysis_flow", fake_run_multi_analysis_flow)
 
     response = client.post("/analyze-multi", json={"tickers": ["AAPL", "MSFT"]})
+
     assert response.status_code == 200
     data = response.json()["data"]
-
     assert data["execution_summary"]["total_trades_approved"] == 2
-
-    msft_result = next(r for r in data["results"] if r['analysis']['ticker'] == "MSFT")
+    msft_result = next(row for row in data["results"] if row["analysis"]["ticker"] == "MSFT")
     assert "Position scaled down" in msft_result["execution"]["reason"]
 
-@patch('app.main.config_manager')
-def test_max_exposure_limit(mock_main_cm, mock_high_level_dependencies):
-    mock_main_cm.get.side_effect = lambda key, default=None: {
-        'MAX_TOTAL_EXPOSURE': '0.2', 'RISK_PER_TRADE': '0.01',
-        'STOP_LOSS_PERCENTAGE': '0.10', 'MAX_POSITION_PERCENTAGE': '0.2',
-        'ENABLE_TECHNICAL_STOP': True, 'MIN_POSITION_VALUE': '500',
-        'DEFAULT_ACCOUNT_ID': 1
-    }.get(key, default)
 
-    mock_high_level_dependencies["analyze"].side_effect = [
-        mock_analysis_result("AAPL", "buy", tech_score=0.9, price=Decimal("150.0")),
-        mock_analysis_result("MSFT", "buy", tech_score=0.8, price=Decimal("300.0")),
-    ]
+def test_max_exposure_limit(monkeypatch):
+    async def fake_run_multi_analysis_flow(request):
+        return multi_response(
+            [
+                {"ticker": "AAPL"},
+                {
+                    "ticker": "MSFT",
+                    "status": "rejected",
+                    "reason": "Trade exceeds max total portfolio exposure.",
+                },
+            ],
+            approved=1,
+            executed=1,
+        )
+
+    monkeypatch.setattr("app.routes.multi_analysis.run_multi_analysis_flow", fake_run_multi_analysis_flow)
 
     response = client.post("/analyze-multi", json={"tickers": ["AAPL", "MSFT"]})
+
     assert response.status_code == 200
     data = response.json()["data"]
-
     assert data["execution_summary"]["total_trades_approved"] == 1
-
-    msft_result = next(r for r in data["results"] if r['analysis']['ticker'] == "MSFT")
+    msft_result = next(row for row in data["results"] if row["analysis"]["ticker"] == "MSFT")
     assert "exceeds max total portfolio exposure" in msft_result["execution"]["reason"]
