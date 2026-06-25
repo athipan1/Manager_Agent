@@ -10,6 +10,7 @@ from fastapi import FastAPI
 
 from .single_analysis import router as single_analysis_router
 from .system import router as system_router
+from .trade_replay import router as trade_replay_router
 
 
 def register_single_analysis_routes(app: FastAPI) -> None:
@@ -20,3 +21,8 @@ def register_single_analysis_routes(app: FastAPI) -> None:
 def register_system_routes(app: FastAPI) -> None:
     """Register system and operational routes on a FastAPI app."""
     app.include_router(system_router)
+
+
+def register_trade_replay_routes(app: FastAPI) -> None:
+    """Register trade replay routes on a FastAPI app."""
+    app.include_router(trade_replay_router)
