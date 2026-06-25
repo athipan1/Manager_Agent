@@ -38,7 +38,7 @@ done
 
 # Start all agents
 echo "Starting Manager Agent on port 8000..."
-uvicorn app.main:app --port 8000 > manager.log 2>&1 &
+uvicorn app.main_modular:app --port 8000 > manager.log 2>&1 &
 
 echo "Starting Database Agent on port 8001..."
 (cd Database_Agent && uvicorn main:app --port 8001 > ../database.log 2>&1) &
