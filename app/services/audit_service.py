@@ -1,0 +1,144 @@
+"""Audit and signal persistence helpers for Manager_Agent.
+
+This module centralizes Manager audit report creation and signal persistence.
+It does not submit orders or call broker/execution services.
+"""
+
+from __future__ import annotations
+
+import datetime
+from decimal import Decimal
+from typing import Any, Dict, Optional, Union
+
+from .. import config
+from ..database_client import DatabaseAgentClient
+from ..logger import report_logger
+from .serialization_service import jsonable
+
+
+def utc_now() -> datetime.datetime:
+    """Return the current UTC timestamp."""
+    return datetime.datetime.now(datetime.UTC)
+
+
+def dry_run_report(
+    *,
+    correlation_id: str,
+    flow: str,
+    symbol: Optional[str],
+    analysis_result: Optional[Dict[str, Any]],
+    trade_decision: Optional[Dict[str, Any]],
+    execution_result: Optional[Dict[str, Any]],
+    context_value: Decimal,
+    dry_run: bool,
+    generated_at: Optional[datetime.datetime] = None,
+) -> Dict[str, Any]:
+    """Build a JSON-friendly dry-run/audit report.
+
+    The shape mirrors the legacy `app.main._dry_run_report` payload so it can
+    be wired into existing endpoints without changing API responses.
+    """
+    timestamp = generated_at or utc_now()
+    return {
+        "report_id": correlation_id,
+        "flow": flow,
+        "symbol": symbol,
+        "dry_run": dry_run,
+        "trading_mode": config.TRADING_MODE,
+        "trading_enabled": config.TRADING_ENABLED,
+        "risk_context": {
+            "open_orders_exposure": jsonable(context_value),
+            "session": jsonable((trade_decision or {}).get("session_risk_context")),
+            "loaded": True,
+        },
+        "analysis": jsonable(analysis_result),
+        "trade_decision": jsonable(trade_decision),
+        "risk_approval_id": trade_decision.get("risk_approval_id") if trade_decision else None,
+        "execution": jsonable(execution_result),
+        "generated_at": timestamp.isoformat(),
+    }
+
+
+async def audit_trade_decision(
+    *,
+    db_client: Optional[DatabaseAgentClient],
+    account_id: Union[int, str],
+    correlation_id: str,
+    flow: str,
+    symbol: str,
+    analysis_result: Optional[Dict[str, Any]],
+    trade_decision: Optional[Dict[str, Any]],
+    execution_result: Optional[Dict[str, Any]],
+    context_value: Decimal,
+    dry_run: bool = False,
+) -> Dict[str, Any]:
+    """Build and optionally persist a trade decision audit report."""
+    audit = dry_run_report(
+        correlation_id=correlation_id,
+        flow=flow,
+        symbol=symbol,
+        analysis_result=analysis_result,
+        trade_decision=trade_decision,
+        execution_result=execution_result,
+        context_value=context_value,
+        dry_run=dry_run,
+    )
+    report_logger.info(f"trade_decision_audit={jsonable(audit)}")
+
+    if db_client is not None:
+        try:
+            await db_client.save_signal(
+                account_id=account_id,
+                symbol=symbol,
+                correlation_id=correlation_id,
+                final_verdict=(analysis_result or {}).get("final_verdict"),
+                metadata={
+                    "audit": jsonable(audit),
+                    "risk_approval_id": audit.get("risk_approval_id"),
+                    "dry_run": dry_run,
+                    "flow": flow,
+                },
+            )
+        except Exception as exc:
+            report_logger.warning(
+                f"Failed to persist trade decision audit for {symbol}: {exc}, "
+                f"correlation_id={correlation_id}"
+            )
+    return audit
+
+
+async def persist_signal(
+    db_client: DatabaseAgentClient,
+    account_id: Union[int, str],
+    analysis_result: Dict[str, Any],
+    correlation_id: str,
+    extra_metadata: Optional[Dict[str, Any]] = None,
+) -> None:
+    """Persist a manager analysis signal to Database_Agent.
+
+    Persistence failures are logged but not raised, preserving the legacy
+    Manager behavior.
+    """
+    try:
+        details = analysis_result.get("details")
+        tech_detail = details.technical if details else None
+        fund_detail = details.fundamental if details else None
+        await db_client.save_signal(
+            account_id=account_id,
+            symbol=analysis_result.get("ticker"),
+            correlation_id=correlation_id,
+            technical_score=tech_detail.score if tech_detail else None,
+            fundamental_score=fund_detail.score if fund_detail else None,
+            final_verdict=analysis_result.get("final_verdict"),
+            metadata={
+                "analysis_status": analysis_result.get("status"),
+                "technical_action": tech_detail.action if tech_detail else None,
+                "fundamental_action": fund_detail.action if fund_detail else None,
+                **(extra_metadata or {}),
+            },
+        )
+    except Exception as exc:
+        report_logger.warning(
+            f"Failed to persist signal for {analysis_result.get('ticker')}: {exc}, "
+            f"correlation_id={correlation_id}"
+        )
