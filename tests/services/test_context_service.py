@@ -39,8 +39,8 @@ async def test_fetch_context_value_returns_active_order_value(monkeypatch):
     set_trading_mode(monkeypatch, "PAPER")
     db_client = FakeDbClient(
         orders=[
-            {"status": "open", "quantity": 2, "price": 10},
-            {"status": "filled", "quantity": 3, "price": 100},
+            {"status": "placed", "quantity": 3, "executed_quantity": 1, "price": 10},
+            {"status": "filled", "quantity": 3, "executed_quantity": 3, "price": 100},
         ]
     )
 
