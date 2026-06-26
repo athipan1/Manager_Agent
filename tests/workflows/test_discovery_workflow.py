@@ -41,6 +41,9 @@ class FakeDbClient:
     async def get_positions(self, account_id, correlation_id):
         return []
 
+    async def get_orders(self, account_id, correlation_id):
+        return []
+
     async def save_signal(self, **kwargs):
         return None
 
