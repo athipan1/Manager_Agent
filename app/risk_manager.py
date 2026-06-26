@@ -80,15 +80,24 @@ def _default_requested_quantity(*, side: str, portfolio_value: Decimal, risk_per
 
 def _build_result(approved: bool, reason: str, symbol: str, action: str, entry_price: Decimal, position_size: int = 0, protection_price: Optional[Decimal] = None, risk_response: Optional[Dict[str, Any]] = None, session_risk_context: Optional[Dict[str, Any]] = None, stock_risk_context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     risk_amount = Decimal("0")
-    if protection_price is not None and position_size > 0:
-        risk_amount = abs(entry_price - protection_price) * Decimal(position_size)
+    quantity = int(position_size or 0)
+    if protection_price is not None and quantity > 0:
+        risk_amount = abs(entry_price - protection_price) * Decimal(quantity)
+    risk_data = (risk_response or {}).get("data", {}) if isinstance(risk_response, dict) else {}
+    approved_value = risk_data.get("approved_value") if isinstance(risk_data, dict) else None
+    requested_quantity = risk_data.get("requested_quantity") if isinstance(risk_data, dict) else None
     return {
         "approved": approved,
         "reason": reason,
         "symbol": symbol,
         "action": action,
         "entry_price": entry_price,
-        "position_size": int(position_size or 0),
+        "position_size": quantity,
+        "quantity": quantity,
+        "final_quantity": quantity,
+        "requested_quantity": requested_quantity,
+        "approved_value": approved_value,
+        "cap_clipped": bool(risk_data.get("cap_clipped")) if isinstance(risk_data, dict) else False,
         "stop_loss": protection_price,
         "risk_amount": risk_amount,
         "risk_agent_response": risk_response or {},

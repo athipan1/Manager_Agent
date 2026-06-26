@@ -20,9 +20,10 @@ class FakeCreateOrderResponse:
 
 
 class FakeExecutionClient:
-    def __init__(self, *, create_status="PENDING", validation_approved=True, batch_created=None):
+    def __init__(self, *, create_status="PENDING", validation_approved=True, batch_created=None, validation_sequence=None):
         self.create_status = create_status
         self.validation_approved = validation_approved
+        self.validation_sequence = list(validation_sequence or [])
         self.batch_created = batch_created if batch_created is not None else [{"order_id": "order-1"}]
         self.created_orders = []
         self.validated_batches = []
@@ -40,6 +41,8 @@ class FakeExecutionClient:
 
     async def validate_order_batch(self, order_requests, correlation_id):
         self.validated_batches.append((order_requests, correlation_id))
+        if self.validation_sequence:
+            return {"status": "success", "data": self.validation_sequence.pop(0)}
         return {"status": "success", "data": {"approved": self.validation_approved}}
 
     async def execute_order_batch(self, order_requests, correlation_id):
@@ -161,6 +164,63 @@ async def test_execute_portfolio_batch_validates_and_executes_orders(monkeypatch
 
 
 @pytest.mark.asyncio
+async def test_execute_portfolio_batch_retries_after_open_order_conflict(monkeypatch):
+    exec_client = FakeExecutionClient(
+        validation_sequence=[
+            {
+                "approved": False,
+                "errors": [
+                    {
+                        "code": "SYMBOL_ALREADY_HAS_OPEN_ORDER",
+                        "symbols": ["ADBE"],
+                        "message": "One or more symbols already have open orders.",
+                    }
+                ],
+            },
+            {"approved": True, "summary": {"symbols": ["ACGL"]}},
+        ],
+        batch_created=[{"symbol": "ACGL", "order_id": "order-acgl"}],
+    )
+
+    async def fake_persist_risk_approval(**kwargs):
+        return f"risk-{kwargs['trade_decision']['symbol']}"
+
+    monkeypatch.setattr(
+        "app.workflows.execution_workflow.persist_risk_approval",
+        fake_persist_risk_approval,
+    )
+
+    decisions = [
+        {"symbol": "ADBE", "action": "buy", "position_size": 5, "quantity": 5, "final_quantity": 5, "entry_price": 196},
+        {"symbol": "ACGL", "action": "buy", "position_size": 10, "quantity": 10, "final_quantity": 10, "entry_price": 90},
+    ]
+
+    result = await execute_portfolio_batch(
+        exec_client=exec_client,
+        decisions=decisions,
+        account_id=1,
+        correlation_id="cid",
+        db_client=FakeDbClient(),
+    )
+
+    assert result["status"] == "submitted"
+    assert len(exec_client.validated_batches) == 2
+    assert [order.symbol for order in exec_client.validated_batches[0][0]] == ["ADBE", "ACGL"]
+    assert [order.symbol for order in exec_client.validated_batches[1][0]] == ["ACGL"]
+    assert [order.symbol for order in exec_client.executed_batches[0][0]] == ["ACGL"]
+    assert result["skipped_open_order_conflicts"] == [
+        {
+            "symbol": "ADBE",
+            "reason": "symbol already has an open broker order",
+            "risk_approval_id": "risk-ADBE",
+            "quantity": 5,
+            "final_quantity": 5,
+        }
+    ]
+    assert result["validation"]["initial_validation"]["errors"][0]["code"] == "SYMBOL_ALREADY_HAS_OPEN_ORDER"
+
+
+@pytest.mark.asyncio
 async def test_execute_portfolio_batch_rejects_when_validation_rejects(monkeypatch):
     exec_client = FakeExecutionClient(validation_approved=False)
 
@@ -207,6 +267,12 @@ async def test_execute_portfolio_batch_skips_zero_position_size(monkeypatch):
 
     assert result["status"] == "not_attempted"
     assert result["failed"] == [
-        {"symbol": "AAPL", "reason": "approved decision has zero position_size"}
+        {
+            "symbol": "AAPL",
+            "reason": "approved decision has zero executable quantity",
+            "position_size": 0,
+            "final_quantity": None,
+            "quantity": None,
+        }
     ]
     assert exec_client.validated_batches == []
