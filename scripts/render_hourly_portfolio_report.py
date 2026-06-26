@@ -54,6 +54,97 @@ def approval_reason(row: Dict[str, Any]) -> str:
     return str(row.get("reason") or risk_response.get("reason") or "-")
 
 
+def _list(value: Any) -> List[Any]:
+    return value if isinstance(value, list) else []
+
+
+def _dict(value: Any) -> Dict[str, Any]:
+    return value if isinstance(value, dict) else {}
+
+
+def _row_value(row: Dict[str, Any], *keys: str, default: Any = "-") -> Any:
+    for key in keys:
+        value = row.get(key)
+        if value not in (None, ""):
+            return value
+    return default
+
+
+def _execution_job_status(row: Dict[str, Any]) -> Any:
+    job = _dict(row.get("execution_job"))
+    return job.get("status") or job.get("job_status") or "-"
+
+
+def render_execution_details(lines: List[str], execution: Dict[str, Any]) -> None:
+    if not execution:
+        return
+
+    created = _list(execution.get("created"))
+    failed = _list(execution.get("failed"))
+    failed_to_build = _list(execution.get("failed_to_build"))
+    skipped = _list(execution.get("skipped_open_order_conflicts"))
+    validation = _dict(execution.get("validation"))
+
+    if not any([created, failed, failed_to_build, skipped, validation]):
+        return
+
+    lines.append("## Execution Details")
+    lines.append(f"- Status: `{execution.get('status', '-')}`")
+    lines.append(f"- Created Orders: `{len(created)}`")
+    lines.append(f"- Failed Orders: `{len(failed)}`")
+    lines.append(f"- Failed To Build: `{len(failed_to_build)}`")
+    lines.append(f"- Skipped Open-Order Conflicts: `{len(skipped)}`")
+    if validation:
+        lines.append(f"- Validation Approved: `{validation.get('approved', '-')}`")
+    lines.append("")
+
+    if created:
+        lines.append("### Created Orders")
+        lines.append("| Symbol | Bucket | Quantity | Final Qty | Order ID | Broker Order ID | Risk Approval ID | Order Status | Job Status |")
+        lines.append("|---|---|---:|---:|---|---|---|---|---|")
+        for row in created:
+            row = _dict(row)
+            order = _dict(row.get("order"))
+            lines.append(
+                f"| {_row_value(row, 'symbol')} | {_row_value(row, 'strategy_bucket')} | "
+                f"{_row_value(row, 'quantity')} | {_row_value(row, 'final_quantity')} | "
+                f"{_row_value(row, 'order_id')} | {_row_value(row, 'broker_order_id', default=order.get('broker_order_id') or '-')} | "
+                f"{_row_value(row, 'risk_approval_id')} | {_row_value(row, 'status', default=order.get('status') or '-')} | {_execution_job_status(row)} |"
+            )
+        lines.append("")
+
+    if skipped:
+        lines.append("### Skipped Orders")
+        lines.append("| Symbol | Quantity | Final Qty | Risk Approval ID | Reason |")
+        lines.append("|---|---:|---:|---|---|")
+        for row in skipped:
+            row = _dict(row)
+            lines.append(
+                f"| {_row_value(row, 'symbol')} | {_row_value(row, 'quantity')} | {_row_value(row, 'final_quantity')} | "
+                f"{_row_value(row, 'risk_approval_id')} | {_row_value(row, 'reason')} |"
+            )
+        lines.append("")
+
+    if failed or failed_to_build:
+        lines.append("### Failed Orders")
+        lines.append("| Symbol | Quantity | Final Qty | Risk Approval ID | Reason |")
+        lines.append("|---|---:|---:|---|---|")
+        for row in failed + failed_to_build:
+            row = _dict(row)
+            lines.append(
+                f"| {_row_value(row, 'symbol')} | {_row_value(row, 'quantity')} | {_row_value(row, 'final_quantity')} | "
+                f"{_row_value(row, 'risk_approval_id')} | {_row_value(row, 'reason')} |"
+            )
+        lines.append("")
+
+    if validation:
+        lines.append("### Validation Details")
+        lines.append("```json")
+        lines.append(json.dumps(validation, ensure_ascii=False, indent=2, default=str))
+        lines.append("```")
+        lines.append("")
+
+
 def render_portfolio_section(lines: List[str], data: Dict[str, Any]) -> None:
     allocation_plan = data.get("allocation_plan") or {}
     bucket_selection = data.get("bucket_selection") or {}
@@ -131,6 +222,8 @@ def render_portfolio_section(lines: List[str], data: Dict[str, Any]) -> None:
                 f"{row.get('quantity') or row.get('final_quantity') or '-'} | {row.get('risk_approval_id') or '-'} | {row.get('status', '-')} |"
             )
     lines.append("")
+
+    render_execution_details(lines, execution)
 
 
 def render_ranked(lines: List[str], ranked: List[Dict[str, Any]]) -> None:
