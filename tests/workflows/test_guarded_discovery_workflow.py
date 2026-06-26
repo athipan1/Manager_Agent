@@ -1,3 +1,4 @@
+from datetime import datetime, timezone
 from types import SimpleNamespace
 
 import pytest
@@ -44,7 +45,7 @@ async def test_guarded_discovery_blocks_execution_when_database_sync_mismatches(
             status="success",
             agent_type="manager-agent",
             version="1.0.0",
-            timestamp="now",
+            timestamp=datetime.now(timezone.utc),
             metadata={},
             error=None,
             data={
@@ -84,7 +85,7 @@ async def test_guarded_discovery_allows_execution_when_database_sync_is_safe(mon
             status="success",
             agent_type="manager-agent",
             version="1.0.0",
-            timestamp="now",
+            timestamp=datetime.now(timezone.utc),
             metadata={},
             error=None,
             data={"portfolio_summary": {}},
