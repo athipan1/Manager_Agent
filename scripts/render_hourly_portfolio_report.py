@@ -75,6 +75,51 @@ def _execution_job_status(row: Dict[str, Any]) -> Any:
     return job.get("status") or job.get("job_status") or "-"
 
 
+def _sync_summary(database_sync: Dict[str, Any]) -> Dict[str, Any]:
+    mismatch = _dict(database_sync.get("mismatch"))
+    return _dict(mismatch.get("summary"))
+
+
+def render_sync_preflight(lines: List[str], data: Dict[str, Any]) -> None:
+    database_sync = _dict(data.get("database_sync"))
+    snapshot_capture = _dict(data.get("broker_snapshot_capture"))
+    snapshot_capture_status = data.get("broker_snapshot_capture_status")
+    execution = _dict(data.get("execution"))
+    summary = _sync_summary(database_sync)
+
+    has_sync_data = bool(database_sync or snapshot_capture or snapshot_capture_status)
+    blocked_by_sync = "Database/Broker sync status" in str(execution.get("reason") or "")
+    if not has_sync_data and not blocked_by_sync:
+        return
+
+    lines.append("## Database Sync Preflight")
+    lines.append(f"- Broker Snapshot Capture Status: `{snapshot_capture_status or '-'}`")
+    if summary:
+        lines.append(f"- Database Sync Status: `{summary.get('status', '-')}`")
+        lines.append(f"- Severity: `{summary.get('severity', '-')}`")
+        lines.append(f"- Recommended Action: `{summary.get('recommended_action', '-')}`")
+    else:
+        lines.append("- Database Sync Status: `-`")
+    if execution.get("status") == "blocked":
+        lines.append(f"- Safety Gate: `blocked`")
+        lines.append(f"- Block Reason: {execution.get('reason', '-')}")
+    lines.append("")
+
+    if snapshot_capture:
+        lines.append("### Broker Snapshot Capture")
+        lines.append("```json")
+        lines.append(json.dumps(snapshot_capture, ensure_ascii=False, indent=2, default=str))
+        lines.append("```")
+        lines.append("")
+
+    if database_sync:
+        lines.append("### Database Sync Diagnostics")
+        lines.append("```json")
+        lines.append(json.dumps(database_sync, ensure_ascii=False, indent=2, default=str))
+        lines.append("```")
+        lines.append("")
+
+
 def render_execution_details(lines: List[str], execution: Dict[str, Any]) -> None:
     if not execution:
         return
@@ -153,6 +198,8 @@ def render_portfolio_section(lines: List[str], data: Dict[str, Any]) -> None:
     execution_candidates = data.get("execution_candidates") or []
     execution = data.get("execution") or {}
     portfolio_summary = data.get("portfolio_summary") or {}
+
+    render_sync_preflight(lines, data)
 
     lines.append("## Portfolio Summary")
     lines.append(f"- Mode: `{data.get('mode', 'portfolio_allocation')}`")
