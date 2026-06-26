@@ -40,6 +40,10 @@ from .risk_workflow import approved_trades, evaluate_portfolio_risk
 from .single_analysis_workflow import manager_metadata, utc_now
 
 
+OPEN_ORDER_STATUSES = {"new", "pending", "placed", "partially_filled", "accepted", "pending_new"}
+PROTECTIVE_ORDER_TYPES = {"stop", "stop_loss", "trailing_stop", "stop_limit"}
+
+
 def scanner_payload(scan_response: Any) -> Dict[str, Any]:
     """Normalize Scanner_Agent response data into a dictionary payload."""
     scan_data = getattr(scan_response, "data", None)
@@ -87,6 +91,112 @@ def rank_discovery_candidates(
         )
     ranked.sort(key=lambda item: item["score_breakdown"]["final_opportunity_score"], reverse=True)
     return ranked
+
+
+def _value_from_record(record: Any, *names: str) -> Any:
+    """Read a field from either a dict-like row or an object/model."""
+    if isinstance(record, dict):
+        for name in names:
+            if name in record:
+                return record.get(name)
+        return None
+    for name in names:
+        if hasattr(record, name):
+            return getattr(record, name)
+    if hasattr(record, "model_dump"):
+        data = record.model_dump(mode="json")
+        for name in names:
+            if name in data:
+                return data.get(name)
+    return None
+
+
+def _symbol_from_record(record: Any) -> str:
+    return str(_value_from_record(record, "symbol", "ticker") or "").upper()
+
+
+def _decimal_from_record(record: Any, *names: str) -> Decimal:
+    value = _value_from_record(record, *names)
+    try:
+        if value is None or value == "":
+            return Decimal("0")
+        return Decimal(str(value))
+    except Exception:
+        return Decimal("0")
+
+
+def _open_protective_order_symbols(orders: List[Any]) -> set[str]:
+    """Return symbols with open protective sell orders.
+
+    A symbol is considered protected only when there is a live/open sell-side
+    stop-like order. This deliberately avoids skipping positions that do not yet
+    have an observable protective exit.
+    """
+    protected_symbols: set[str] = set()
+    for order in orders or []:
+        symbol = _symbol_from_record(order)
+        if not symbol:
+            continue
+        side = str(_value_from_record(order, "side") or "").lower()
+        status = str(_value_from_record(order, "status", "broker_status") or "").lower()
+        order_type = str(_value_from_record(order, "order_type", "type") or "").lower()
+        stop_price = _value_from_record(order, "stop_price", "price")
+        is_open = status in OPEN_ORDER_STATUSES
+        is_protective = side == "sell" and (order_type in PROTECTIVE_ORDER_TYPES or stop_price is not None)
+        if is_open and is_protective:
+            protected_symbols.add(symbol)
+    return protected_symbols
+
+
+def protected_position_symbols(positions: List[Any], orders: List[Any]) -> set[str]:
+    """Return symbols that already have both position exposure and protection."""
+    held_symbols = {
+        _symbol_from_record(position)
+        for position in positions or []
+        if _symbol_from_record(position) and _decimal_from_record(position, "quantity", "qty") > Decimal("0")
+    }
+    return held_symbols.intersection(_open_protective_order_symbols(orders))
+
+
+def skip_protected_portfolio_payloads(
+    *,
+    selected_positions: List[Dict[str, Any]],
+    position_analysis_payloads: List[Dict[str, Any]],
+    positions: List[Any],
+    orders: List[Any],
+) -> tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+    """Remove already protected positions before Risk/Execution.
+
+    Returns `(risk_payloads, skipped)` where skipped entries are safe no-ops
+    because the broker/database context already shows a held position plus an
+    open protective sell order for the same symbol.
+    """
+    protected_symbols = protected_position_symbols(positions, orders)
+    selected_by_symbol = {
+        str(position.get("symbol") or "").upper(): position
+        for position in selected_positions or []
+        if isinstance(position, dict)
+    }
+    risk_payloads: List[Dict[str, Any]] = []
+    skipped: List[Dict[str, Any]] = []
+
+    for payload in position_analysis_payloads or []:
+        symbol = str(payload.get("ticker") or payload.get("symbol") or "").upper()
+        if symbol and symbol in protected_symbols:
+            selected_position = selected_by_symbol.get(symbol, {})
+            skipped.append(
+                {
+                    "symbol": symbol,
+                    "reason": "position already has an open protective broker order",
+                    "strategy_bucket": selected_position.get("strategy_bucket") or payload.get("strategy_bucket"),
+                    "target_weight": selected_position.get("target_weight"),
+                    "target_value": selected_position.get("target_value"),
+                }
+            )
+        else:
+            risk_payloads.append(payload)
+
+    return risk_payloads, skipped
 
 
 def no_scanner_candidates_response(
@@ -188,6 +298,7 @@ async def run_discover_analyze_trade_flow(request: DiscoverAnalyzeTradeRequest) 
         async with DatabaseAgentClient() as db_client:
             balance = await db_client.get_account_balance(account_id, correlation_id)
             positions = await db_client.get_positions(account_id, correlation_id)
+            orders = await db_client.get_orders(account_id, correlation_id)
             context_value = await fetch_context_value(db_client, account_id, correlation_id)
             portfolio_value = Decimal(balance.cash_balance if balance else 0) + total_position_exposure(positions)
             allocation_report = build_discover_allocation_report(
@@ -197,11 +308,21 @@ async def run_discover_analyze_trade_flow(request: DiscoverAnalyzeTradeRequest) 
             )
             selected_positions = allocation_report.get("selected_positions") or []
             position_analysis_payloads = allocation_report.get("position_analysis_payloads") or []
+            risk_position_analysis_payloads, skipped_existing_protected_positions = skip_protected_portfolio_payloads(
+                selected_positions=selected_positions,
+                position_analysis_payloads=position_analysis_payloads,
+                positions=positions,
+                orders=orders,
+            )
             selected_symbols = [str(position.get("symbol") or "").upper() for position in selected_positions]
+            risk_symbols = [
+                str(payload.get("ticker") or payload.get("symbol") or "").upper()
+                for payload in risk_position_analysis_payloads
+            ]
             session_context = await fetch_session_risk_contexts(
                 db_client,
                 account_id,
-                selected_symbols,
+                risk_symbols,
                 correlation_id,
             )
 
@@ -216,6 +337,7 @@ async def run_discover_analyze_trade_flow(request: DiscoverAnalyzeTradeRequest) 
                         "scanner_candidate": item["scanner_candidate"],
                         "score_breakdown": item["score_breakdown"],
                         "selected_for_portfolio": item["symbol"] in selected_symbols,
+                        "skipped_existing_protected_position": item["symbol"] in {row["symbol"] for row in skipped_existing_protected_positions},
                     },
                 )
 
@@ -223,45 +345,60 @@ async def run_discover_analyze_trade_flow(request: DiscoverAnalyzeTradeRequest) 
             execution_result: Dict[str, Any] = initial_discovery_execution_result(execute=request.execute)
 
             if request.execute and position_analysis_payloads:
-                risk_approvals = evaluate_portfolio_risk(
-                    analysis_results=position_analysis_payloads,
-                    cash_balance=Decimal(balance.cash_balance if balance else 0),
-                    existing_positions=positions,
-                    context_value=context_value,
-                    session_context=session_context,
-                    correlation_id=correlation_id,
-                )
-                for decision in risk_approvals:
-                    ensure_risk_approval_id(decision, correlation_id)
+                if risk_position_analysis_payloads:
+                    risk_approvals = evaluate_portfolio_risk(
+                        analysis_results=risk_position_analysis_payloads,
+                        cash_balance=Decimal(balance.cash_balance if balance else 0),
+                        existing_positions=positions,
+                        context_value=context_value,
+                        session_context=session_context,
+                        correlation_id=correlation_id,
+                    )
+                    for decision in risk_approvals:
+                        ensure_risk_approval_id(decision, correlation_id)
 
-                approved_decisions = approved_trades(risk_approvals)
-                if approved_decisions and config.MANUAL_APPROVAL_REQUIRED:
-                    execution_result = {
-                        "status": "manual_approval_required",
-                        "reason": "Manual approval is required before live stock execution.",
-                        "approved_positions": len(approved_decisions),
-                        "risk_approval_ids": [decision.get("risk_approval_id") for decision in approved_decisions],
-                    }
-                elif approved_decisions:
-                    async with ExecutionAgentClient() as exec_client:
-                        execution_result = await execute_portfolio_batch(
-                            exec_client=exec_client,
-                            decisions=approved_decisions,
-                            account_id=account_id,
-                            correlation_id=correlation_id,
-                            db_client=db_client,
-                        )
+                    approved_decisions = approved_trades(risk_approvals)
+                    if approved_decisions and config.MANUAL_APPROVAL_REQUIRED:
+                        execution_result = {
+                            "status": "manual_approval_required",
+                            "reason": "Manual approval is required before live stock execution.",
+                            "approved_positions": len(approved_decisions),
+                            "risk_approval_ids": [decision.get("risk_approval_id") for decision in approved_decisions],
+                        }
+                    elif approved_decisions:
+                        async with ExecutionAgentClient() as exec_client:
+                            execution_result = await execute_portfolio_batch(
+                                exec_client=exec_client,
+                                decisions=approved_decisions,
+                                account_id=account_id,
+                                correlation_id=correlation_id,
+                                db_client=db_client,
+                            )
+                    else:
+                        execution_result = {
+                            "status": "rejected",
+                            "reason": "Risk rejected every selected portfolio position.",
+                        }
                 else:
                     execution_result = {
-                        "status": "rejected",
-                        "reason": "Risk rejected every selected portfolio position.",
+                        "status": "not_attempted",
+                        "reason": "All selected portfolio positions already have protected open broker orders.",
+                        "skipped_existing_protected_positions": skipped_existing_protected_positions,
                     }
 
                 for payload in position_analysis_payloads:
                     symbol = payload.get("ticker")
                     decision = next(
                         (row for row in risk_approvals if row.get("symbol") == symbol),
-                        {"approved": False, "symbol": symbol, "reason": "No risk decision generated."},
+                        {
+                            "approved": False,
+                            "symbol": symbol,
+                            "reason": (
+                                "Already protected with an open broker order."
+                                if str(symbol or "").upper() in {row["symbol"] for row in skipped_existing_protected_positions}
+                                else "No risk decision generated."
+                            ),
+                        },
                     )
                     await audit_trade_decision(
                         db_client=db_client,
@@ -298,6 +435,7 @@ async def run_discover_analyze_trade_flow(request: DiscoverAnalyzeTradeRequest) 
             "allocation_plan": allocation_report.get("allocation_plan"),
             "bucket_selection": allocation_report.get("bucket_selection"),
             "selected_positions": selected_positions,
+            "skipped_existing_protected_positions": skipped_existing_protected_positions,
             "risk_approvals": risk_approvals,
             "execution_candidates": approved_positions,
             "execution": execution_result,
@@ -306,6 +444,7 @@ async def run_discover_analyze_trade_flow(request: DiscoverAnalyzeTradeRequest) 
                 "selected_positions": len(selected_positions),
                 "approved_positions": len(approved_positions),
                 "rejected_positions": len(risk_approvals) - len(approved_positions),
+                "skipped_existing_protected_positions": len(skipped_existing_protected_positions),
                 "execution_status": execution_result.get("status"),
             },
             "ranked_candidates": allocation_report.get("ranked_candidates"),
