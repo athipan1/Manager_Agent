@@ -43,12 +43,31 @@ def ensure_risk_approval_id(
     return str(approval_id)
 
 
+def _validation_errors(validation_data: Dict[str, Any]) -> List[Dict[str, Any]]:
+    errors = validation_data.get("errors") or []
+    return errors if isinstance(errors, list) else []
+
+
+def _open_order_conflict_symbols(validation_data: Dict[str, Any]) -> set[str]:
+    symbols: set[str] = set()
+    for error in _validation_errors(validation_data):
+        if not isinstance(error, dict):
+            continue
+        if error.get("code") == "SYMBOL_ALREADY_HAS_OPEN_ORDER":
+            symbols.update(str(symbol).upper() for symbol in (error.get("symbols") or []) if symbol)
+    return symbols
+
+
+def _order_symbol(order_request: Any) -> str:
+    return str(getattr(order_request, "symbol", "") or "").upper()
+
+
 async def execute_trade(
     exec_client: ExecutionAgentClient,
     trade_decision: Dict[str, Any],
     account_id: Union[int, str],
     correlation_id: str,
-    db_client: Optional[DatabaseAgentClient] = None,
+    db_client: Optional[DatabaseAgentClient] = None
 ) -> Dict[str, Any]:
     """Persist risk approval and submit a single order to Execution_Agent."""
     ticker = trade_decision["symbol"]
@@ -116,11 +135,14 @@ async def execute_portfolio_batch(
                 account_id=account_id,
                 correlation_id=correlation_id,
             )
-            if int(decision.get("position_size") or 0) <= 0:
+            if int(decision.get("position_size") or decision.get("final_quantity") or decision.get("quantity") or 0) <= 0:
                 failed_to_build.append(
                     {
                         "symbol": decision.get("symbol"),
-                        "reason": "approved decision has zero position_size",
+                        "reason": "approved decision has zero executable quantity",
+                        "position_size": decision.get("position_size"),
+                        "final_quantity": decision.get("final_quantity"),
+                        "quantity": decision.get("quantity"),
                     }
                 )
                 continue
@@ -138,14 +160,64 @@ async def execute_portfolio_batch(
 
     validation = await exec_client.validate_order_batch(order_requests, correlation_id)
     validation_data = response_to_dict(validation).get("data") or {}
+    skipped_open_order_conflicts: List[Dict[str, Any]] = []
+
     if not validation_data.get("approved", False):
-        return {
-            "status": "rejected",
-            "reason": "Execution batch validation rejected portfolio orders.",
-            "validation": validation_data,
-            "created": [],
-            "failed": failed_to_build,
-        }
+        conflict_symbols = _open_order_conflict_symbols(validation_data)
+        if conflict_symbols:
+            retry_order_requests = []
+            for order_request in order_requests:
+                symbol = _order_symbol(order_request)
+                if symbol in conflict_symbols:
+                    skipped_open_order_conflicts.append(
+                        {
+                            "symbol": symbol,
+                            "reason": "symbol already has an open broker order",
+                            "risk_approval_id": getattr(order_request, "risk_approval_id", None),
+                            "quantity": getattr(order_request, "quantity", None),
+                            "final_quantity": getattr(order_request, "final_quantity", None),
+                        }
+                    )
+                else:
+                    retry_order_requests.append(order_request)
+            order_requests = retry_order_requests
+            if order_requests:
+                retry_validation = await exec_client.validate_order_batch(order_requests, correlation_id)
+                retry_validation_data = response_to_dict(retry_validation).get("data") or {}
+                if retry_validation_data.get("approved", False):
+                    validation_data = {
+                        **retry_validation_data,
+                        "initial_validation": validation_data,
+                        "skipped_open_order_conflicts": skipped_open_order_conflicts,
+                    }
+                else:
+                    return {
+                        "status": "rejected",
+                        "reason": "Execution batch validation rejected portfolio orders after skipping open-order conflicts.",
+                        "validation": {
+                            **retry_validation_data,
+                            "initial_validation": validation_data,
+                            "skipped_open_order_conflicts": skipped_open_order_conflicts,
+                        },
+                        "created": [],
+                        "failed": failed_to_build + skipped_open_order_conflicts,
+                    }
+            else:
+                return {
+                    "status": "not_attempted",
+                    "reason": "All approved portfolio orders already have open broker orders.",
+                    "validation": validation_data,
+                    "created": [],
+                    "failed": failed_to_build + skipped_open_order_conflicts,
+                }
+        else:
+            return {
+                "status": "rejected",
+                "reason": "Execution batch validation rejected portfolio orders.",
+                "validation": validation_data,
+                "created": [],
+                "failed": failed_to_build,
+            }
 
     response = await exec_client.execute_order_batch(order_requests, correlation_id)
     response_dict = response_to_dict(response)
@@ -156,4 +228,5 @@ async def execute_portfolio_batch(
         "validation": validation_data,
         **data,
         "failed_to_build": failed_to_build,
+        "skipped_open_order_conflicts": skipped_open_order_conflicts,
     }
