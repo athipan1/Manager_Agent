@@ -4,11 +4,15 @@ from types import SimpleNamespace
 import pytest
 
 from app.models import DiscoverAnalyzeTradeRequest
-from app.workflows.guarded_discovery_workflow import run_guarded_discover_analyze_trade_flow
+from app.workflows.guarded_discovery_workflow import (
+    capture_broker_snapshot,
+    run_guarded_discover_analyze_trade_flow,
+)
 
 
 class FakeDBClient:
     sync_payload = {}
+    captured_snapshots = []
 
     async def __aenter__(self):
         return self
@@ -18,6 +22,23 @@ class FakeDBClient:
 
     async def get_broker_sync_status(self, account_id, correlation_id):
         return self.sync_payload
+
+    async def capture_broker_snapshot(self, broker_state, correlation_id):
+        self.captured_snapshots.append(broker_state)
+        return {"positions_synced": len(broker_state.get("positions") or []), "open_orders_synced": len(broker_state.get("open_orders") or [])}
+
+
+class FakeExecutionClient:
+    broker_payload = {}
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb):
+        return False
+
+    async def broker_state(self, account_id, correlation_id):
+        return SimpleNamespace(data=self.broker_payload)
 
 
 def sync_payload(status):
@@ -32,6 +53,36 @@ def sync_payload(status):
             "diagnostics": {"positions": {"missing_in_database": ["AAPL"]}},
         }
     }
+
+
+def broker_payload():
+    return {
+        "broker": "ALPACA",
+        "paper": True,
+        "account": {"broker": "ALPACA", "paper": True, "cash": "93276.77", "equity": "103313.29"},
+        "positions": [{"symbol": "ADBE", "qty": "52"}],
+        "open_orders": [{"id": "stop-adbe", "symbol": "ADBE", "qty": "52", "status": "new"}],
+    }
+
+
+async def fake_capture_broker_snapshot(account_id, correlation_id):
+    return {"status": "captured"}
+
+
+@pytest.mark.asyncio
+async def test_capture_broker_snapshot_posts_execution_state_to_database(monkeypatch):
+    FakeDBClient.captured_snapshots = []
+    FakeExecutionClient.broker_payload = broker_payload()
+    monkeypatch.setattr("app.workflows.guarded_discovery_workflow.DatabaseAgentClient", FakeDBClient)
+    monkeypatch.setattr("app.workflows.guarded_discovery_workflow.ExecutionAgentClient", FakeExecutionClient)
+
+    result = await capture_broker_snapshot(1, "corr-1")
+
+    assert result["status"] == "captured"
+    assert result["result"] == {"positions_synced": 1, "open_orders_synced": 1}
+    assert FakeDBClient.captured_snapshots[0]["source"] == "manager_preflight"
+    assert FakeDBClient.captured_snapshots[0]["account_id"] == 1
+    assert FakeDBClient.captured_snapshots[0]["positions"][0]["symbol"] == "ADBE"
 
 
 @pytest.mark.asyncio
@@ -59,6 +110,7 @@ async def test_guarded_discovery_blocks_execution_when_database_sync_mismatches(
             },
         )
 
+    monkeypatch.setattr("app.workflows.guarded_discovery_workflow.capture_broker_snapshot", fake_capture_broker_snapshot)
     monkeypatch.setattr("app.workflows.guarded_discovery_workflow.DatabaseAgentClient", FakeDBClient)
     monkeypatch.setattr("app.workflows.guarded_discovery_workflow.run_unguarded_discover_analyze_trade_flow", fake_unguarded_flow)
 
@@ -68,9 +120,11 @@ async def test_guarded_discovery_blocks_execution_when_database_sync_mismatches(
     assert response.data["execution"]["status"] == "blocked"
     assert response.data["execution_candidates"] == []
     assert response.data["risk_approvals"] == []
+    assert response.data["broker_snapshot_capture"] == {"status": "captured"}
     assert response.data["portfolio_summary"]["approved_positions"] == 0
     assert response.data["portfolio_summary"]["execution_status"] == "blocked"
     assert response.data["portfolio_summary"]["database_sync_status"] == "mismatch"
+    assert response.data["portfolio_summary"]["broker_snapshot_capture_status"] == "captured"
     assert response.data["legacy"]["trade_decision"] is None
 
 
@@ -91,6 +145,7 @@ async def test_guarded_discovery_allows_execution_when_database_sync_is_safe(mon
             data={"portfolio_summary": {}},
         )
 
+    monkeypatch.setattr("app.workflows.guarded_discovery_workflow.capture_broker_snapshot", fake_capture_broker_snapshot)
     monkeypatch.setattr("app.workflows.guarded_discovery_workflow.DatabaseAgentClient", FakeDBClient)
     monkeypatch.setattr("app.workflows.guarded_discovery_workflow.run_unguarded_discover_analyze_trade_flow", fake_unguarded_flow)
 
@@ -98,4 +153,6 @@ async def test_guarded_discovery_allows_execution_when_database_sync_is_safe(mon
 
     assert seen["execute"] is True
     assert response.data["database_sync"] == sync_payload("synced")
+    assert response.data["broker_snapshot_capture"] == {"status": "captured"}
     assert response.data["portfolio_summary"]["database_sync_status"] == "synced"
+    assert response.data["portfolio_summary"]["broker_snapshot_capture_status"] == "captured"

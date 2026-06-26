@@ -188,6 +188,11 @@ class DatabaseAgentClient(ResilientAgentClient):
         standard_resp = self.validate_standard_response(response_data)
         return _coerce_dict(standard_resp.data)
 
+    async def capture_broker_snapshot(self, broker_state: Dict[str, Any], correlation_id: str) -> Dict[str, Any]:
+        response_data = await self._post(DatabaseEndpoints.BROKER_SYNC_SNAPSHOT, correlation_id, json_data=broker_state)
+        standard_resp = self.validate_standard_response(response_data)
+        return _coerce_dict(standard_resp.data)
+
     async def create_risk_approval(self, approval_payload: Dict[str, Any], correlation_id: str) -> Dict[str, Any]:
         response_data = await self._post(DatabaseEndpoints.RISK_APPROVALS, correlation_id, json_data=approval_payload)
         standard_resp = self.validate_standard_response(response_data)
