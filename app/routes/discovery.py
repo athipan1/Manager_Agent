@@ -6,7 +6,7 @@ from fastapi import APIRouter
 
 from ..contracts import StandardAgentResponse
 from ..models import DiscoverAnalyzeTradeRequest
-from ..workflows.discovery_workflow import run_discover_analyze_trade_flow
+from ..workflows.guarded_discovery_workflow import run_guarded_discover_analyze_trade_flow as run_discover_analyze_trade_flow
 
 router = APIRouter()
 
