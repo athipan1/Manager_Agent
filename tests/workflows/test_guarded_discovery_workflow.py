@@ -65,6 +65,10 @@ def broker_payload():
     }
 
 
+async def fake_capture_broker_snapshot(account_id, correlation_id):
+    return {"status": "captured"}
+
+
 @pytest.mark.asyncio
 async def test_capture_broker_snapshot_posts_execution_state_to_database(monkeypatch):
     FakeDBClient.captured_snapshots = []
@@ -106,7 +110,7 @@ async def test_guarded_discovery_blocks_execution_when_database_sync_mismatches(
             },
         )
 
-    monkeypatch.setattr("app.workflows.guarded_discovery_workflow.capture_broker_snapshot", lambda account_id, correlation_id: {"status": "captured"})
+    monkeypatch.setattr("app.workflows.guarded_discovery_workflow.capture_broker_snapshot", fake_capture_broker_snapshot)
     monkeypatch.setattr("app.workflows.guarded_discovery_workflow.DatabaseAgentClient", FakeDBClient)
     monkeypatch.setattr("app.workflows.guarded_discovery_workflow.run_unguarded_discover_analyze_trade_flow", fake_unguarded_flow)
 
@@ -141,7 +145,7 @@ async def test_guarded_discovery_allows_execution_when_database_sync_is_safe(mon
             data={"portfolio_summary": {}},
         )
 
-    monkeypatch.setattr("app.workflows.guarded_discovery_workflow.capture_broker_snapshot", lambda account_id, correlation_id: {"status": "captured"})
+    monkeypatch.setattr("app.workflows.guarded_discovery_workflow.capture_broker_snapshot", fake_capture_broker_snapshot)
     monkeypatch.setattr("app.workflows.guarded_discovery_workflow.DatabaseAgentClient", FakeDBClient)
     monkeypatch.setattr("app.workflows.guarded_discovery_workflow.run_unguarded_discover_analyze_trade_flow", fake_unguarded_flow)
 
