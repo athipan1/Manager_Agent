@@ -88,3 +88,74 @@ def test_render_hourly_portfolio_report_handles_portfolio_response(tmp_path, mon
     assert "### Validation Details" in output
     assert "SYMBOL_ALREADY_HAS_OPEN_ORDER" in output
     assert "Winner" not in output
+
+
+def test_render_hourly_portfolio_report_shows_database_sync_preflight_block(tmp_path, monkeypatch):
+    reports_dir = tmp_path / "reports"
+    reports_dir.mkdir()
+    report = {
+        "generated_at": "2026-06-26T14:46:24Z",
+        "mode": "ALPACA_PAPER",
+        "broker_mode": "ALPACA",
+        "flow": "discover_analyze_trade",
+        "request": {"account_id": 1, "execute": True},
+        "response": {
+            "status": "success",
+            "data": {
+                "mode": "portfolio_allocation",
+                "portfolio_summary": {"selected_positions": 2, "approved_positions": 0},
+                "selected_positions": [
+                    {"symbol": "ADBE", "strategy_bucket": "core_dividend", "target_weight": 0.5},
+                    {"symbol": "ACGL", "strategy_bucket": "value_rebound", "target_weight": 0.3},
+                ],
+                "risk_approvals": [],
+                "execution_candidates": [],
+                "execution": {
+                    "status": "blocked",
+                    "reason": "Database/Broker sync status is no_snapshot; recommended_action=capture_broker_snapshot.",
+                    "database_sync_summary": {"status": "no_snapshot", "severity": "warning", "recommended_action": "capture_broker_snapshot"},
+                },
+                "broker_snapshot_capture_status": "failed",
+                "broker_snapshot_capture": {
+                    "status": "failed",
+                    "error": "Database_Agent /broker-sync/snapshot unavailable",
+                },
+                "database_sync": {
+                    "mismatch": {
+                        "summary": {
+                            "status": "no_snapshot",
+                            "severity": "warning",
+                            "recommended_action": "capture_broker_snapshot",
+                        },
+                        "diagnostics": {
+                            "account": {"database_cash": 1000000.0, "broker_cash": 93276.77},
+                        },
+                    }
+                },
+                "ranked_candidates": [],
+            },
+        },
+        "broker_snapshot": {
+            "account": {"data": {"status": "ACTIVE", "cash": "93276.77", "equity": "103698.87", "buying_power": "402288.96"}},
+            "orders": {"data": [{"symbol": "ADBE", "status": "new"}]},
+            "positions": {"data": [{"symbol": "ADBE", "qty": "52"}]},
+        },
+        "dashboard_data": {"data": {"summary": {}, "balance": {"cash": "1000000.0"}}},
+    }
+    (reports_dir / "hourly-auto-trading-report.json").write_text(json.dumps(report), encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+
+    assert main() == 0
+
+    output = (reports_dir / "hourly-auto-trading-report.md").read_text(encoding="utf-8")
+    assert "## Database Sync Preflight" in output
+    assert "Broker Snapshot Capture Status: `failed`" in output
+    assert "Database Sync Status: `no_snapshot`" in output
+    assert "Recommended Action: `capture_broker_snapshot`" in output
+    assert "Safety Gate: `blocked`" in output
+    assert "Database_Agent /broker-sync/snapshot unavailable" in output
+    assert "### Database Sync Diagnostics" in output
+    assert "database_cash" in output
+    assert "broker_cash" in output
+    assert "## Portfolio Summary" in output
+    assert "No risk approvals returned." in output
