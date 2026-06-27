@@ -5,6 +5,7 @@ import datetime
 from typing import Any, Dict, Optional, Union
 
 from . import config
+from .services.order_builder import strategy_bucket_from_decision
 
 
 class RiskApprovalContractError(RuntimeError):
@@ -48,6 +49,7 @@ async def persist_risk_approval(
         raise RiskApprovalContractError(f"Unsupported approved action for risk approval: {action}")
 
     approval_id = choose_risk_approval_id(trade_decision, correlation_id)
+    strategy_bucket = strategy_bucket_from_decision(trade_decision)
     payload = {
         "approval_id": approval_id,
         "account_id": account_id,
@@ -58,11 +60,15 @@ async def persist_risk_approval(
         "metadata": {
             "source": "manager_agent",
             "correlation_id": correlation_id,
+            "strategy_bucket": strategy_bucket,
             "risk_agent_response": trade_decision.get("risk_agent_response") or {},
             "guard_plan": trade_decision.get("guard_plan"),
             "session_risk_context": trade_decision.get("session_risk_context") or {},
+            "stock_risk_context": trade_decision.get("stock_risk_context") or {},
+            "portfolio_context": trade_decision.get("portfolio_context") or {},
         },
     }
     await db_client.create_risk_approval(payload, correlation_id)
     trade_decision["risk_approval_id"] = approval_id
+    trade_decision["strategy_bucket"] = strategy_bucket
     return approval_id
