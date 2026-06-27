@@ -7,11 +7,11 @@ call Risk_Agent, Database_Agent, or Execution_Agent.
 
 from __future__ import annotations
 
-from decimal import Decimal
 from typing import Any, Dict, Optional, Union
 
 from .. import config
 from ..contracts import OrderSide, OrderType, TradePlan, TradePlanExit, TradePlanRisk
+from ..logger import report_logger
 from .analysis_service import extract_current_price_and_stop
 from .order_builder import side_from_action, strategy_bucket_from_decision
 from .serialization_service import jsonable, normalize_score
@@ -194,17 +194,30 @@ def attach_trade_plan_to_decision(
     dry_run: bool = False,
     source: str = "single_analysis",
 ) -> Optional[TradePlan]:
-    """Build and attach a JSON-friendly TradePlan snapshot to a decision."""
+    """Build and attach a JSON-friendly TradePlan snapshot to a decision.
+
+    Attachment is deliberately non-blocking: an unexpected TradePlan validation
+    issue should be visible in audit metadata, but it should not break the legacy
+    Manager path during the staged migration.
+    """
     if trade_decision is None:
         return None
-    plan = build_trade_plan(
-        analysis_result=analysis_result,
-        trade_decision=trade_decision,
-        account_id=account_id,
-        correlation_id=correlation_id,
-        dry_run=dry_run,
-        source=source,
-    )
+    try:
+        plan = build_trade_plan(
+            analysis_result=analysis_result,
+            trade_decision=trade_decision,
+            account_id=account_id,
+            correlation_id=correlation_id,
+            dry_run=dry_run,
+            source=source,
+        )
+    except Exception as exc:
+        trade_decision["trade_plan_error"] = str(exc)
+        report_logger.warning(
+            f"Failed to attach trade plan for {analysis_result.get('ticker')}: {exc}, "
+            f"correlation_id={correlation_id}"
+        )
+        return None
     trade_decision["trade_plan"] = plan.model_dump(mode="json")
     trade_decision["trade_plan_id"] = plan.plan_id
     return plan
