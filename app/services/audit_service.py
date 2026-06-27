@@ -86,12 +86,13 @@ def dry_run_report(
         },
         "analysis": jsonable(analysis_result),
         "trade_decision": jsonable(trade_decision),
-        "trade_plan": jsonable(trade_plan),
         "risk_approval_id": trade_decision.get("risk_approval_id") if trade_decision else None,
-        "trade_plan_id": trade_decision.get("trade_plan_id") if trade_decision else None,
         "execution": jsonable(execution_result),
         "generated_at": timestamp.isoformat(),
     }
+    if trade_plan is not None:
+        report["trade_plan"] = jsonable(trade_plan)
+        report["trade_plan_id"] = trade_decision.get("trade_plan_id") if trade_decision else None
     if strategy_bucket != UNKNOWN_STRATEGY_BUCKET:
         report["strategy_bucket"] = strategy_bucket
     return report
@@ -130,11 +131,12 @@ async def audit_trade_decision(
             metadata = {
                 "audit": jsonable(audit),
                 "risk_approval_id": audit.get("risk_approval_id"),
-                "trade_plan_id": audit.get("trade_plan_id"),
-                "trade_plan": jsonable(trade_plan),
                 "dry_run": dry_run,
                 "flow": flow,
             }
+            if trade_plan is not None:
+                metadata["trade_plan_id"] = audit.get("trade_plan_id")
+                metadata["trade_plan"] = jsonable(trade_plan)
             if strategy_bucket != UNKNOWN_STRATEGY_BUCKET:
                 metadata["strategy_bucket"] = strategy_bucket
             await db_client.save_signal(
