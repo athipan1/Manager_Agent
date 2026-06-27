@@ -1,6 +1,7 @@
 from app.services.order_builder import (
     guard_plan_for_execution,
     order_request_from_decision,
+    order_request_from_trade_plan_decision,
     side_from_action,
 )
 
@@ -91,3 +92,82 @@ def test_order_request_from_decision_uses_final_quantity_when_position_size_miss
     assert order.price == 0.0
     assert order.account_id == "paper-account"
     assert order.strategy_bucket == "unassigned"
+
+
+def test_order_request_from_decision_prefers_trade_plan_snapshot():
+    decision = {
+        "risk_approval_id": "risk-789",
+        "symbol": "SHOULD_NOT_USE",
+        "action": "sell",
+        "position_size": 99,
+        "trade_plan": {
+            "plan_id": "plan-789",
+            "correlation_id": "corr-789",
+            "source": "single_analysis",
+            "status": "risk_approved",
+            "account_id": "1",
+            "symbol": "aapl",
+            "side": "buy",
+            "order_type": "market",
+            "entry_price": 150.0,
+            "quantity": 5,
+            "final_quantity": 5,
+            "time_in_force": "GTC",
+            "strategy": "trend_pullback",
+            "strategy_bucket": "value_rebound",
+            "final_verdict": "buy",
+            "confidence_score": 0.71,
+            "risk": {
+                "max_loss_amount": 25,
+                "max_loss_pct": 0.005,
+            },
+            "exit": {
+                "stop_loss": 145,
+                "take_profit": 160,
+            },
+            "risk_approval_id": "risk-789",
+            "manual_approval_required": False,
+            "dry_run": False,
+            "reasons": [],
+            "guard_plan": {"source": "trade_plan_guard", "stop_loss": 145},
+            "metadata": {},
+        },
+    }
+
+    order = order_request_from_decision(decision, account_id="ignored")
+
+    assert order.client_order_id == "plan-789"
+    assert order.account_id == "1"
+    assert order.symbol == "AAPL"
+    assert order.side == "buy"
+    assert order.quantity == 5
+    assert order.price == 150.0
+    assert order.risk_approval_id == "risk-789"
+    assert order.strategy_bucket == "value_rebound"
+    assert order.guard_plan == {"source": "trade_plan_guard", "stop_loss": 145}
+    assert order.protective_exit["stop_loss"] == 145
+    assert decision["order_source"] == "trade_plan"
+
+
+def test_trade_plan_order_builder_falls_back_when_snapshot_missing_approval():
+    decision = {
+        "trade_plan": {
+            "plan_id": "plan-no-risk",
+            "correlation_id": "corr-no-risk",
+            "account_id": "1",
+            "symbol": "AAPL",
+            "side": "buy",
+            "entry_price": 150,
+            "quantity": 5,
+            "final_verdict": "buy",
+            "confidence_score": 0.71,
+            "risk": {
+                "max_loss_amount": 25,
+                "max_loss_pct": 0.005,
+            },
+            "exit": {"stop_loss": 145},
+        }
+    }
+
+    assert order_request_from_trade_plan_decision(decision) is None
+    assert "risk_approval_id is required" in decision["trade_plan_order_error"]
