@@ -15,6 +15,12 @@
 5.  **Scanner Agent**: สแกนหาตลาดเพื่อระบุสินทรัพย์ที่มีรูปแบบน่าสนใจ (เช่น Bullish Trend หรือคะแนนพื้นฐานสูง)
 6.  **Execution Agent**: รับผิดชอบการส่งคำสั่งซื้อขายไปยังตลาดหรือโบรกเกอร์จริง
 7.  **Learning Agent**: วิเคราะห์ผลลัพธ์จากการเทรดในอดีตเพื่อแนะนำการปรับปรุงนโยบาย (Policy) เช่น การปรับน้ำหนักของ Agent หรือการปรับค่าความเสี่ยง
+8.  **Market Regime Agent**: วิเคราะห์ว่าสภาพตลาดเป็น bull, bear, sideways หรือ volatile เพื่อกำหนดโหมดความเสี่ยง
+9.  **Portfolio Agent**: วิเคราะห์สัดส่วนพอร์ต, cash weight, strategy bucket, exposure และ rebalance advisory
+10. **Profit Agent**: วิเคราะห์แผนทำกำไร เช่น partial exit, trailing stop, break-even stop และ exit signal
+11. **Performance Agent**: วัดผลงานจาก closed trades เช่น win rate, profit factor, expectancy และ max drawdown
+
+> Alpha-layer agents ทั้ง 4 ตัวเป็น **advisory-only** และไม่ส่งคำสั่งไปที่ Execution Agent โดยตรง Manager ยังคงเป็นผู้ orchestrate ขั้นสุดท้ายเสมอ
 
 ---
 
@@ -37,6 +43,12 @@
 *   ใช้ **Scanner Agent** ค้นหาสินทรัพย์ที่เป็น Candidate ที่ดีที่สุดตามประเภทที่ระบุ (Technical/Fundamental)
 *   ส่งรายชื่อ Candidates เข้าสู่ Workflow ของ `/analyze-multi` โดยอัตโนมัติ
 
+### 4. Alpha Advisory Layer (`/alpha/advisory`)
+*   Manager รับ payload สำหรับ Agent ใหม่ทั้ง 4 ตัว
+*   Forward ข้อมูลไปยัง **Market Regime**, **Portfolio**, **Profit**, และ **Performance Agent** ตาม key ที่ส่งมา
+*   รวมผลลัพธ์กลับมาเป็น advisory metadata
+*   ไม่ส่งคำสั่งซื้อขายเอง และไม่ bypass Risk/Execution guardrail
+
 ---
 
 ## 📡 รายการ Endpoints
@@ -48,6 +60,59 @@
 | `/analyze` | `POST` | วิเคราะห์และดำเนินการเทรดสำหรับ 1 สินทรัพย์ |
 | `/analyze-multi` | `POST` | วิเคราะห์และจัดการความเสี่ยงระดับพอร์ตสำหรับหลายสินทรัพย์ |
 | `/scan-and-analyze` | `POST` | ค้นหาสินทรัพย์ที่น่าสนใจและวิเคราะห์/เทรดทันที |
+| `/alpha/health` | `GET` | ตรวจ health ของ Alpha-layer agents |
+| `/alpha/advisory` | `POST` | รวม advisory จาก Market Regime, Portfolio, Profit และ Performance Agent |
+
+### Alpha Advisory payload
+
+```json
+{
+  "market_regime": {
+    "symbol": "SPY",
+    "price": 550,
+    "sma_50": 530,
+    "sma_200": 500,
+    "atr_pct": 0.015,
+    "vix": 15,
+    "market_breadth_pct": 0.7
+  },
+  "portfolio": {
+    "equity": 100000,
+    "cash": 20000,
+    "mode": "normal",
+    "positions": []
+  },
+  "profit": {
+    "position": {
+      "symbol": "ADBE",
+      "quantity": 20,
+      "entry_price": 100,
+      "current_price": 120,
+      "stop_loss": 90
+    }
+  },
+  "performance": {
+    "initial_equity": 100000,
+    "trades": [],
+    "equity_curve": []
+  }
+}
+```
+
+### Run with alpha agents
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.alpha.yml up --build
+```
+
+Required sibling repos:
+
+```text
+../Market_Regime_Agent
+../Portfolio_Agent
+../Profit_Agent
+../Performance_Agent
+```
 
 ### 💾 Database Agent
 | Endpoint | Method | Description |
@@ -77,50 +142,6 @@
 โครงสร้างมาตรฐานที่ทุก Agent ต้องใช้ในการตอบกลับ:
 ```json
 {
-  "status": "success | error",
-  "agent_type": "string",
-  "version": "1.0",
-  "timestamp": "2023-10-27T10:00:00Z",
-  "data": {
-    "action": "buy | sell | hold",
-    "confidence_score": 0.85,
-    "reason": "อธิบายเหตุผล...",
-    "current_price": 150.5,
-    "indicators": { ... }
-  },
-  "error": null
+  "status": "success | error"
 }
 ```
-
-### 2. Orchestrator Request (Analyze)
-```json
-{
-  "ticker": "AAPL",
-  "account_id": 1,
-  "period": "1mo"
-}
-```
-
-### 3. Create Order Request
-ข้อมูลที่ส่งไปยัง Execution Agent:
-```json
-{
-  "client_order_id": "uuid-string",
-  "account_id": 1,
-  "symbol": "AAPL",
-  "side": "buy | sell",
-  "order_type": "market | limit",
-  "quantity": 10,
-  "price": 150.5,
-  "time_in_force": "GTC"
-}
-```
-
----
-
-## 🛠 การตั้งค่าและสภาพแวดล้อม (Configuration)
-ระบบใช้ Environment Variables ในการควบคุมพฤติกรรม:
-*   `RISK_PER_TRADE`: สัดส่วนความเสี่ยงต่อการเทรด (เช่น 0.01 สำหรับ 1%)
-*   `STOP_LOSS_PERCENTAGE`: เปอร์เซ็นต์การตัดขาดทุน
-*   `MAX_TOTAL_EXPOSURE`: เพดานความเสี่ยงรวมของพอร์ต
-*   `AGENT_WEIGHTS`: การให้น้ำหนักระหว่าง Technical และ Fundamental Analysis
