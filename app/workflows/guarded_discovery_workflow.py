@@ -22,6 +22,9 @@ from ..services.database_sync_gate import (
 from .discovery_workflow import run_discover_analyze_trade_flow as run_unguarded_discover_analyze_trade_flow
 
 
+VALID_STRATEGY_BUCKETS = {"core_dividend", "value_rebound", "news_momentum"}
+
+
 def _request_with_execution_disabled(request: DiscoverAnalyzeTradeRequest) -> DiscoverAnalyzeTradeRequest:
     if hasattr(request, "model_copy"):
         return request.model_copy(update={"execute": False})
@@ -59,6 +62,56 @@ def _broker_state_from_execution_response(response: Any, account_id: Any) -> Dic
     }
 
 
+def _bucket_by_symbol_from_response(data: Dict[str, Any]) -> Dict[str, str]:
+    bucket_by_symbol: Dict[str, str] = {}
+    for row in data.get("selected_positions") or []:
+        symbol = str(row.get("symbol") or "").upper()
+        bucket = str(row.get("strategy_bucket") or row.get("bucket") or "").strip().lower()
+        if symbol and bucket in VALID_STRATEGY_BUCKETS:
+            bucket_by_symbol[symbol] = bucket
+    for row in data.get("risk_approvals") or []:
+        symbol = str(row.get("symbol") or "").upper()
+        bucket = str(row.get("strategy_bucket") or row.get("bucket") or "").strip().lower()
+        if symbol and bucket in VALID_STRATEGY_BUCKETS:
+            bucket_by_symbol[symbol] = bucket
+    for row in data.get("execution_candidates") or []:
+        symbol = str(row.get("symbol") or "").upper()
+        bucket = str(row.get("strategy_bucket") or row.get("bucket") or "").strip().lower()
+        if symbol and bucket in VALID_STRATEGY_BUCKETS:
+            bucket_by_symbol[symbol] = bucket
+    return bucket_by_symbol
+
+
+def _enrich_broker_state_with_buckets(broker_state: Dict[str, Any], bucket_by_symbol: Dict[str, str]) -> Dict[str, Any]:
+    if not bucket_by_symbol:
+        return broker_state
+    enriched = dict(broker_state)
+    enriched["source"] = "manager_post_discovery_bucket_backfill"
+    enriched_positions = []
+    for row in broker_state.get("positions") or []:
+        item = dict(row)
+        symbol = str(item.get("symbol") or "").upper()
+        bucket = bucket_by_symbol.get(symbol)
+        if bucket:
+            item["strategy_bucket"] = bucket
+        enriched_positions.append(item)
+    enriched_orders = []
+    for row in broker_state.get("open_orders") or []:
+        item = dict(row)
+        symbol = str(item.get("symbol") or "").upper()
+        bucket = bucket_by_symbol.get(symbol)
+        if bucket:
+            item["strategy_bucket"] = bucket
+        enriched_orders.append(item)
+    enriched["positions"] = enriched_positions
+    enriched["open_orders"] = enriched_orders
+    enriched["bucket_backfill"] = {
+        "symbols": bucket_by_symbol,
+        "source": "selected_positions",
+    }
+    return enriched
+
+
 async def capture_broker_snapshot(account_id: Any, correlation_id: str) -> Dict[str, Any]:
     """Fetch current broker state from Execution_Agent and persist it to Database_Agent."""
     try:
@@ -75,6 +128,41 @@ async def capture_broker_snapshot(account_id: Any, correlation_id: str) -> Dict[
             f"Broker snapshot capture failed for account {account_id}: {exc}, correlation_id={correlation_id}"
         )
         return {"status": "failed", "error": str(exc)}
+
+
+async def capture_bucket_backfilled_broker_snapshot(
+    account_id: Any,
+    correlation_id: str,
+    bucket_by_symbol: Dict[str, str],
+) -> Dict[str, Any]:
+    """Persist a post-discovery broker snapshot with Manager bucket hints attached.
+
+    Alpaca broker payloads do not carry Manager allocation buckets. This second
+    sync keeps Database positions/open orders aligned with Manager's latest
+    selected_positions without changing broker state or submitting orders.
+    """
+    if not bucket_by_symbol:
+        return {"status": "skipped", "reason": "no_bucket_hints"}
+    try:
+        async with ExecutionAgentClient() as exec_client:
+            execution_response = await exec_client.broker_state(account_id, correlation_id)
+        broker_state = _broker_state_from_execution_response(execution_response, account_id)
+        if not broker_state.get("account"):
+            return {"status": "skipped", "reason": "broker_state_missing_account"}
+        enriched_state = _enrich_broker_state_with_buckets(broker_state, bucket_by_symbol)
+        async with DatabaseAgentClient() as db_client:
+            result = await db_client.capture_broker_snapshot(enriched_state, correlation_id)
+        return {
+            "status": "captured",
+            "result": result,
+            "bucket_hints": bucket_by_symbol,
+            "broker_state_summary": enriched_state.get("summary") or {},
+        }
+    except Exception as exc:
+        report_logger.warning(
+            f"Bucket backfill broker snapshot failed for account {account_id}: {exc}, correlation_id={correlation_id}"
+        )
+        return {"status": "failed", "error": str(exc), "bucket_hints": bucket_by_symbol}
 
 
 async def load_database_sync_status(account_id: Any, correlation_id: str) -> Dict[str, Any]:
@@ -154,8 +242,16 @@ async def run_guarded_discover_analyze_trade_flow(request: DiscoverAnalyzeTradeR
         if database_sync:
             response.data.setdefault("database_sync", database_sync)
         response.data.setdefault("broker_snapshot_capture", snapshot_capture)
+        bucket_by_symbol = _bucket_by_symbol_from_response(response.data)
+        bucket_backfill_capture = (
+            await capture_bucket_backfilled_broker_snapshot(account_id, correlation_id, bucket_by_symbol)
+            if request.execute
+            else {"status": "skipped", "reason": "request.execute=false"}
+        )
+        response.data.setdefault("bucket_backfill_capture", bucket_backfill_capture)
         portfolio_summary = response.data.get("portfolio_summary")
         if isinstance(portfolio_summary, dict):
             portfolio_summary.setdefault("database_sync_status", database_sync_summary(database_sync).get("status"))
             portfolio_summary.setdefault("broker_snapshot_capture_status", snapshot_capture.get("status"))
+            portfolio_summary.setdefault("bucket_backfill_capture_status", bucket_backfill_capture.get("status"))
     return response
