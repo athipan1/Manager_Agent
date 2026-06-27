@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import os
+from decimal import Decimal
+from enum import Enum
 from typing import Any, Dict, List
 from urllib.parse import quote
 
@@ -36,6 +38,45 @@ CURATOR_AGENT_MAX_RETRIES = _env_int("CURATOR_AGENT_MAX_RETRIES", 1)
 CURATOR_AGENT_FAILURE_THRESHOLD = _env_int("CURATOR_AGENT_FAILURE_THRESHOLD", 2)
 CURATOR_AGENT_COOLDOWN_SECONDS = _env_int("CURATOR_AGENT_COOLDOWN_SECONDS", 30)
 CURATOR_SKILL_TIMEOUT_SECONDS = _env_float("CURATOR_SKILL_TIMEOUT_SECONDS", 1.0)
+
+
+def json_safe_value(value: Any) -> Any:
+    """Convert Manager payload values into JSON-safe data for Curator.
+
+    Curator skill execution is advisory-only and travels over JSON. Some
+    Manager analysis payloads can contain Pydantic models or agent DTO objects,
+    so sanitize a copy before sending it to Curator. The original payload used
+    by Risk/Execution remains unchanged.
+    """
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    if isinstance(value, Decimal):
+        return float(value)
+    if isinstance(value, Enum):
+        return value.value
+    if isinstance(value, dict):
+        return {str(key): json_safe_value(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple, set)):
+        return [json_safe_value(item) for item in value]
+    if hasattr(value, "model_dump"):
+        try:
+            return json_safe_value(value.model_dump(mode="json"))
+        except TypeError:
+            return json_safe_value(value.model_dump())
+    if hasattr(value, "dict"):
+        try:
+            return json_safe_value(value.dict())
+        except Exception:
+            pass
+    if hasattr(value, "__dict__"):
+        public_fields = {
+            key: item
+            for key, item in vars(value).items()
+            if not key.startswith("_")
+        }
+        if public_fields:
+            return json_safe_value(public_fields)
+    return str(value)
 
 
 class CuratorAgentClient(ResilientAgentClient):
@@ -74,7 +115,7 @@ class CuratorAgentClient(ResilientAgentClient):
         timeout_seconds: float | None = None,
     ) -> Dict[str, Any]:
         payload = {
-            "inputs": inputs,
+            "inputs": json_safe_value(inputs),
             "timeout_seconds": timeout_seconds if timeout_seconds is not None else CURATOR_SKILL_TIMEOUT_SECONDS,
         }
         response = await self._post(f"/skills/{skill_id}/execute", correlation_id, json_data=payload)
