@@ -1,0 +1,36 @@
+services:
+  manager-agent:
+    environment:
+      CURATOR_AGENT_ENABLED: ${CURATOR_AGENT_ENABLED:-false}
+      CURATOR_AGENT_URL: http://curator-agent:8010
+      CURATOR_AGENT_TIMEOUT: ${CURATOR_AGENT_TIMEOUT:-5}
+      CURATOR_AGENT_MAX_RETRIES: ${CURATOR_AGENT_MAX_RETRIES:-1}
+      CURATOR_AGENT_FAILURE_THRESHOLD: ${CURATOR_AGENT_FAILURE_THRESHOLD:-2}
+      CURATOR_AGENT_COOLDOWN_SECONDS: ${CURATOR_AGENT_COOLDOWN_SECONDS:-30}
+      CURATOR_SKILL_TIMEOUT_SECONDS: ${CURATOR_SKILL_TIMEOUT_SECONDS:-1.0}
+    depends_on:
+      curator-agent:
+        condition: service_healthy
+
+  curator-agent:
+    build:
+      context: ../Curator_Agent
+      dockerfile: Dockerfile
+    image: painaidee/curator-agent:latest
+    restart: always
+    ports:
+      - "8010:8010"
+    environment:
+      CURATOR_DB_PATH: /data/curator_skills.sqlite3
+      PYTHONPATH: /app
+    volumes:
+      - curator_data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "python - <<'PY'\nimport urllib.request\nurllib.request.urlopen('http://localhost:8010/health', timeout=3).read()\nPY"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+volumes:
+  curator_data:
