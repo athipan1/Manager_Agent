@@ -45,6 +45,13 @@ def _strategy_bucket_from_audit_inputs(
     )
 
 
+def _trade_plan_snapshot(trade_decision: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    if not trade_decision:
+        return None
+    trade_plan = trade_decision.get("trade_plan")
+    return trade_plan if isinstance(trade_plan, dict) else None
+
+
 def dry_run_report(
     *,
     correlation_id: str,
@@ -64,6 +71,7 @@ def dry_run_report(
     """
     timestamp = generated_at or utc_now()
     strategy_bucket = _strategy_bucket_from_audit_inputs(analysis_result, trade_decision)
+    trade_plan = _trade_plan_snapshot(trade_decision)
     report = {
         "report_id": correlation_id,
         "flow": flow,
@@ -82,6 +90,9 @@ def dry_run_report(
         "execution": jsonable(execution_result),
         "generated_at": timestamp.isoformat(),
     }
+    if trade_plan is not None:
+        report["trade_plan"] = jsonable(trade_plan)
+        report["trade_plan_id"] = trade_decision.get("trade_plan_id") if trade_decision else None
     if strategy_bucket != UNKNOWN_STRATEGY_BUCKET:
         report["strategy_bucket"] = strategy_bucket
     return report
@@ -112,6 +123,7 @@ async def audit_trade_decision(
         dry_run=dry_run,
     )
     strategy_bucket = _strategy_bucket_from_audit_inputs(analysis_result, trade_decision)
+    trade_plan = _trade_plan_snapshot(trade_decision)
     report_logger.info(f"trade_decision_audit={jsonable(audit)}")
 
     if db_client is not None:
@@ -122,6 +134,9 @@ async def audit_trade_decision(
                 "dry_run": dry_run,
                 "flow": flow,
             }
+            if trade_plan is not None:
+                metadata["trade_plan_id"] = audit.get("trade_plan_id")
+                metadata["trade_plan"] = jsonable(trade_plan)
             if strategy_bucket != UNKNOWN_STRATEGY_BUCKET:
                 metadata["strategy_bucket"] = strategy_bucket
             await db_client.save_signal(
