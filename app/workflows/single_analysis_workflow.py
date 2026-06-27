@@ -24,6 +24,7 @@ from ..resilient_client import AgentUnavailable
 from ..stock_guard import StockGuardError, validate_stock_scope
 from ..services.audit_service import audit_trade_decision, persist_signal
 from ..services.context_service import fetch_context_value, fetch_session_risk_context
+from ..services.trade_plan_builder import attach_trade_plan_to_decision
 from .analysis_workflow import analyze_single_asset
 from .execution_workflow import execute_trade
 from .learning_workflow import trigger_learning_cycle_if_allowed
@@ -75,6 +76,7 @@ def execution_result_for_decision(
             "status": "dry_run",
             "reason": "Execution skipped by dry-run mode.",
             "risk_approval_id": trade_decision.get("risk_approval_id"),
+            "trade_plan_id": trade_decision.get("trade_plan_id"),
         }
 
     if not trade_decision.get("approved"):
@@ -82,6 +84,7 @@ def execution_result_for_decision(
             "status": "rejected",
             "reason": trade_decision.get("reason"),
             "risk_approval_id": trade_decision.get("risk_approval_id"),
+            "trade_plan_id": trade_decision.get("trade_plan_id"),
         }
 
     if config.MANUAL_APPROVAL_REQUIRED:
@@ -89,9 +92,10 @@ def execution_result_for_decision(
             "status": "manual_approval_required",
             "reason": "Manual approval is required before live stock execution.",
             "risk_approval_id": trade_decision.get("risk_approval_id"),
+            "trade_plan_id": trade_decision.get("trade_plan_id"),
         }
 
-    return {"status": "ready_for_execution"}
+    return {"status": "ready_for_execution", "trade_plan_id": trade_decision.get("trade_plan_id")}
 
 
 async def run_single_analysis_flow(
@@ -137,6 +141,14 @@ async def run_single_analysis_flow(
                     session_context=session_context,
                     correlation_id=correlation_id,
                 )
+                attach_trade_plan_to_decision(
+                    analysis_result=analysis_result,
+                    trade_decision=trade_decision,
+                    account_id=account_id,
+                    correlation_id=correlation_id,
+                    dry_run=dry_run,
+                    source="single_analysis",
+                )
 
                 execution_result = execution_result_for_decision(
                     trade_decision=trade_decision,
@@ -152,6 +164,8 @@ async def run_single_analysis_flow(
                             correlation_id,
                             db_client=db_client,
                         )
+                        if trade_decision and trade_decision.get("trade_plan_id"):
+                            execution_result["trade_plan_id"] = trade_decision.get("trade_plan_id")
 
             audit = await audit_trade_decision(
                 db_client=db_client,
