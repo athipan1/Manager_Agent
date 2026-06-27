@@ -156,3 +156,47 @@ async def test_guarded_discovery_allows_execution_when_database_sync_is_safe(mon
     assert response.data["broker_snapshot_capture"] == {"status": "captured"}
     assert response.data["portfolio_summary"]["database_sync_status"] == "synced"
     assert response.data["portfolio_summary"]["broker_snapshot_capture_status"] == "captured"
+    assert response.data["bucket_backfill_capture"]["status"] == "skipped"
+    assert response.data["portfolio_summary"]["bucket_backfill_capture_status"] == "skipped"
+
+
+@pytest.mark.asyncio
+async def test_guarded_discovery_backfills_buckets_after_safe_execution(monkeypatch):
+    FakeDBClient.sync_payload = sync_payload("synced")
+    FakeDBClient.captured_snapshots = []
+    FakeExecutionClient.broker_payload = broker_payload()
+    seen = {}
+
+    async def fake_unguarded_flow(request):
+        seen["execute"] = request.execute
+        return SimpleNamespace(
+            status="success",
+            agent_type="manager-agent",
+            version="1.0.0",
+            timestamp=datetime.now(timezone.utc),
+            metadata={},
+            error=None,
+            data={
+                "selected_positions": [
+                    {"symbol": "ADBE", "strategy_bucket": "core_dividend"},
+                ],
+                "risk_approvals": [],
+                "execution_candidates": [],
+                "portfolio_summary": {},
+            },
+        )
+
+    monkeypatch.setattr("app.workflows.guarded_discovery_workflow.DatabaseAgentClient", FakeDBClient)
+    monkeypatch.setattr("app.workflows.guarded_discovery_workflow.ExecutionAgentClient", FakeExecutionClient)
+    monkeypatch.setattr("app.workflows.guarded_discovery_workflow.run_unguarded_discover_analyze_trade_flow", fake_unguarded_flow)
+
+    response = await run_guarded_discover_analyze_trade_flow(DiscoverAnalyzeTradeRequest(account_id=1, execute=True))
+
+    assert seen["execute"] is True
+    assert response.data["bucket_backfill_capture"]["status"] == "captured"
+    assert response.data["bucket_backfill_capture"]["bucket_hints"] == {"ADBE": "core_dividend"}
+    assert FakeDBClient.captured_snapshots[0]["source"] == "manager_preflight"
+    assert FakeDBClient.captured_snapshots[1]["source"] == "manager_post_discovery_bucket_backfill"
+    assert FakeDBClient.captured_snapshots[1]["positions"][0]["strategy_bucket"] == "core_dividend"
+    assert FakeDBClient.captured_snapshots[1]["open_orders"][0]["strategy_bucket"] == "core_dividend"
+    assert response.data["portfolio_summary"]["bucket_backfill_capture_status"] == "captured"
