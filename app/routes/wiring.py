@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from fastapi import FastAPI
 
+from .alpha_agents import router as alpha_agents_router
 from .discovery import router as discovery_router
 from .multi_analysis import router as multi_analysis_router
 from .scanner import router as scanner_router
@@ -32,3 +33,7 @@ def register_system_routes(app: FastAPI) -> None:
 
 def register_trade_replay_routes(app: FastAPI) -> None:
     app.include_router(trade_replay_router)
+
+
+def register_alpha_agent_routes(app: FastAPI) -> None:
+    app.include_router(alpha_agents_router)
