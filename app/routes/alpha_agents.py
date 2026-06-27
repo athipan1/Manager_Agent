@@ -18,6 +18,13 @@ def utc_now() -> datetime.datetime:
     return datetime.datetime.now(datetime.UTC)
 
 
+def _metadata(correlation_id: str) -> Dict[str, Any]:
+    metadata = manager_metadata()
+    metadata["correlation_id"] = correlation_id
+    metadata["alpha_advisory_only"] = True
+    return metadata
+
+
 @router.get("/health", response_model=StandardAgentResponse)
 async def alpha_health() -> StandardAgentResponse:
     correlation_id = str(uuid.uuid4())
@@ -33,7 +40,7 @@ async def alpha_health() -> StandardAgentResponse:
         version="1.0.0",
         timestamp=utc_now(),
         data=data,
-        metadata=manager_metadata(correlation_id=correlation_id),
+        metadata=_metadata(correlation_id),
         error={"unhealthy_services": unhealthy} if unhealthy else None,
     )
 
@@ -56,6 +63,6 @@ async def alpha_advisory(payload: Dict[str, Any]) -> StandardAgentResponse:
         version="1.0.0",
         timestamp=utc_now(),
         data=data,
-        metadata=manager_metadata(correlation_id=correlation_id),
+        metadata=_metadata(correlation_id),
         error=data.get("errors") or None,
     )
