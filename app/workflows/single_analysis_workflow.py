@@ -62,6 +62,13 @@ def manager_metadata(
     return metadata
 
 
+def _with_trade_plan_id(result: Dict[str, Any], trade_decision: Dict[str, Any]) -> Dict[str, Any]:
+    trade_plan_id = trade_decision.get("trade_plan_id")
+    if trade_plan_id:
+        result["trade_plan_id"] = trade_plan_id
+    return result
+
+
 def execution_result_for_decision(
     *,
     trade_decision: Optional[Dict[str, Any]],
@@ -72,30 +79,36 @@ def execution_result_for_decision(
         return {"status": "not_attempted", "reason": "No trade decision."}
 
     if dry_run:
-        return {
-            "status": "dry_run",
-            "reason": "Execution skipped by dry-run mode.",
-            "risk_approval_id": trade_decision.get("risk_approval_id"),
-            "trade_plan_id": trade_decision.get("trade_plan_id"),
-        }
+        return _with_trade_plan_id(
+            {
+                "status": "dry_run",
+                "reason": "Execution skipped by dry-run mode.",
+                "risk_approval_id": trade_decision.get("risk_approval_id"),
+            },
+            trade_decision,
+        )
 
     if not trade_decision.get("approved"):
-        return {
-            "status": "rejected",
-            "reason": trade_decision.get("reason"),
-            "risk_approval_id": trade_decision.get("risk_approval_id"),
-            "trade_plan_id": trade_decision.get("trade_plan_id"),
-        }
+        return _with_trade_plan_id(
+            {
+                "status": "rejected",
+                "reason": trade_decision.get("reason"),
+                "risk_approval_id": trade_decision.get("risk_approval_id"),
+            },
+            trade_decision,
+        )
 
     if config.MANUAL_APPROVAL_REQUIRED:
-        return {
-            "status": "manual_approval_required",
-            "reason": "Manual approval is required before live stock execution.",
-            "risk_approval_id": trade_decision.get("risk_approval_id"),
-            "trade_plan_id": trade_decision.get("trade_plan_id"),
-        }
+        return _with_trade_plan_id(
+            {
+                "status": "manual_approval_required",
+                "reason": "Manual approval is required before live stock execution.",
+                "risk_approval_id": trade_decision.get("risk_approval_id"),
+            },
+            trade_decision,
+        )
 
-    return {"status": "ready_for_execution", "trade_plan_id": trade_decision.get("trade_plan_id")}
+    return _with_trade_plan_id({"status": "ready_for_execution"}, trade_decision)
 
 
 async def run_single_analysis_flow(
