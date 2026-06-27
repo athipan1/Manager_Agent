@@ -159,3 +159,69 @@ def test_render_hourly_portfolio_report_shows_database_sync_preflight_block(tmp_
     assert "broker_cash" in output
     assert "## Portfolio Summary" in output
     assert "No risk approvals returned." in output
+
+
+def test_render_hourly_portfolio_report_shows_curator_signals(tmp_path, monkeypatch):
+    reports_dir = tmp_path / "reports"
+    reports_dir.mkdir()
+    report = {
+        "generated_at": "2026-06-27T05:30:00Z",
+        "mode": "ALPACA_PAPER",
+        "broker_mode": "ALPACA",
+        "flow": "discover_analyze_trade",
+        "request": {"account_id": 1, "execute": True},
+        "response": {
+            "status": "success",
+            "data": {
+                "mode": "portfolio_allocation",
+                "portfolio_summary": {
+                    "selected_positions": 1,
+                    "approved_positions": 0,
+                    "curator_signals": 1,
+                },
+                "selected_positions": [
+                    {"symbol": "ACGL", "strategy_bucket": "value_rebound", "target_weight": 0.3},
+                ],
+                "curator_signals": [
+                    {
+                        "symbol": "ACGL",
+                        "status": "success",
+                        "skill_id": "skill-1",
+                        "skill_name": "RSI Signal",
+                        "execution": {
+                            "execution_status": "success",
+                            "output": {
+                                "signal": "hold",
+                                "confidence": 0.55,
+                                "reason": "Curator advisory only",
+                            },
+                        },
+                    }
+                ],
+                "risk_approvals": [],
+                "execution_candidates": [],
+                "execution": {"status": "not_attempted", "reason": "test"},
+                "ranked_candidates": [],
+            },
+        },
+        "broker_snapshot": {
+            "account": {"data": {"status": "ACTIVE", "cash": "1000", "equity": "1000", "buying_power": "4000"}},
+            "orders": {"data": []},
+            "positions": {"data": []},
+        },
+        "dashboard_data": {"data": {"summary": {}, "balance": {"cash": "1000"}}},
+    }
+    (reports_dir / "hourly-auto-trading-report.json").write_text(json.dumps(report), encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+
+    assert main() == 0
+
+    output = (reports_dir / "hourly-auto-trading-report.md").read_text(encoding="utf-8")
+    assert "Curator Signals: `1`" in output
+    assert "## Curator Signals" in output
+    assert "advisory_metadata_only" in output
+    assert "does_not_approve_size_or_submit_orders" in output
+    assert "RSI Signal" in output
+    assert "hold" in output
+    assert "0.55" in output
+    assert "Curator advisory only" in output

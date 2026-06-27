@@ -120,6 +120,36 @@ def render_sync_preflight(lines: List[str], data: Dict[str, Any]) -> None:
         lines.append("")
 
 
+def _curator_output(signal: Dict[str, Any]) -> Dict[str, Any]:
+    execution = _dict(signal.get("execution"))
+    return _dict(execution.get("output"))
+
+
+def render_curator_signals(lines: List[str], data: Dict[str, Any]) -> None:
+    curator_signals = _list(data.get("curator_signals"))
+    if not curator_signals:
+        return
+
+    lines.append("## Curator Signals")
+    lines.append(f"- Signals Returned: `{len(curator_signals)}`")
+    lines.append("- Usage: `advisory_metadata_only`")
+    lines.append("- Safety: `does_not_approve_size_or_submit_orders`")
+    lines.append("")
+    lines.append("| Symbol | Status | Skill | Signal | Confidence | Reason | Execution Status |")
+    lines.append("|---|---|---|---|---:|---|---|")
+    for row in curator_signals:
+        row = _dict(row)
+        output = _curator_output(row)
+        execution = _dict(row.get("execution"))
+        lines.append(
+            f"| {_row_value(row, 'symbol')} | {_row_value(row, 'status')} | "
+            f"{_row_value(row, 'skill_name', 'skill_id')} | {output.get('signal', '-')} | "
+            f"{output.get('confidence', '-')} | {output.get('reason') or row.get('reason') or '-'} | "
+            f"{execution.get('execution_status', '-')} |"
+        )
+    lines.append("")
+
+
 def render_execution_details(lines: List[str], execution: Dict[str, Any]) -> None:
     if not execution:
         return
@@ -206,6 +236,7 @@ def render_portfolio_section(lines: List[str], data: Dict[str, Any]) -> None:
     lines.append(f"- Selected Positions: `{portfolio_summary.get('selected_positions', len(selected_positions))}`")
     lines.append(f"- Approved Positions: `{portfolio_summary.get('approved_positions', len([r for r in risk_approvals if approval_status(r) == 'approved']))}`")
     lines.append(f"- Execution Candidates: `{len(execution_candidates)}`")
+    lines.append(f"- Curator Signals: `{portfolio_summary.get('curator_signals', len(_list(data.get('curator_signals'))))}`")
     lines.append(f"- Execution: {th_execution(execution.get('status', 'unknown'))}")
     lines.append(f"- Execution Reason: {execution.get('reason', '-')}")
     lines.append("")
@@ -242,6 +273,8 @@ def render_portfolio_section(lines: List[str], data: Dict[str, Any]) -> None:
                 f"{item.get('target_weight', '-')} | {item.get('target_value', '-')} | {score(item, 'final_opportunity_score') or item.get('final_score', '-')} |"
             )
     lines.append("")
+
+    render_curator_signals(lines, data)
 
     lines.append("## Risk Approvals")
     if not risk_approvals:
