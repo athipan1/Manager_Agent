@@ -19,6 +19,29 @@ def side_from_action(action: str) -> str:
     return "buy" if "buy" in str(action or "").lower() else "sell"
 
 
+def strategy_bucket_from_decision(decision: Dict[str, Any]) -> str:
+    """Return the best available strategy bucket from a risk decision.
+
+    Older Manager paths placed the bucket under `stock_risk_context`; newer
+    portfolio-first paths can also carry it at the decision root or inside
+    portfolio metadata. Keep all fallbacks so the bucket does not regress to
+    `unassigned` before it reaches Database/Execution.
+    """
+    stock_context = decision.get("stock_risk_context") or {}
+    portfolio_context = decision.get("portfolio_context") or {}
+    metadata = decision.get("metadata") or {}
+    bucket = (
+        stock_context.get("strategy_bucket")
+        or decision.get("strategy_bucket")
+        or portfolio_context.get("strategy_bucket")
+        or portfolio_context.get("bucket")
+        or metadata.get("strategy_bucket")
+        or metadata.get("bucket")
+        or "unassigned"
+    )
+    return str(bucket or "unassigned")
+
+
 def guard_plan_for_execution(decision: Dict[str, Any]) -> Dict[str, Any]:
     """Return an explicit or default guard plan for execution.
 
@@ -61,7 +84,7 @@ def order_request_from_decision(
         price=float(decision.get("entry_price") or 0),
         client_order_id=client_order_id,
         account_id=account_id,
-        strategy_bucket=(decision.get("stock_risk_context") or {}).get("strategy_bucket", "unassigned"),
+        strategy_bucket=strategy_bucket_from_decision(decision),
         risk_approval_id=str(decision["risk_approval_id"]),
         final_quantity=quantity,
         guard_plan=guard_plan_for_execution(decision),
