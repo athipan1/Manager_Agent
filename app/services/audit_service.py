@@ -16,6 +16,8 @@ from ..logger import report_logger
 from .order_builder import strategy_bucket_from_decision
 from .serialization_service import jsonable
 
+UNKNOWN_STRATEGY_BUCKET = "unassigned"
+
 
 def utc_now() -> datetime.datetime:
     """Return the current UTC timestamp."""
@@ -28,7 +30,7 @@ def _strategy_bucket_from_audit_inputs(
 ) -> str:
     if trade_decision:
         bucket = strategy_bucket_from_decision(trade_decision)
-        if bucket != "unassigned":
+        if bucket != UNKNOWN_STRATEGY_BUCKET:
             return bucket
     analysis_result = analysis_result or {}
     portfolio_context = analysis_result.get("portfolio_context") or {}
@@ -39,7 +41,7 @@ def _strategy_bucket_from_audit_inputs(
         or portfolio_context.get("bucket")
         or metadata.get("strategy_bucket")
         or metadata.get("bucket")
-        or "unassigned"
+        or UNKNOWN_STRATEGY_BUCKET
     )
 
 
@@ -62,11 +64,10 @@ def dry_run_report(
     """
     timestamp = generated_at or utc_now()
     strategy_bucket = _strategy_bucket_from_audit_inputs(analysis_result, trade_decision)
-    return {
+    report = {
         "report_id": correlation_id,
         "flow": flow,
         "symbol": symbol,
-        "strategy_bucket": strategy_bucket,
         "dry_run": dry_run,
         "trading_mode": config.TRADING_MODE,
         "trading_enabled": config.TRADING_ENABLED,
@@ -81,6 +82,9 @@ def dry_run_report(
         "execution": jsonable(execution_result),
         "generated_at": timestamp.isoformat(),
     }
+    if strategy_bucket != UNKNOWN_STRATEGY_BUCKET:
+        report["strategy_bucket"] = strategy_bucket
+    return report
 
 
 async def audit_trade_decision(
@@ -107,22 +111,25 @@ async def audit_trade_decision(
         context_value=context_value,
         dry_run=dry_run,
     )
+    strategy_bucket = _strategy_bucket_from_audit_inputs(analysis_result, trade_decision)
     report_logger.info(f"trade_decision_audit={jsonable(audit)}")
 
     if db_client is not None:
         try:
+            metadata = {
+                "audit": jsonable(audit),
+                "risk_approval_id": audit.get("risk_approval_id"),
+                "dry_run": dry_run,
+                "flow": flow,
+            }
+            if strategy_bucket != UNKNOWN_STRATEGY_BUCKET:
+                metadata["strategy_bucket"] = strategy_bucket
             await db_client.save_signal(
                 account_id=account_id,
                 symbol=symbol,
                 correlation_id=correlation_id,
                 final_verdict=(analysis_result or {}).get("final_verdict"),
-                metadata={
-                    "audit": jsonable(audit),
-                    "risk_approval_id": audit.get("risk_approval_id"),
-                    "strategy_bucket": audit.get("strategy_bucket"),
-                    "dry_run": dry_run,
-                    "flow": flow,
-                },
+                metadata=metadata,
             )
         except Exception as exc:
             report_logger.warning(
@@ -150,6 +157,14 @@ async def persist_signal(
         fund_detail = details.fundamental if details else None
         metadata = extra_metadata or {}
         strategy_bucket = _strategy_bucket_from_audit_inputs(analysis_result, metadata)
+        signal_metadata = {
+            "analysis_status": analysis_result.get("status"),
+            "technical_action": tech_detail.action if tech_detail else None,
+            "fundamental_action": fund_detail.action if fund_detail else None,
+            **metadata,
+        }
+        if strategy_bucket != UNKNOWN_STRATEGY_BUCKET:
+            signal_metadata["strategy_bucket"] = strategy_bucket
         await db_client.save_signal(
             account_id=account_id,
             symbol=analysis_result.get("ticker"),
@@ -157,13 +172,7 @@ async def persist_signal(
             technical_score=tech_detail.score if tech_detail else None,
             fundamental_score=fund_detail.score if fund_detail else None,
             final_verdict=analysis_result.get("final_verdict"),
-            metadata={
-                "analysis_status": analysis_result.get("status"),
-                "technical_action": tech_detail.action if tech_detail else None,
-                "fundamental_action": fund_detail.action if fund_detail else None,
-                "strategy_bucket": strategy_bucket,
-                **metadata,
-            },
+            metadata=signal_metadata,
         )
     except Exception as exc:
         report_logger.warning(
