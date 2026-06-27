@@ -1,32 +1,63 @@
 from __future__ import annotations
 
+import os
 from typing import Any, Dict, List
+from urllib.parse import quote
 
-from . import config
 from .logger import report_logger
 from .resilient_client import AgentUnavailable, ResilientAgentClient
+
+
+def _env_bool(name: str, default: bool = False) -> bool:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "y", "on"}
+
+
+def _env_float(name: str, default: float) -> float:
+    try:
+        return float(os.getenv(name, str(default)))
+    except ValueError:
+        return default
+
+
+def _env_int(name: str, default: int) -> int:
+    try:
+        return int(os.getenv(name, str(default)))
+    except ValueError:
+        return default
+
+
+CURATOR_AGENT_URL = os.getenv("CURATOR_AGENT_URL", "http://curator-agent:8010")
+CURATOR_AGENT_ENABLED = _env_bool("CURATOR_AGENT_ENABLED", False)
+CURATOR_AGENT_TIMEOUT = _env_float("CURATOR_AGENT_TIMEOUT", 5.0)
+CURATOR_AGENT_MAX_RETRIES = _env_int("CURATOR_AGENT_MAX_RETRIES", 1)
+CURATOR_AGENT_FAILURE_THRESHOLD = _env_int("CURATOR_AGENT_FAILURE_THRESHOLD", 2)
+CURATOR_AGENT_COOLDOWN_SECONDS = _env_int("CURATOR_AGENT_COOLDOWN_SECONDS", 30)
+CURATOR_SKILL_TIMEOUT_SECONDS = _env_float("CURATOR_SKILL_TIMEOUT_SECONDS", 1.0)
 
 
 class CuratorAgentClient(ResilientAgentClient):
     """Client for Curator_Agent signal-only skill endpoints.
 
-    Curator_Agent currently returns a lightweight response shape that is not the
-    same as Manager's StandardAgentResponse contract, so this client intentionally
+    Curator_Agent returns a lightweight response shape that is not the same as
+    Manager's StandardAgentResponse contract, so this client intentionally
     returns raw response dictionaries after basic success checks.
     """
 
     def __init__(self):
         super().__init__(
-            base_url=config.CURATOR_AGENT_URL,
-            timeout=config.CURATOR_AGENT_TIMEOUT,
-            max_retries=config.CURATOR_AGENT_MAX_RETRIES,
-            failure_threshold=config.CURATOR_AGENT_FAILURE_THRESHOLD,
-            cooldown_period=config.CURATOR_AGENT_COOLDOWN_SECONDS,
+            base_url=CURATOR_AGENT_URL,
+            timeout=CURATOR_AGENT_TIMEOUT,
+            max_retries=CURATOR_AGENT_MAX_RETRIES,
+            failure_threshold=CURATOR_AGENT_FAILURE_THRESHOLD,
+            cooldown_period=CURATOR_AGENT_COOLDOWN_SECONDS,
         )
 
     async def search_approved_skills(self, query: str, correlation_id: str) -> List[Dict[str, Any]]:
         response = await self._get(
-            f"/skills/search?q={query}&approval_status=approved",
+            f"/skills/search?q={quote(query)}&approval_status=approved",
             correlation_id,
         )
         if response.get("status") != "success":
@@ -44,7 +75,7 @@ class CuratorAgentClient(ResilientAgentClient):
     ) -> Dict[str, Any]:
         payload = {
             "inputs": inputs,
-            "timeout_seconds": timeout_seconds if timeout_seconds is not None else config.CURATOR_SKILL_TIMEOUT_SECONDS,
+            "timeout_seconds": timeout_seconds if timeout_seconds is not None else CURATOR_SKILL_TIMEOUT_SECONDS,
         }
         response = await self._post(f"/skills/{skill_id}/execute", correlation_id, json_data=payload)
         if response.get("status") != "success":
@@ -65,7 +96,7 @@ async def best_effort_curator_signal(
     skill fails, Manager records diagnostics and continues with its original
     Technical/Fundamental/Risk/Execution path.
     """
-    if not config.CURATOR_AGENT_ENABLED:
+    if not CURATOR_AGENT_ENABLED:
         return {"status": "disabled", "reason": "CURATOR_AGENT_ENABLED=false"}
 
     try:
