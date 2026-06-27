@@ -1,0 +1,89 @@
+services:
+  manager-agent:
+    environment:
+      ALPHA_AGENTS_ENABLED: ${ALPHA_AGENTS_ENABLED:-true}
+      MARKET_REGIME_AGENT_ENABLED: ${MARKET_REGIME_AGENT_ENABLED:-true}
+      PORTFOLIO_AGENT_ENABLED: ${PORTFOLIO_AGENT_ENABLED:-true}
+      PROFIT_AGENT_ENABLED: ${PROFIT_AGENT_ENABLED:-true}
+      PERFORMANCE_AGENT_ENABLED: ${PERFORMANCE_AGENT_ENABLED:-true}
+      MARKET_REGIME_AGENT_URL: http://market-regime-agent:8014
+      PORTFOLIO_AGENT_URL: http://portfolio-agent:8012
+      PROFIT_AGENT_URL: http://profit-agent:8011
+      PERFORMANCE_AGENT_URL: http://performance-agent:8013
+    depends_on:
+      market-regime-agent:
+        condition: service_healthy
+      portfolio-agent:
+        condition: service_healthy
+      profit-agent:
+        condition: service_healthy
+      performance-agent:
+        condition: service_healthy
+
+  market-regime-agent:
+    build:
+      context: ../Market_Regime_Agent
+      dockerfile: Dockerfile
+    image: painaidee/market-regime-agent:latest
+    restart: always
+    ports:
+      - "8014:8014"
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8014/health', timeout=3)\" || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    environment:
+      PYTHONPATH: /app
+
+  portfolio-agent:
+    build:
+      context: ../Portfolio_Agent
+      dockerfile: Dockerfile
+    image: painaidee/portfolio-agent:latest
+    restart: always
+    ports:
+      - "8012:8012"
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8012/health', timeout=3)\" || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    environment:
+      PYTHONPATH: /app
+
+  profit-agent:
+    build:
+      context: ../Profit_Agent
+      dockerfile: Dockerfile
+    image: painaidee/profit-agent:latest
+    restart: always
+    ports:
+      - "8011:8011"
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8011/health', timeout=3)\" || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    environment:
+      PYTHONPATH: /app
+
+  performance-agent:
+    build:
+      context: ../Performance_Agent
+      dockerfile: Dockerfile
+    image: painaidee/performance-agent:latest
+    restart: always
+    ports:
+      - "8013:8013"
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8013/health', timeout=3)\" || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    environment:
+      PYTHONPATH: /app
