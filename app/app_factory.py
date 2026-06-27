@@ -3,6 +3,7 @@ from __future__ import annotations
 from fastapi import FastAPI
 
 from .routes.wiring import (
+    register_alpha_agent_routes,
     register_discovery_routes,
     register_multi_analysis_routes,
     register_scanner_routes,
@@ -20,6 +21,7 @@ def create_app(
     include_scanner: bool = True,
     include_system: bool = True,
     include_trade_replay: bool = True,
+    include_alpha_agents: bool = True,
 ) -> FastAPI:
     app = FastAPI()
 
@@ -40,5 +42,8 @@ def create_app(
 
     if include_trade_replay:
         register_trade_replay_routes(app)
+
+    if include_alpha_agents:
+        register_alpha_agent_routes(app)
 
     return app
