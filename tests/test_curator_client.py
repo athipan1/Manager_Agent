@@ -1,6 +1,24 @@
+from decimal import Decimal
+from enum import Enum
+
 import pytest
 
 from app import curator_client
+
+
+class FakeEnum(Enum):
+    BUY = "buy"
+
+
+class FakeModel:
+    def model_dump(self, mode=None):
+        return {"nested": {"score": Decimal("0.62")}, "mode": mode or "plain"}
+
+
+class FakeReportDetails:
+    def __init__(self):
+        self.summary = "technical report"
+        self.score = Decimal("0.63")
 
 
 @pytest.mark.asyncio
@@ -72,3 +90,45 @@ async def test_best_effort_curator_signal_falls_back_to_unavailable(monkeypatch)
 
     assert result["status"] == "unavailable"
     assert "curator down" in result["reason"]
+
+
+def test_json_safe_value_sanitizes_models_and_objects():
+    unsafe_payload = {
+        "ticker": "ACGL",
+        "confidence": Decimal("0.63"),
+        "side": FakeEnum.BUY,
+        "model": FakeModel(),
+        "report_details": FakeReportDetails(),
+        "items": {Decimal("1.2"), "x"},
+    }
+
+    safe = curator_client.json_safe_value(unsafe_payload)
+
+    assert safe["confidence"] == 0.63
+    assert safe["side"] == "buy"
+    assert safe["model"]["nested"]["score"] == 0.62
+    assert safe["report_details"] == {"summary": "technical report", "score": 0.63}
+    assert sorted(safe["items"], key=str) == [1.2, "x"]
+
+
+@pytest.mark.asyncio
+async def test_curator_execute_skill_sanitizes_inputs_before_post(monkeypatch):
+    captured = {}
+
+    async def fake_post(self, path, correlation_id, json_data):
+        captured["json_data"] = json_data
+        return {"status": "success", "data": {"execution_status": "success"}}
+
+    monkeypatch.setattr(curator_client.CuratorAgentClient, "_post", fake_post)
+
+    client = curator_client.CuratorAgentClient()
+    result = await client.execute_skill(
+        "skill-1",
+        inputs={"analysis": {"details": FakeReportDetails(), "score": Decimal("0.5")}},
+        correlation_id="cid-1",
+    )
+
+    assert result == {"execution_status": "success"}
+    assert captured["json_data"]["inputs"] == {
+        "analysis": {"details": {"summary": "technical report", "score": 0.63}, "score": 0.5}
+    }
