@@ -82,18 +82,25 @@ def _sync_summary(database_sync: Dict[str, Any]) -> Dict[str, Any]:
 
 def render_sync_preflight(lines: List[str], data: Dict[str, Any]) -> None:
     database_sync = _dict(data.get("database_sync"))
+    database_sync_after_bucket_backfill = _dict(data.get("database_sync_after_bucket_backfill"))
     snapshot_capture = _dict(data.get("broker_snapshot_capture"))
+    bucket_backfill_capture = _dict(data.get("bucket_backfill_capture"))
     snapshot_capture_status = data.get("broker_snapshot_capture_status")
     execution = _dict(data.get("execution"))
     summary = _sync_summary(database_sync)
 
-    has_sync_data = bool(database_sync or snapshot_capture or snapshot_capture_status)
+    has_sync_data = bool(database_sync or snapshot_capture or snapshot_capture_status or bucket_backfill_capture)
     blocked_by_sync = "Database/Broker sync status" in str(execution.get("reason") or "")
     if not has_sync_data and not blocked_by_sync:
         return
 
     lines.append("## Database Sync Preflight")
-    lines.append(f"- Broker Snapshot Capture Status: `{snapshot_capture_status or '-'}`")
+    lines.append(f"- Broker Snapshot Capture Status: `{snapshot_capture_status or snapshot_capture.get('status', '-')}`")
+    if bucket_backfill_capture:
+        lines.append(f"- Bucket Backfill Capture Status: `{bucket_backfill_capture.get('status', '-')}`")
+        bucket_hints = bucket_backfill_capture.get("bucket_hints") or {}
+        if bucket_hints:
+            lines.append(f"- Bucket Hints: `{json.dumps(bucket_hints, ensure_ascii=False, default=str)}`")
     if summary:
         lines.append(f"- Database Sync Status: `{summary.get('status', '-')}`")
         lines.append(f"- Severity: `{summary.get('severity', '-')}`")
@@ -112,10 +119,24 @@ def render_sync_preflight(lines: List[str], data: Dict[str, Any]) -> None:
         lines.append("```")
         lines.append("")
 
+    if bucket_backfill_capture:
+        lines.append("### Bucket Backfill Capture")
+        lines.append("```json")
+        lines.append(json.dumps(bucket_backfill_capture, ensure_ascii=False, indent=2, default=str))
+        lines.append("```")
+        lines.append("")
+
     if database_sync:
         lines.append("### Database Sync Diagnostics")
         lines.append("```json")
         lines.append(json.dumps(database_sync, ensure_ascii=False, indent=2, default=str))
+        lines.append("```")
+        lines.append("")
+
+    if database_sync_after_bucket_backfill:
+        lines.append("### Database Sync After Bucket Backfill")
+        lines.append("```json")
+        lines.append(json.dumps(database_sync_after_bucket_backfill, ensure_ascii=False, indent=2, default=str))
         lines.append("```")
         lines.append("")
 
@@ -237,6 +258,9 @@ def render_portfolio_section(lines: List[str], data: Dict[str, Any]) -> None:
     lines.append(f"- Approved Positions: `{portfolio_summary.get('approved_positions', len([r for r in risk_approvals if approval_status(r) == 'approved']))}`")
     lines.append(f"- Execution Candidates: `{len(execution_candidates)}`")
     lines.append(f"- Curator Signals: `{portfolio_summary.get('curator_signals', len(_list(data.get('curator_signals'))))}`")
+    if portfolio_summary.get("bucket_backfill_capture_status"):
+        lines.append(f"- Bucket Backfill: `{portfolio_summary.get('bucket_backfill_capture_status')}`")
+        lines.append(f"- Bucket Backfill Hints: `{portfolio_summary.get('bucket_backfill_hint_count', '-')}`")
     lines.append(f"- Execution: {th_execution(execution.get('status', 'unknown'))}")
     lines.append(f"- Execution Reason: {execution.get('reason', '-')}")
     lines.append("")
@@ -299,108 +323,43 @@ def render_portfolio_section(lines: List[str], data: Dict[str, Any]) -> None:
         for row in execution_candidates:
             lines.append(
                 f"| {row.get('symbol', '-')} | {row.get('strategy_bucket') or row.get('bucket', '-')} | "
-                f"{row.get('quantity') or row.get('final_quantity') or '-'} | {row.get('risk_approval_id') or '-'} | {row.get('status', '-')} |"
+                f"{row.get('quantity') or row.get('final_quantity') or '-'} | {row.get('risk_approval_id') or '-'} | {row.get('status') or '-'} |"
             )
     lines.append("")
 
     render_execution_details(lines, execution)
 
 
-def render_ranked(lines: List[str], ranked: List[Dict[str, Any]]) -> None:
-    lines.append("## Ranked Candidates")
+def render_ranked_candidates(lines: List[str], data: Dict[str, Any]) -> None:
+    ranked = _list(data.get("ranked_candidates"))
     if not ranked:
-        lines.append("No ranked candidates returned by Manager_Agent.")
-    else:
-        lines.append("| Rank | Symbol | Verdict | Bucket | Final Score | Scanner | Fundamental | Technical |")
-        lines.append("|---:|---|---|---|---:|---:|---:|---:|")
-        for item in ranked:
-            scores = item.get("score_breakdown") or {}
-            lines.append(
-                f"| {item.get('rank')} | {item.get('symbol')} | {th_verdict(item.get('final_verdict'))} | "
-                f"{item.get('strategy_bucket') or item.get('bucket', '-')} | {scores.get('final_opportunity_score')} | "
-                f"{scores.get('scanner_score')} | {scores.get('fundamental_score')} | {scores.get('technical_score')} |"
-            )
+        return
+    lines.append("## Ranked Candidates")
+    lines.append("| Rank | Symbol | Verdict | Bucket | Final Score | Scanner | Fundamental | Technical |")
+    lines.append("|---:|---|---|---|---:|---:|---:|---:|")
+    for index, item in enumerate(ranked[:15], start=1):
+        breakdown = item.get("score_breakdown") or {}
+        lines.append(
+            f"| {index} | {item.get('symbol', '-')} | {th_verdict(item.get('final_verdict', '-'))} | "
+            f"{item.get('strategy_bucket') or breakdown.get('strategy_bucket') or '-'} | "
+            f"{breakdown.get('final_opportunity_score') or item.get('final_score', '-')} | "
+            f"{breakdown.get('scanner_score', '-')} | {breakdown.get('fundamental_score', '-')} | {breakdown.get('technical_score', '-')} |"
+        )
     lines.append("")
 
 
-def main() -> int:
-    report_path = Path("reports/hourly-auto-trading-report.json")
-    report = json.loads(report_path.read_text())
-    response = report.get("response") or {}
-    data = response.get("data") if isinstance(response, dict) else {}
-    data = data or {}
-    snapshot = report.get("broker_snapshot") or {}
-    dashboard = report.get("dashboard_data") or {}
-    dashboard_data = dashboard.get("data") if isinstance(dashboard, dict) else {}
-
-    lines: List[str] = []
-    lines.append("# รายงานระบบเทรดอัตโนมัติรายชั่วโมง")
-    lines.append("")
-    lines.append(f"Generated at UTC: `{report.get('generated_at')}`")
-    lines.append(f"Mode: `{report.get('mode')}`")
-    lines.append(f"Broker Mode: `{report.get('broker_mode')}`")
-    lines.append(f"Flow: `{report.get('flow')}`")
-    lines.append("")
-
-    if isinstance(dashboard_data, dict):
-        summary = dashboard_data.get("summary") or {}
-        balance = dashboard_data.get("balance") or {}
-        lines.append("## Dashboard Snapshot")
-        lines.append(f"- ปัญหาระบบ: `{summary.get('problem_count', 0)}`")
-        lines.append(f"- ยอดเงินคงเหลือ: `{balance.get('cash_balance') or balance.get('cash') or balance.get('buying_power') or '-'}`")
-        lines.append(f"- หุ้นที่ถืออยู่: `{summary.get('position_count', 0)}`")
-        lines.append(f"- ออเดอร์ที่เปิดอยู่: `{summary.get('open_order_count', 0)}`")
-        lines.append(f"- ประวัติการซื้อขาย: `{summary.get('trade_count', 0)}`")
-        lines.append("")
-        problems = dashboard_data.get("problems") or []
-        if problems:
-            lines.append("### ปัญหา / Alerts")
-            lines.append("| ระดับ | ประเภท | ข้อความ | เวลา |")
-            lines.append("|---|---|---|---|")
-            for item in problems[:10]:
-                lines.append(f"| {item.get('severity', '-')} | {item.get('alert_type', '-')} | {item.get('message', '-')} | {item.get('created_at', '-')} |")
-            lines.append("")
-
-    lines.append("## Request")
-    lines.append("```json")
-    lines.append(json.dumps(report.get("request"), ensure_ascii=False, indent=2))
-    lines.append("```")
-    lines.append("")
-
-    if response.get("status") == "error":
-        lines.append("## Error")
-        lines.append("```json")
-        lines.append(json.dumps(response, ensure_ascii=False, indent=2))
-        lines.append("```")
-    elif data.get("mode") == "portfolio_allocation" or data.get("selected_positions") is not None:
-        render_portfolio_section(lines, data)
-        render_ranked(lines, data.get("ranked_candidates") or [])
-    else:
-        winner = data.get("winner") or {}
-        execution = data.get("execution") or {}
-        trade_decision = data.get("trade_decision")
-        lines.append("## Winner")
-        lines.append(f"- Symbol: `{winner.get('symbol', '-')}`")
-        lines.append(f"- Verdict: {th_verdict(winner.get('final_verdict', 'unknown'))}")
-        lines.append(f"- Final Opportunity Score: `{score(winner, 'final_opportunity_score')}`")
-        lines.append(f"- Execution: {th_execution(execution.get('status', 'unknown'))}")
-        lines.append(f"- Execution Reason: {execution.get('reason', '-')}")
-        lines.append("")
-        render_ranked(lines, data.get("ranked_candidates") or [])
-        lines.append("## Trade Decision")
-        lines.append("```json")
-        lines.append(json.dumps(trade_decision, ensure_ascii=False, indent=2, default=str))
-        lines.append("```")
-
+def render_broker_snapshot(lines: List[str], snapshot: Dict[str, Any]) -> None:
+    if not snapshot:
+        return
     account = unwrap_data(snapshot.get("account")) or {}
     orders = unwrap_data(snapshot.get("orders")) or []
     positions = unwrap_data(snapshot.get("positions")) or []
-    lines.append("")
     lines.append("## Broker Snapshot")
-    lines.append(f"- Account Status: `{account.get('status', '-') if isinstance(account, dict) else '-'}`")
-    lines.append(f"- Equity: `{account.get('equity', '-') if isinstance(account, dict) else '-'}`")
-    lines.append(f"- Cash: `{account.get('cash', '-') if isinstance(account, dict) else '-'}`")
-    lines.append(f"- Buying Power: `{account.get('buying_power', '-') if isinstance(account, dict) else '-'}`")
+    if isinstance(account, dict):
+        lines.append(f"- Account Status: `{account.get('status', '-')}`")
+        lines.append(f"- Equity: `{account.get('equity', '-')}`")
+        lines.append(f"- Cash: `{account.get('cash', '-')}`")
+        lines.append(f"- Buying Power: `{account.get('buying_power', '-')}`")
     lines.append(f"- Open Orders: `{len(orders) if isinstance(orders, list) else '-'}`")
     lines.append(f"- Positions: `{len(positions) if isinstance(positions, list) else '-'}`")
     lines.append("")
@@ -409,11 +368,65 @@ def main() -> int:
     lines.append(json.dumps(snapshot, ensure_ascii=False, indent=2, default=str))
     lines.append("```")
 
-    Path("reports/dashboard-data.json").write_text(json.dumps(dashboard, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
-    Path("reports/hourly-auto-trading-report.md").write_text("\n".join(lines), encoding="utf-8")
-    print("\n".join(lines))
-    return 1 if response.get("status") == "error" else 0
+
+def render_dashboard(lines: List[str], dashboard: Dict[str, Any]) -> None:
+    if not dashboard:
+        return
+    data = unwrap_data(dashboard) or {}
+    if not isinstance(data, dict):
+        return
+    lines.append("## Dashboard Snapshot")
+    lines.append(f"- ปัญหาระบบ: `{len(data.get('alerts') or [])}`")
+    account = data.get("account") or {}
+    if account:
+        lines.append(f"- ยอดเงินคงเหลือ: `{account.get('cash_balance', account.get('cash', '-'))}`")
+    lines.append(f"- หุ้นที่ถืออยู่: `{len(data.get('positions') or [])}`")
+    lines.append(f"- ออเดอร์ที่เปิดอยู่: `{len(data.get('open_orders') or [])}`")
+    lines.append(f"- ประวัติการซื้อขาย: `{len(data.get('trade_history') or [])}`")
+    lines.append("")
+    alerts = data.get("alerts") or []
+    if alerts:
+        lines.append("### ปัญหา / Alerts")
+        lines.append("| ระดับ | ประเภท | ข้อความ | เวลา |")
+        lines.append("|---|---|---|---|")
+        for alert in alerts:
+            lines.append(f"| {alert.get('severity', '-')} | {alert.get('type', '-')} | {alert.get('message', '-')} | {alert.get('timestamp', '-')} |")
+        lines.append("")
+
+
+def main() -> int:
+    report_path = Path("reports/hourly-auto-trading-report.json")
+    output_path = Path("reports/hourly-auto-trading-report.md")
+    if not report_path.exists():
+        print(f"missing {report_path}", file=sys.stderr)
+        return 1
+
+    raw = json.loads(report_path.read_text())
+    response = unwrap_data(raw.get("response") or {}) or {}
+    if isinstance(response, dict) and "data" in response:
+        response = response.get("data") or {}
+    lines: List[str] = []
+    lines.append("# รายงานระบบเทรดอัตโนมัติรายชั่วโมง")
+    lines.append("")
+    lines.append(f"Generated at UTC: `{raw.get('generated_at', '-')}`")
+    lines.append(f"Mode: `{raw.get('mode', '-')}`")
+    lines.append(f"Broker Mode: `{raw.get('broker_mode', '-')}`")
+    lines.append(f"Flow: `{raw.get('flow', '-')}`")
+    lines.append("")
+    render_dashboard(lines, raw.get("dashboard_data") or {})
+    lines.append("## Request")
+    lines.append("```json")
+    lines.append(json.dumps(raw.get("request") or {}, ensure_ascii=False, indent=2, default=str))
+    lines.append("```")
+    lines.append("")
+    if isinstance(response, dict):
+        render_portfolio_section(lines, response)
+        render_ranked_candidates(lines, response)
+    render_broker_snapshot(lines, raw.get("broker_snapshot") or {})
+    output_path.write_text("\n".join(lines), encoding="utf-8")
+    print(output_path.read_text(encoding="utf-8"))
+    return 0
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    raise SystemExit(main())
