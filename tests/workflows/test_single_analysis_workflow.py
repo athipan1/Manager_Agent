@@ -50,7 +50,7 @@ async def fake_fetch_context_value(db_client, account_id, correlation_id):
     return Decimal("0")
 
 
-async def fake_fetch_session_risk_context(db_client, account_id, symbol, correlation_id):
+async def fake_fetch_session_risk_context(db_client, account_id, symbol, correlation_id, **kwargs):
     return {"trades_today": 0}
 
 
