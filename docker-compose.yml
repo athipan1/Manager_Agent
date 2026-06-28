@@ -33,7 +33,7 @@ services:
       DATABASE_AGENT_URL: http://database-agent:8004
       RISK_AGENT_URL: http://risk-agent:8007
       BACKTEST_AGENT_URL: http://backtest-agent:8016
-      BACKTEST_AGENT_ENABLED: ${BACKTEST_AGENT_ENABLED:-true}
+      BACKTEST_AGENT_ENABLED: ${BACKTEST_AGENT_ENABLED:-false}
       PERFORMANCE_AGENT_URL: http://performance-agent:8013
       PERFORMANCE_SESSION_RISK_ENABLED: ${PERFORMANCE_SESSION_RISK_ENABLED:-true}
       PERFORMANCE_SESSION_RISK_REQUIRED: ${PERFORMANCE_SESSION_RISK_REQUIRED:-false}
@@ -78,8 +78,6 @@ services:
       database-agent:
         condition: service_healthy
       risk-agent:
-        condition: service_healthy
-      backtest-agent:
         condition: service_healthy
       performance-agent:
         condition: service_healthy
@@ -203,6 +201,8 @@ services:
       PYTHONPATH: /app
 
   backtest-agent:
+    profiles:
+      - backtest
     image: python:3.11-slim
     restart: always
     working_dir: /app
