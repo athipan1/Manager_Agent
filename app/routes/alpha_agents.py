@@ -8,6 +8,7 @@ from fastapi import APIRouter
 
 from ..alpha_agent_client import build_alpha_advisory, check_alpha_health, recommend_market_strategy
 from ..contracts import StandardAgentResponse
+from ..regime_backtest_compare_service import run_regime_backtest_compare
 from ..regime_backtest_planner import build_regime_backtest_plan
 from ..workflows.single_analysis_workflow import manager_metadata
 
@@ -134,4 +135,34 @@ async def alpha_regime_backtest_plan(payload: Dict[str, Any]) -> StandardAgentRe
             data={"enabled": True, "market_strategy": None, "plan": None},
             metadata=_metadata(correlation_id),
             error={"regime_backtest_plan": str(exc)},
+        )
+
+
+@router.post("/regime-backtest-compare", response_model=StandardAgentResponse)
+async def alpha_regime_backtest_compare(payload: Dict[str, Any]) -> StandardAgentResponse:
+    """Run Backtest_Agent /backtest/compare from Market_Regime_Agent strategy guidance.
+
+    This endpoint is validation-only. It never calls Execution_Agent and never places orders.
+    """
+    correlation_id = str(uuid.uuid4())
+    try:
+        data = await run_regime_backtest_compare(payload, correlation_id)
+        return StandardAgentResponse(
+            status="success",
+            agent_type="manager-agent",
+            version="1.0.0",
+            timestamp=utc_now(),
+            data=data,
+            metadata=_metadata(correlation_id),
+            error=None,
+        )
+    except Exception as exc:
+        return StandardAgentResponse(
+            status="error",
+            agent_type="manager-agent",
+            version="1.0.0",
+            timestamp=utc_now(),
+            data={"enabled": True, "market_strategy": None, "plan": None, "backtest_compare": None, "executed": False},
+            metadata=_metadata(correlation_id),
+            error={"regime_backtest_compare": str(exc)},
         )
