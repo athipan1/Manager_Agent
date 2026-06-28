@@ -252,7 +252,7 @@ async def run_single_analysis_flow(
                 db_client=db_client,
                 account_id=account_id,
                 symbol=ticker,
-                initial_equity=float(balance.cash),
+                initial_equity=float(balance.cash_balance),
                 correlation_id=correlation_id,
             )
 
