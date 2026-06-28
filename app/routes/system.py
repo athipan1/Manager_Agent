@@ -17,6 +17,7 @@ from ..config_manager import config_manager
 from ..contracts import StandardAgentResponse
 from ..database_client import DatabaseAgentClient
 from ..logger import report_logger
+from ..risk_agent_client import check_risk_agent_health_async
 from ..stock_preflight import run_stock_live_preflight
 from ..workflows.single_analysis_workflow import manager_metadata
 
@@ -50,16 +51,21 @@ async def stock_live_preflight(account_id: Union[int, str] = None, sample_symbol
 async def health_check():
     """Check Manager_Agent downstream dependency health."""
     is_healthy = True
+    correlation_id = str(uuid.uuid4())
     downstream_services = {
         "database_agent": {
             "status": "healthy",
             "details": "Connected successfully.",
-        }
+        },
+        "risk_agent": {
+            "status": "healthy",
+            "details": "Connected successfully.",
+        },
     }
 
     try:
         async with DatabaseAgentClient() as db_client:
-            await db_client.health(correlation_id=str(uuid.uuid4()))
+            await db_client.health(correlation_id=correlation_id)
     except Exception as exc:
         is_healthy = False
         downstream_services["database_agent"] = {
@@ -68,13 +74,24 @@ async def health_check():
         }
         report_logger.warning(f"Health check failed: Database Agent connection error: {exc}")
 
+    try:
+        risk_health = await check_risk_agent_health_async(correlation_id=correlation_id)
+        downstream_services["risk_agent"]["details"] = risk_health
+    except Exception as exc:
+        is_healthy = False
+        downstream_services["risk_agent"] = {
+            "status": "unhealthy",
+            "details": f"Connection failed: {str(exc)}",
+        }
+        report_logger.warning(f"Health check failed: Risk Agent connection error: {exc}")
+
     content = StandardAgentResponse(
         status="success" if is_healthy else "error",
         agent_type="manager-agent",
         version="1.0.0",
         timestamp=utc_now(),
         data={"dependencies": downstream_services},
-        metadata=manager_metadata(),
+        metadata=manager_metadata(risk_context_loaded=downstream_services["database_agent"]["status"] == "healthy"),
     )
     return JSONResponse(
         status_code=status.HTTP_200_OK if is_healthy else status.HTTP_503_SERVICE_UNAVAILABLE,
