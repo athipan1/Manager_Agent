@@ -1,0 +1,97 @@
+name: Backtest Run Smoke
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  backtest-run-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout Manager_Agent
+        uses: actions/checkout@v4
+        with:
+          path: Manager_Agent
+
+      - name: Checkout Backtest_Agent
+        uses: actions/checkout@v4
+        with:
+          repository: athipan1/Backtest_Agent
+          path: Backtest_Agent
+
+      - name: Validate compose profile
+        working-directory: Manager_Agent
+        run: docker compose --profile backtest config
+
+      - name: Start Backtest Agent
+        working-directory: Manager_Agent
+        run: docker compose --profile backtest up --build -d backtest-agent
+
+      - name: Wait for Backtest Agent
+        run: |
+          for i in {1..60}; do
+            if curl -fsS http://localhost:8016/health >/dev/null; then
+              echo "Backtest Agent is reachable."
+              exit 0
+            fi
+            docker compose --project-directory Manager_Agent --profile backtest ps || true
+            sleep 5
+          done
+          docker compose --project-directory Manager_Agent --profile backtest logs --tail=160 backtest-agent || true
+          exit 1
+
+      - name: Run Backtest smoke request
+        run: |
+          cat > /tmp/backtest_payload.json <<'JSON'
+          {
+            "symbols": ["AAPL"],
+            "initial_equity": 100000,
+            "strategy": "sma_crossover",
+            "fast_window": 2,
+            "slow_window": 3,
+            "risk_per_trade": 0.01,
+            "max_position_pct": 0.10,
+            "fee_bps": 1,
+            "slippage_bps": 1,
+            "use_risk_agent": true,
+            "bars": {
+              "AAPL": [
+                {"timestamp":"2026-01-01T00:00:00Z","open":100,"high":101,"low":99,"close":100,"volume":1000},
+                {"timestamp":"2026-01-02T00:00:00Z","open":100,"high":102,"low":99,"close":101,"volume":1000},
+                {"timestamp":"2026-01-03T00:00:00Z","open":101,"high":103,"low":100,"close":102,"volume":1000},
+                {"timestamp":"2026-01-04T00:00:00Z","open":102,"high":104,"low":101,"close":103,"volume":1000},
+                {"timestamp":"2026-01-05T00:00:00Z","open":103,"high":105,"low":102,"close":104,"volume":1000},
+                {"timestamp":"2026-01-06T00:00:00Z","open":104,"high":105,"low":100,"close":101,"volume":1000},
+                {"timestamp":"2026-01-07T00:00:00Z","open":101,"high":102,"low":97,"close":98,"volume":1000},
+                {"timestamp":"2026-01-08T00:00:00Z","open":98,"high":99,"low":95,"close":96,"volume":1000}
+              ]
+            }
+          }
+          JSON
+          curl -f -X POST http://localhost:8016/backtest/run -H "Content-Type: application/json" --data-binary @/tmp/backtest_payload.json | tee /tmp/backtest_run_response.json
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          response = json.loads(Path('/tmp/backtest_run_response.json').read_text())
+          assert response.get('status') == 'success', response
+          data = response.get('data') or {}
+          assert 'metrics' in data, data
+          assert 'equity_curve' in data, data
+          print('Backtest run smoke passed.')
+          PY
+
+      - name: Show Backtest logs on failure
+        if: failure()
+        working-directory: Manager_Agent
+        run: |
+          docker compose --profile backtest ps || true
+          docker compose --profile backtest logs --tail=160 backtest-agent || true
+
+      - name: Stop stack
+        if: always()
+        working-directory: Manager_Agent
+        run: docker compose --profile backtest down -v || true
