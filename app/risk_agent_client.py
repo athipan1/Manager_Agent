@@ -37,7 +37,33 @@ def _record_failure() -> None:
         _circuit_open_until = time.monotonic() + RISK_AGENT_COOLDOWN_SECONDS
 
 
-async def evaluate_risk_async(payload: Dict[str, Any]) -> Dict[str, Any]:
+def _correlation_headers(correlation_id: str | None = None) -> Dict[str, str]:
+    return {"X-Correlation-ID": correlation_id} if correlation_id else {}
+
+
+async def check_risk_agent_health_async(correlation_id: str | None = None) -> Dict[str, Any]:
+    """Return Risk_Agent health without applying StandardAgentResponse validation.
+
+    Risk_Agent deliberately uses its own lightweight response shapes for risk
+    checks, so Manager keeps this client tolerant and only requires that /health
+    is reachable and reports a non-error status.
+    """
+    if _circuit_is_open():
+        raise RiskAgentCircuitOpen("Risk_Agent circuit breaker is open; health is unavailable.")
+
+    try:
+        async with httpx.AsyncClient(base_url=RISK_AGENT_URL, timeout=RISK_AGENT_TIMEOUT) as client:
+            response = await client.get("/health", headers=_correlation_headers(correlation_id))
+            response.raise_for_status()
+            result = response.json()
+            _record_success()
+            return result
+    except Exception:
+        _record_failure()
+        raise
+
+
+async def evaluate_risk_async(payload: Dict[str, Any], correlation_id: str | None = None) -> Dict[str, Any]:
     """
     Evaluate risk through Risk_Agent using httpx.AsyncClient.
 
@@ -49,6 +75,7 @@ async def evaluate_risk_async(payload: Dict[str, Any]) -> Dict[str, Any]:
 
     try:
         async with httpx.AsyncClient(base_url=RISK_AGENT_URL, timeout=RISK_AGENT_TIMEOUT) as client:
+            headers = _correlation_headers(correlation_id)
             sizing_payload = {
                 "symbol": payload["symbol"],
                 "side": payload["side"],
@@ -56,7 +83,7 @@ async def evaluate_risk_async(payload: Dict[str, Any]) -> Dict[str, Any]:
                 "protection_price": payload["protection_price"],
                 "equity": payload["equity"],
             }
-            sizing_response = await client.post("/risk/position-size", json=sizing_payload)
+            sizing_response = await client.post("/risk/position-size", json=sizing_payload, headers=headers)
             sizing_response.raise_for_status()
             sizing = sizing_response.json()
             if sizing.get("status") != "success":
@@ -67,7 +94,7 @@ async def evaluate_risk_async(payload: Dict[str, Any]) -> Dict[str, Any]:
             requested_quantity = int(payload.get("requested_quantity") or 0)
             payload["requested_quantity"] = min(requested_quantity, safe_quantity) if requested_quantity else safe_quantity
 
-            check_response = await client.post("/risk/check", json=payload)
+            check_response = await client.post("/risk/check", json=payload, headers=headers)
             check_response.raise_for_status()
             result = check_response.json()
             _record_success()
@@ -95,7 +122,16 @@ def _run_async_in_thread(coro) -> Dict[str, Any]:
     return result
 
 
-def evaluate_risk(payload: Dict[str, Any]) -> Dict[str, Any]:
+def check_risk_agent_health(correlation_id: str | None = None) -> Dict[str, Any]:
+    """Backward-compatible sync wrapper for Risk_Agent /health."""
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return asyncio.run(check_risk_agent_health_async(correlation_id))
+    return _run_async_in_thread(check_risk_agent_health_async(correlation_id))
+
+
+def evaluate_risk(payload: Dict[str, Any], correlation_id: str | None = None) -> Dict[str, Any]:
     """
     Backward-compatible sync wrapper for existing Manager code paths.
 
@@ -106,5 +142,5 @@ def evaluate_risk(payload: Dict[str, Any]) -> Dict[str, Any]:
     try:
         asyncio.get_running_loop()
     except RuntimeError:
-        return asyncio.run(evaluate_risk_async(payload))
-    return _run_async_in_thread(evaluate_risk_async(payload))
+        return asyncio.run(evaluate_risk_async(payload, correlation_id))
+    return _run_async_in_thread(evaluate_risk_async(payload, correlation_id))
