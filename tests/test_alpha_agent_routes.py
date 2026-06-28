@@ -83,3 +83,46 @@ def test_alpha_market_strategy_route_returns_error_payload(monkeypatch):
     assert payload["status"] == "error"
     assert payload["data"]["recommendation"] is None
     assert "market_strategy" in payload["error"]
+
+
+def test_alpha_regime_backtest_plan_route(monkeypatch):
+    async def fake_recommend_market_strategy(payload, correlation_id):
+        return {
+            "enabled": True,
+            "recommendation": {
+                "symbol": payload["symbol"],
+                "regime": "bull",
+                "recommended_strategy": "trend_following",
+                "position_size_multiplier": 0.5,
+            },
+        }
+
+    monkeypatch.setattr("app.routes.alpha_agents.recommend_market_strategy", fake_recommend_market_strategy)
+
+    response = client.post(
+        "/alpha/regime-backtest-plan",
+        json={
+            "market_regime": {"symbol": "SPY", "price": 550, "sma_50": 530, "sma_200": 500},
+            "backtest": {
+                "symbols": ["AAPL"],
+                "initial_equity": 100000,
+                "strategy": "sma_crossover",
+                "fast_window": 2,
+                "slow_window": 3,
+                "risk_per_trade": 0.01,
+                "max_position_pct": 0.10,
+                "fee_bps": 1,
+                "slippage_bps": 1,
+                "use_risk_agent": True,
+                "bars": {"AAPL": []},
+            },
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "success"
+    plan = payload["data"]["plan"]
+    assert plan["action"] == "compare"
+    assert plan["backtest_compare_payload"]["max_position_pct"] == 0.05
+    assert plan["backtest_compare_payload"]["candidates"][0]["strategy"] == "trend_following"
