@@ -284,11 +284,7 @@ jobs:
 
         run: |
 
-          curl -f -X POST http://localhost:8003/scan \
-
-            -H "Content-Type: application/json" \
-
-            -d '{"symbols":["AAPL","MSFT"],"screener":"america","exchange":"NASDAQ"}'
+          curl -f -X POST http://localhost:8003/scan -H "Content-Type: application/json" -d '{"symbols":["AAPL","MSFT"],"screener":"america","exchange":"NASDAQ"}'
 
       - name: Test Backtest Agent
 
@@ -300,23 +296,15 @@ jobs:
 
         run: |
 
-          curl -f -X POST http://localhost:8013/performance/session-risk \
-
-            -H "Content-Type: application/json" \
-
-            -d '{"account_id":1,"symbol":"AAPL","equity":100000,"fills":[]}'
+          curl -f -X POST http://localhost:8013/performance/session-risk -H "Content-Type: application/json" -d '{"account_id":1,"symbol":"AAPL","equity":100000,"fills":[]}'
 
       - name: Test Execution Agent broker reconciliation
 
         run: |
 
-          curl -f -X POST 'http://localhost:8006/broker/reconcile?account_id=1&push_to_database=true' \
+          curl -f -X POST 'http://localhost:8006/broker/reconcile?account_id=1&push_to_database=true' -H "X-API-KEY: dev_execution_key"
 
-            -H "X-API-KEY: dev_execution_key"
-
-          curl -f 'http://localhost:8004/broker-sync/status?account_id=1' \
-
-            -H "X-API-KEY: dev_database_key"
+          curl -f 'http://localhost:8004/broker-sync/status?account_id=1' -H "X-API-KEY: dev_database_key"
 
       - name: Show logs on failure
 
