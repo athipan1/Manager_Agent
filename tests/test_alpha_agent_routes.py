@@ -126,3 +126,56 @@ def test_alpha_regime_backtest_plan_route(monkeypatch):
     assert plan["action"] == "compare"
     assert plan["backtest_compare_payload"]["max_position_pct"] == 0.05
     assert plan["backtest_compare_payload"]["candidates"][0]["strategy"] == "trend_following"
+
+
+def test_alpha_regime_backtest_compare_route(monkeypatch):
+    async def fake_recommend_market_strategy(payload, correlation_id):
+        return {
+            "enabled": True,
+            "recommendation": {
+                "symbol": payload["symbol"],
+                "regime": "bull",
+                "recommended_strategy": "trend_following",
+                "position_size_multiplier": 0.5,
+            },
+        }
+
+    async def fake_run_regime_backtest_compare(*, market_strategy, backtest_payload, correlation_id):
+        return {
+            "action": "compare",
+            "market_strategy": market_strategy,
+            "plan": {
+                "action": "compare",
+                "backtest_compare_payload": {
+                    "symbols": backtest_payload["symbols"],
+                    "max_position_pct": 0.05,
+                    "candidates": [{"strategy": "trend_following"}],
+                },
+            },
+            "compare_result": {
+                "ranked_results": [{"rank": 1, "strategy": "trend_following"}],
+                "best": {"strategy": "trend_following"},
+            },
+        }
+
+    monkeypatch.setattr("app.routes.alpha_agents.recommend_market_strategy", fake_recommend_market_strategy)
+    monkeypatch.setattr("app.routes.alpha_agents.run_regime_backtest_compare", fake_run_regime_backtest_compare)
+
+    response = client.post(
+        "/alpha/regime-backtest-compare",
+        json={
+            "market_regime": {"symbol": "SPY", "price": 550, "sma_50": 530, "sma_200": 500},
+            "backtest": {
+                "symbols": ["AAPL"],
+                "initial_equity": 100000,
+                "max_position_pct": 0.10,
+                "bars": {"AAPL": []},
+            },
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "success"
+    assert payload["data"]["action"] == "compare"
+    assert payload["data"]["compare_result"]["best"]["strategy"] == "trend_following"
