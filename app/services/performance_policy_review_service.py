@@ -6,6 +6,7 @@ persists them as advisory audit metadata for human review.
 
 from __future__ import annotations
 
+import uuid
 from typing import Any, Dict, Optional, Union
 
 from .. import config
@@ -18,6 +19,7 @@ from .serialization_service import jsonable
 PERFORMANCE_DATABASE_SUMMARY_ENDPOINT = "/performance/trade-plans/database-summary"
 LEARNING_PERFORMANCE_ENDPOINT = "/learn/performance"
 CURATOR_PERFORMANCE_POLICY_ENDPOINT = "/curate/performance-policy"
+DATABASE_POLICY_REVIEW_ENDPOINT = "/policy-reviews"
 
 
 def current_policy_snapshot() -> Dict[str, Any]:
@@ -91,6 +93,37 @@ def curator_payload(
     }
 
 
+def policy_review_audit_payload(
+    *,
+    account_id: Union[int, str],
+    symbol: Optional[str],
+    correlation_id: str,
+    policy_review: Dict[str, Any],
+    policy_review_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Build Database_Agent /policy-reviews payload."""
+    curated_policy = policy_review.get("curated_policy") or {}
+    return {
+        "policy_review_id": policy_review_id or f"policy-review-{uuid.uuid4()}",
+        "account_id": str(account_id),
+        "symbol": symbol.upper() if symbol else None,
+        "correlation_id": correlation_id,
+        "source": "manager-agent",
+        "status": curated_policy.get("curation_state") or policy_review.get("status") or "created",
+        "advisory_only": True,
+        "auto_apply": False,
+        "performance_summary": policy_review.get("performance_summary") or {},
+        "learning_result": policy_review.get("learning_result") or {},
+        "curated_policy": curated_policy,
+        "metadata": {
+            "flow": "performance_policy_review",
+            "manager_status": policy_review.get("status"),
+            "advisory_only": True,
+            "auto_apply": False,
+        },
+    }
+
+
 async def _get_performance_summary(
     *,
     account_id: Union[int, str],
@@ -160,6 +193,39 @@ async def _curate_learning_result(
         return standard_response.data or {}
 
 
+async def persist_policy_review_audit(
+    *,
+    db_client: Optional[DatabaseAgentClient],
+    account_id: Union[int, str],
+    symbol: Optional[str],
+    correlation_id: str,
+    policy_review: Dict[str, Any],
+) -> Optional[Dict[str, Any]]:
+    """Persist advisory policy review to Database_Agent /policy-reviews."""
+    if db_client is None:
+        return None
+    payload = policy_review_audit_payload(
+        account_id=account_id,
+        symbol=symbol,
+        correlation_id=correlation_id,
+        policy_review=policy_review,
+    )
+    try:
+        response = await db_client._post(
+            DATABASE_POLICY_REVIEW_ENDPOINT,
+            correlation_id,
+            json_data=payload,
+        )
+        standard_response = db_client.validate_standard_response(response)
+        record = standard_response.data or {}
+        return jsonable(record)
+    except Exception as exc:
+        report_logger.warning(
+            f"Failed to persist performance policy review audit: {exc}, correlation_id={correlation_id}"
+        )
+        return None
+
+
 async def persist_policy_review_signal(
     *,
     db_client: Optional[DatabaseAgentClient],
@@ -168,7 +234,11 @@ async def persist_policy_review_signal(
     correlation_id: str,
     policy_review: Dict[str, Any],
 ) -> None:
-    """Persist advisory policy review metadata without blocking the main workflow."""
+    """Persist advisory policy review metadata without blocking the main workflow.
+
+    Kept as a compatibility fallback while Database_Agent /policy-reviews becomes
+    the canonical policy review audit store.
+    """
     if db_client is None:
         return
     try:
@@ -229,13 +299,24 @@ async def run_performance_policy_review(
             "learning_result": learning_result,
             "curated_policy": curated_policy,
         }
-        await persist_policy_review_signal(
+        audit_record = await persist_policy_review_audit(
             db_client=db_client,
             account_id=account_id,
             symbol=symbol,
             correlation_id=correlation_id,
             policy_review=result,
         )
+        if audit_record:
+            result["policy_review_audit_id"] = audit_record.get("policy_review_id")
+            result["policy_review_audit"] = audit_record
+        else:
+            await persist_policy_review_signal(
+                db_client=db_client,
+                account_id=account_id,
+                symbol=symbol,
+                correlation_id=correlation_id,
+                policy_review=result,
+            )
         return result
     except Exception as exc:
         report_logger.warning(
