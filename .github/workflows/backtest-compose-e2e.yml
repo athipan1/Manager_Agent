@@ -1,0 +1,47 @@
+name: Backtest Compose E2E
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  backtest-compose-e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout Manager_Agent
+        uses: actions/checkout@v4
+        with:
+          path: Manager_Agent
+
+      - name: Checkout Backtest_Agent
+        uses: actions/checkout@v4
+        with:
+          repository: athipan1/Backtest_Agent
+          path: Backtest_Agent
+
+      - name: Validate compose profile
+        working-directory: Manager_Agent
+        run: docker compose --profile backtest config
+
+      - name: Start backtest service
+        working-directory: Manager_Agent
+        run: docker compose --profile backtest up --build -d backtest-agent
+
+      - name: Check backtest health
+        run: |
+          for i in {1..40}; do
+            curl -fsS http://localhost:8016/health && exit 0
+            docker compose -f Manager_Agent/docker-compose.yml --profile backtest ps
+            sleep 5
+          done
+          docker compose -f Manager_Agent/docker-compose.yml --profile backtest logs --tail=120 backtest-agent || true
+          exit 1
+
+      - name: Stop stack
+        if: always()
+        working-directory: Manager_Agent
+        run: docker compose --profile backtest down -v || true
