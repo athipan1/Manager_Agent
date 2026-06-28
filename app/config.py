@@ -69,14 +69,17 @@ MARKET_REGIME_AGENT_ENABLED = _env_bool("MARKET_REGIME_AGENT_ENABLED", True)
 PORTFOLIO_AGENT_ENABLED = _env_bool("PORTFOLIO_AGENT_ENABLED", True)
 PROFIT_AGENT_ENABLED = _env_bool("PROFIT_AGENT_ENABLED", True)
 PERFORMANCE_AGENT_ENABLED = _env_bool("PERFORMANCE_AGENT_ENABLED", True)
+POLICY_REVIEW_FLOW_ENABLED = _env_bool("POLICY_REVIEW_FLOW_ENABLED", True)
 MARKET_REGIME_AGENT_URL = os.getenv("MARKET_REGIME_AGENT_URL", "http://market-regime-agent:8014")
 PORTFOLIO_AGENT_URL = os.getenv("PORTFOLIO_AGENT_URL", "http://portfolio-agent:8012")
 PROFIT_AGENT_URL = os.getenv("PROFIT_AGENT_URL", "http://profit-agent:8011")
 PERFORMANCE_AGENT_URL = os.getenv("PERFORMANCE_AGENT_URL", "http://performance-agent:8013")
+CURATOR_AGENT_URL = os.getenv("CURATOR_AGENT_URL", "http://curator-agent:8015")
 MARKET_REGIME_AGENT_TIMEOUT = int(os.getenv("MARKET_REGIME_AGENT_TIMEOUT", 10))
 PORTFOLIO_AGENT_TIMEOUT = int(os.getenv("PORTFOLIO_AGENT_TIMEOUT", 10))
 PROFIT_AGENT_TIMEOUT = int(os.getenv("PROFIT_AGENT_TIMEOUT", 10))
 PERFORMANCE_AGENT_TIMEOUT = int(os.getenv("PERFORMANCE_AGENT_TIMEOUT", 10))
+CURATOR_AGENT_TIMEOUT = int(os.getenv("CURATOR_AGENT_TIMEOUT", 10))
 
 # Broker reconciliation guardrails. Manager asks Execution_Agent to pull broker truth
 # and push it into Database_Agent before order submission and before DB context reads.
