@@ -3,13 +3,23 @@ import pytest
 from app.backtest_agent_client import BacktestAgentClient
 
 
+def standard_response(data):
+    return {
+        "status": "success",
+        "agent_type": "backtest-agent",
+        "version": "0.1.0",
+        "timestamp": "2026-01-01T00:00:00Z",
+        "data": data,
+    }
+
+
 @pytest.mark.asyncio
 async def test_backtest_client_calls_run_endpoint(monkeypatch):
     calls = []
 
     async def fake_post(self, path, correlation_id, json_data):
         calls.append((path, correlation_id, json_data))
-        return {"status": "success", "data": {"ok": True}}
+        return standard_response({"ok": True})
 
     monkeypatch.setattr(BacktestAgentClient, "_post", fake_post)
 
@@ -26,7 +36,7 @@ async def test_backtest_client_calls_compare_endpoint(monkeypatch):
 
     async def fake_post(self, path, correlation_id, json_data):
         calls.append(path)
-        return {"status": "success", "data": {"ranked_results": []}}
+        return standard_response({"ranked_results": []})
 
     monkeypatch.setattr(BacktestAgentClient, "_post", fake_post)
 
@@ -43,7 +53,7 @@ async def test_backtest_client_calls_walk_forward_and_report(monkeypatch):
 
     async def fake_post(self, path, correlation_id, json_data):
         calls.append(path)
-        return {"status": "success", "data": {"ok": True}}
+        return standard_response({"ok": True})
 
     monkeypatch.setattr(BacktestAgentClient, "_post", fake_post)
 
@@ -57,7 +67,7 @@ async def test_backtest_client_calls_walk_forward_and_report(monkeypatch):
 @pytest.mark.asyncio
 async def test_backtest_client_calls_health(monkeypatch):
     async def fake_get(self, path, correlation_id):
-        return {"status": "success", "data": {"service": "backtest-agent"}}
+        return standard_response({"service": "backtest-agent"})
 
     monkeypatch.setattr(BacktestAgentClient, "_get", fake_get)
 
