@@ -203,15 +203,13 @@ services:
   backtest-agent:
     profiles:
       - backtest
-    image: python:3.11-slim
+    build:
+      context: ../Backtest_Agent
+      dockerfile: Dockerfile
+    image: painaidee/backtest-agent:latest
     restart: always
-    working_dir: /app
     ports:
       - "8016:8016"
-    command: >
-      sh -c "pip install --no-cache-dir -r requirements.txt && uvicorn app.main:app --host 0.0.0.0 --port 8016"
-    volumes:
-      - ../Backtest_Agent:/app
     healthcheck:
       test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8016/health', timeout=3)\" || exit 1"]
       interval: 10s
