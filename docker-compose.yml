@@ -31,6 +31,7 @@ services:
       FUNDAMENTAL_AGENT_URL: http://fundamental-agent:8001
       SCANNER_AGENT_URL: http://scanner-agent:8003
       DATABASE_AGENT_URL: http://database-agent:8004
+      RISK_AGENT_URL: http://risk-agent:8007
       DATABASE_AGENT_API_KEY: dev_database_key
       AUTO_LEARNING_AGENT_URL: http://learning-agent:8005
       EXECUTION_AGENT_URL: http://execution-agent:8006
@@ -57,6 +58,9 @@ services:
       AGENT_CLIENT_BACKOFF_FACTOR: 0.5
       AGENT_CLIENT_FAILURE_THRESHOLD: 5
       AGENT_CLIENT_COOLDOWN_PERIOD: 30
+      RISK_AGENT_TIMEOUT: 10
+      RISK_AGENT_FAILURE_THRESHOLD: 3
+      RISK_AGENT_COOLDOWN_SECONDS: 30
       ASSET_BIASES: "{}"
     depends_on:
       technical-agent:
@@ -66,6 +70,8 @@ services:
       scanner-agent:
         condition: service_healthy
       database-agent:
+        condition: service_healthy
+      risk-agent:
         condition: service_healthy
       learning-agent:
         condition: service_healthy
@@ -153,6 +159,38 @@ services:
       ALPACA_SECRET_KEY: dev_alpaca_secret
     volumes:
       - ./data:/app/data
+
+  risk-agent:
+    build:
+      context: ../Risk_Agent
+      dockerfile: Dockerfile
+    image: painaidee/risk-agent:latest
+    restart: always
+    ports:
+      - "8007:8007"
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8007/health', timeout=3)\" || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    environment:
+      PORT: 8007
+      ASSET_CLASS: ${ASSET_CLASS:-stock}
+      STOCK_ONLY_MODE: ${STOCK_ONLY_MODE:-true}
+      ALLOW_SHORT_SELLING: ${ALLOW_SHORT_SELLING:-false}
+      ALLOW_FRACTIONAL_SHARES: ${ALLOW_FRACTIONAL_SHARES:-false}
+      MAX_POSITION_PCT: ${RISK_MAX_POSITION_PCT:-0.10}
+      MAX_TRADE_LOSS_PCT: ${RISK_MAX_TRADE_LOSS_PCT:-0.01}
+      MAX_TOTAL_EXPOSURE_PCT: ${RISK_MAX_TOTAL_EXPOSURE_PCT:-0.50}
+      MAX_MARGIN_MULTIPLIER: ${RISK_MAX_MARGIN_MULTIPLIER:-1.00}
+      MAX_DAILY_LOSS_PCT: ${RISK_MAX_DAILY_LOSS_PCT:-0.005}
+      MAX_WEEKLY_LOSS_PCT: ${RISK_MAX_WEEKLY_LOSS_PCT:-0.015}
+      MAX_CONSECUTIVE_LOSSES: ${RISK_MAX_CONSECUTIVE_LOSSES:-3}
+      MAX_TRADES_PER_DAY: ${RISK_MAX_TRADES_PER_DAY:-5}
+      MAX_SYMBOL_TRADES_PER_DAY: ${RISK_MAX_SYMBOL_TRADES_PER_DAY:-2}
+      EMERGENCY_HALT: ${RISK_EMERGENCY_HALT:-false}
+      PYTHONPATH: /app
 
   learning-agent:
     build:
