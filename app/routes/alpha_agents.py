@@ -6,7 +6,7 @@ from typing import Any, Dict
 
 from fastapi import APIRouter
 
-from ..alpha_agent_client import build_alpha_advisory, check_alpha_health
+from ..alpha_agent_client import build_alpha_advisory, check_alpha_health, recommend_market_strategy
 from ..contracts import StandardAgentResponse
 from ..workflows.single_analysis_workflow import manager_metadata
 
@@ -66,3 +66,30 @@ async def alpha_advisory(payload: Dict[str, Any]) -> StandardAgentResponse:
         metadata=_metadata(correlation_id),
         error=data.get("errors") or None,
     )
+
+
+@router.post("/market-strategy", response_model=StandardAgentResponse)
+async def alpha_market_strategy(payload: Dict[str, Any]) -> StandardAgentResponse:
+    """Ask Market_Regime_Agent which Backtest_Agent strategy should be favored."""
+    correlation_id = str(uuid.uuid4())
+    try:
+        data = await recommend_market_strategy(payload, correlation_id)
+        return StandardAgentResponse(
+            status="success",
+            agent_type="manager-agent",
+            version="1.0.0",
+            timestamp=utc_now(),
+            data=data,
+            metadata=_metadata(correlation_id),
+            error=None,
+        )
+    except Exception as exc:
+        return StandardAgentResponse(
+            status="error",
+            agent_type="manager-agent",
+            version="1.0.0",
+            timestamp=utc_now(),
+            data={"enabled": True, "recommendation": None},
+            metadata=_metadata(correlation_id),
+            error={"market_strategy": str(exc)},
+        )

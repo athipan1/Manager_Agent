@@ -20,6 +20,7 @@ from .config import (
     PROFIT_AGENT_URL,
 )
 from .resilient_client import ResilientAgentClient
+from .services.serialization_service import dict_or_empty
 
 
 @dataclass(frozen=True)
@@ -84,6 +85,27 @@ async def _health_alpha_agent(spec: AlphaAgentSpec, correlation_id: str) -> Dict
         response = await client._get("/health", correlation_id)
         validated = client.validate_standard_response(response)
         return validated.model_dump(mode="json")
+
+
+async def recommend_market_strategy(
+    request_payload: Dict[str, Any],
+    correlation_id: str,
+) -> Dict[str, Any]:
+    """Ask Market_Regime_Agent for the strategy best suited to the current regime."""
+    if not MARKET_REGIME_AGENT_ENABLED:
+        return {
+            "enabled": False,
+            "skipped": "MARKET_REGIME_AGENT_ENABLED is false",
+            "recommendation": None,
+        }
+
+    async with ResilientAgentClient(base_url=MARKET_REGIME_AGENT_URL, timeout=MARKET_REGIME_AGENT_TIMEOUT) as client:
+        response = await client._post("/market/strategy", correlation_id, request_payload)
+        validated = client.validate_standard_response(response)
+        return {
+            "enabled": True,
+            "recommendation": dict_or_empty(validated.data),
+        }
 
 
 async def build_alpha_advisory(
