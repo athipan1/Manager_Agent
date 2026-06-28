@@ -1,10 +1,7 @@
-from types import SimpleNamespace
-
 import pytest
 
 from app.services.performance_policy_review_service import (
     curator_payload,
-    current_policy_snapshot,
     learning_payload,
     performance_summary_params,
     persist_policy_review_signal,
