@@ -80,6 +80,9 @@ PORTFOLIO_AGENT_TIMEOUT = int(os.getenv("PORTFOLIO_AGENT_TIMEOUT", 10))
 PROFIT_AGENT_TIMEOUT = int(os.getenv("PROFIT_AGENT_TIMEOUT", 10))
 PERFORMANCE_AGENT_TIMEOUT = int(os.getenv("PERFORMANCE_AGENT_TIMEOUT", 10))
 CURATOR_AGENT_TIMEOUT = int(os.getenv("CURATOR_AGENT_TIMEOUT", 10))
+PERFORMANCE_SESSION_RISK_ENABLED = _env_bool("PERFORMANCE_SESSION_RISK_ENABLED", True)
+PERFORMANCE_SESSION_RISK_REQUIRED = _env_bool("PERFORMANCE_SESSION_RISK_REQUIRED", False)
+PERFORMANCE_SESSION_RISK_FILL_LIMIT = int(os.getenv("PERFORMANCE_SESSION_RISK_FILL_LIMIT", 500))
 
 # Broker reconciliation guardrails. Manager asks Execution_Agent to pull broker truth
 # and push it into Database_Agent before order submission and before DB context reads.

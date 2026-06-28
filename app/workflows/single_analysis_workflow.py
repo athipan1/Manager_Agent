@@ -153,7 +153,13 @@ async def run_single_analysis_flow(
             balance = await db_client.get_account_balance(account_id, correlation_id)
             positions = await db_client.get_positions(account_id, correlation_id)
             context_value = await fetch_context_value(db_client, account_id, correlation_id)
-            session_context = await fetch_session_risk_context(db_client, account_id, ticker, correlation_id)
+            session_context = await fetch_session_risk_context(
+                db_client,
+                account_id,
+                ticker,
+                correlation_id,
+                equity=balance.cash_balance if balance else None,
+            )
 
             analysis_result = await analyze_single_asset(ticker, correlation_id)
             if "error" in analysis_result:
