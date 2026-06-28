@@ -24,6 +24,7 @@ from ..resilient_client import AgentUnavailable
 from ..stock_guard import StockGuardError, validate_stock_scope
 from ..services.audit_service import audit_trade_decision, persist_signal
 from ..services.context_service import fetch_context_value, fetch_session_risk_context
+from ..services.performance_policy_review_service import run_performance_policy_review
 from ..services.trade_plan_builder import attach_trade_plan_to_decision
 from ..services.trade_plan_lifecycle_service import persist_trade_plan_created, persist_trade_plan_status
 from .analysis_workflow import analyze_single_asset
@@ -44,6 +45,7 @@ def manager_metadata(
     learning_delta_pending: bool = False,
     learning_delta_skipped_reason: Optional[str] = None,
     dry_run: bool = False,
+    policy_review: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """Build Manager response metadata, preserving the legacy response shape."""
     metadata = {
@@ -57,9 +59,12 @@ def manager_metadata(
         "learning_delta_applied": learning_delta_applied,
         "learning_delta_pending": learning_delta_pending,
         "dry_run": dry_run,
+        "policy_review_flow_enabled": config.POLICY_REVIEW_FLOW_ENABLED,
     }
     if learning_delta_skipped_reason:
         metadata["learning_delta_skipped_reason"] = learning_delta_skipped_reason
+    if policy_review is not None:
+        metadata["policy_review"] = policy_review
     return metadata
 
 
@@ -243,6 +248,14 @@ async def run_single_analysis_flow(
                 dry_run=dry_run,
             )
 
+            policy_review = await run_performance_policy_review(
+                db_client=db_client,
+                account_id=account_id,
+                symbol=ticker,
+                initial_equity=float(balance.cash),
+                correlation_id=correlation_id,
+            )
+
             data = audit if dry_run else report
             return StandardAgentResponse(
                 status="success",
@@ -256,6 +269,7 @@ async def run_single_analysis_flow(
                     learning_delta_pending=learning_state["pending"],
                     learning_delta_skipped_reason=learning_state["reason"],
                     dry_run=dry_run,
+                    policy_review=policy_review,
                 ),
             )
     except StockGuardError as exc:
