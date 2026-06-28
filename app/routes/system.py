@@ -13,6 +13,8 @@ from typing import Union
 from fastapi import APIRouter, status
 from fastapi.responses import JSONResponse
 
+from .. import config
+from ..backtest_agent_client import BacktestAgentClient
 from ..config_manager import config_manager
 from ..contracts import StandardAgentResponse
 from ..database_client import DatabaseAgentClient
@@ -61,6 +63,10 @@ async def health_check():
             "status": "healthy",
             "details": "Connected successfully.",
         },
+        "backtest_agent": {
+            "status": "disabled" if not config.BACKTEST_AGENT_ENABLED else "healthy",
+            "details": "Backtest integration disabled." if not config.BACKTEST_AGENT_ENABLED else "Connected successfully.",
+        },
     }
 
     try:
@@ -84,6 +90,18 @@ async def health_check():
             "details": f"Connection failed: {str(exc)}",
         }
         report_logger.warning(f"Health check failed: Risk Agent connection error: {exc}")
+
+    if config.BACKTEST_AGENT_ENABLED:
+        try:
+            async with BacktestAgentClient() as backtest_client:
+                downstream_services["backtest_agent"]["details"] = await backtest_client.health(correlation_id)
+        except Exception as exc:
+            is_healthy = False
+            downstream_services["backtest_agent"] = {
+                "status": "unhealthy",
+                "details": f"Connection failed: {str(exc)}",
+            }
+            report_logger.warning(f"Health check failed: Backtest Agent connection error: {exc}")
 
     content = StandardAgentResponse(
         status="success" if is_healthy else "error",
