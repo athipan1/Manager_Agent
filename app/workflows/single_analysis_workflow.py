@@ -59,11 +59,11 @@ def manager_metadata(
         "learning_delta_applied": learning_delta_applied,
         "learning_delta_pending": learning_delta_pending,
         "dry_run": dry_run,
-        "policy_review_flow_enabled": config.POLICY_REVIEW_FLOW_ENABLED,
     }
     if learning_delta_skipped_reason:
         metadata["learning_delta_skipped_reason"] = learning_delta_skipped_reason
     if policy_review is not None:
+        metadata["policy_review_flow_enabled"] = config.POLICY_REVIEW_FLOW_ENABLED
         metadata["policy_review"] = policy_review
     return metadata
 
