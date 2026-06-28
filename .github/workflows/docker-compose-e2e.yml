@@ -28,7 +28,11 @@ jobs:
 
       BACKTEST_AGENT_ENABLED: "true"
 
-      RUNTIME_SERVICES: database-agent technical-agent scanner-agent fundamental-agent risk-agent backtest-agent performance-agent learning-agent execution-agent manager-agent db
+      ALPHA_AGENTS_ENABLED: "true"
+
+      MARKET_REGIME_AGENT_ENABLED: "true"
+
+      RUNTIME_SERVICES: database-agent technical-agent scanner-agent fundamental-agent risk-agent backtest-agent market-regime-agent performance-agent learning-agent execution-agent manager-agent db
 
     steps:
 
@@ -99,6 +103,16 @@ jobs:
           repository: athipan1/Backtest_Agent
 
           path: Backtest_Agent
+
+      - name: Checkout Market_Regime_Agent
+
+        uses: actions/checkout@v4
+
+        with:
+
+          repository: athipan1/Market_Regime_Agent
+
+          path: Market_Regime_Agent
 
       - name: Checkout Performance_Agent
 
@@ -220,15 +234,17 @@ jobs:
 
             backtest=$(curl -fsS http://localhost:8016/health >/dev/null && echo ok || echo wait)
 
+            market_regime=$(curl -fsS http://localhost:8014/health >/dev/null && echo ok || echo wait)
+
             performance=$(curl -fsS http://localhost:8013/health >/dev/null && echo ok || echo wait)
 
             learning=$(curl -fsS http://localhost:8005/health >/dev/null && echo ok || echo wait)
 
             execution=$(curl -fsS http://localhost:8006/health >/dev/null && echo ok || echo wait)
 
-            echo "health: manager=$manager fundamental=$fundamental technical=$technical scanner=$scanner database=$database risk=$risk backtest=$backtest performance=$performance learning=$learning execution=$execution"
+            echo "health: manager=$manager fundamental=$fundamental technical=$technical scanner=$scanner database=$database risk=$risk backtest=$backtest market_regime=$market_regime performance=$performance learning=$learning execution=$execution"
 
-            if [ "$manager$fundamental$technical$scanner$database$risk$backtest$performance$learning$execution" = "okokokokokokokokokok" ]; then
+            if [ "$manager$fundamental$technical$scanner$database$risk$backtest$market_regime$performance$learning$execution" = "okokokokokokokokokokok" ]; then
 
               echo "All services are reachable."
 
@@ -273,6 +289,8 @@ jobs:
           curl -f http://localhost:8007/health
 
           curl -f http://localhost:8016/health
+
+          curl -f http://localhost:8014/health
 
           curl -f http://localhost:8013/health
 
@@ -507,6 +525,120 @@ jobs:
           assert expected.issubset(strategies), strategies
 
           print("Backtest compare smoke passed.")
+
+          PY
+
+      - name: Test Market Regime Agent strategy endpoint
+
+        run: |
+
+          cat > /tmp/market_strategy_payload.json <<'JSON'
+
+          {
+
+            "symbol": "SPY",
+
+            "price": 550,
+
+            "sma_50": 530,
+
+            "sma_200": 500,
+
+            "atr_pct": 0.015,
+
+            "vix": 15,
+
+            "market_breadth_pct": 0.70
+
+          }
+
+          JSON
+
+          curl -f -X POST http://localhost:8014/market/strategy -H "Content-Type: application/json" --data-binary @/tmp/market_strategy_payload.json | tee /tmp/market_strategy_response.json
+
+          python - <<'PY'
+
+          import json
+
+          from pathlib import Path
+
+          response = json.loads(Path("/tmp/market_strategy_response.json").read_text())
+
+          assert response.get("status") == "success", response
+
+          data = response.get("data") or {}
+
+          assert data.get("regime") == "bull", data
+
+          assert data.get("recommended_strategy") == "trend_following", data
+
+          assert data.get("position_size_multiplier") == 1.0, data
+
+          print("Market regime strategy smoke passed.")
+
+          PY
+
+      - name: Test Manager alpha market strategy route
+
+        working-directory: Manager_Agent
+
+        run: |
+
+          docker compose --profile backtest exec -T manager-agent python - <<'PY'
+
+          import json
+
+          import urllib.request
+
+          payload = {
+
+              "symbol": "SPY",
+
+              "price": 550,
+
+              "sma_50": 530,
+
+              "sma_200": 500,
+
+              "atr_pct": 0.015,
+
+              "vix": 15,
+
+              "market_breadth_pct": 0.70,
+
+          }
+
+          request = urllib.request.Request(
+
+              "http://localhost:80/alpha/market-strategy",
+
+              data=json.dumps(payload).encode("utf-8"),
+
+              headers={"Content-Type": "application/json"},
+
+              method="POST",
+
+          )
+
+          with urllib.request.urlopen(request, timeout=10) as response:
+
+              body = json.loads(response.read().decode("utf-8"))
+
+          assert body.get("status") == "success", body
+
+          data = body.get("data") or {}
+
+          recommendation = data.get("recommendation") or {}
+
+          assert data.get("enabled") is True, data
+
+          assert recommendation.get("regime") == "bull", recommendation
+
+          assert recommendation.get("recommended_strategy") == "trend_following", recommendation
+
+          assert recommendation.get("position_size_multiplier") == 1.0, recommendation
+
+          print("Manager alpha market strategy smoke passed.")
 
           PY
 
