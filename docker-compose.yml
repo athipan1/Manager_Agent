@@ -32,6 +32,10 @@ services:
       SCANNER_AGENT_URL: http://scanner-agent:8003
       DATABASE_AGENT_URL: http://database-agent:8004
       RISK_AGENT_URL: http://risk-agent:8007
+      PERFORMANCE_AGENT_URL: http://performance-agent:8013
+      PERFORMANCE_SESSION_RISK_ENABLED: ${PERFORMANCE_SESSION_RISK_ENABLED:-true}
+      PERFORMANCE_SESSION_RISK_REQUIRED: ${PERFORMANCE_SESSION_RISK_REQUIRED:-false}
+      PERFORMANCE_SESSION_RISK_FILL_LIMIT: ${PERFORMANCE_SESSION_RISK_FILL_LIMIT:-500}
       DATABASE_AGENT_API_KEY: dev_database_key
       AUTO_LEARNING_AGENT_URL: http://learning-agent:8005
       EXECUTION_AGENT_URL: http://execution-agent:8006
@@ -72,6 +76,8 @@ services:
       database-agent:
         condition: service_healthy
       risk-agent:
+        condition: service_healthy
+      performance-agent:
         condition: service_healthy
       learning-agent:
         condition: service_healthy
@@ -190,6 +196,24 @@ services:
       MAX_TRADES_PER_DAY: ${RISK_MAX_TRADES_PER_DAY:-5}
       MAX_SYMBOL_TRADES_PER_DAY: ${RISK_MAX_SYMBOL_TRADES_PER_DAY:-2}
       EMERGENCY_HALT: ${RISK_EMERGENCY_HALT:-false}
+      PYTHONPATH: /app
+
+  performance-agent:
+    build:
+      context: ../Performance_Agent
+      dockerfile: Dockerfile
+    image: painaidee/performance-agent:latest
+    restart: always
+    ports:
+      - "8013:8013"
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8013/health', timeout=3)\" || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    environment:
+      PORT: 8013
       PYTHONPATH: /app
 
   learning-agent:

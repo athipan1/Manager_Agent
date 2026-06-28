@@ -50,6 +50,12 @@ jobs:
           repository: athipan1/Risk_Agent
           path: Risk_Agent
 
+      - name: Checkout Performance_Agent
+        uses: actions/checkout@v4
+        with:
+          repository: athipan1/Performance_Agent
+          path: Performance_Agent
+
       - name: Checkout Learning_Agent
         uses: actions/checkout@v4
         with:
@@ -82,7 +88,7 @@ jobs:
             echo "docker compose up failed with status $status"
             echo "---- docker compose ps ----"
             docker compose ps || true
-            for service in database-agent technical-agent scanner-agent fundamental-agent risk-agent learning-agent execution-agent manager-agent db; do
+            for service in database-agent technical-agent scanner-agent fundamental-agent risk-agent performance-agent learning-agent execution-agent manager-agent db; do
               echo "---- ${service} logs tail ----"
               docker compose logs --tail=160 "$service" || true
             done
@@ -92,7 +98,7 @@ jobs:
       - name: Wait for services to become healthy
         working-directory: Manager_Agent
         run: |
-          runtime_services="database-agent technical-agent scanner-agent fundamental-agent risk-agent learning-agent execution-agent manager-agent db"
+          runtime_services="database-agent technical-agent scanner-agent fundamental-agent risk-agent performance-agent learning-agent execution-agent manager-agent db"
           for i in {1..60}; do
             docker compose ps
             exited=$(docker compose ps --status exited -q $runtime_services | wc -l | tr -d ' ')
@@ -111,11 +117,12 @@ jobs:
             scanner=$(curl -fsS http://localhost:8003/health >/dev/null && echo ok || echo wait)
             database=$(curl -fsS http://localhost:8004/health >/dev/null && echo ok || echo wait)
             risk=$(curl -fsS http://localhost:8007/health >/dev/null && echo ok || echo wait)
+            performance=$(curl -fsS http://localhost:8013/health >/dev/null && echo ok || echo wait)
             learning=$(curl -fsS http://localhost:8005/health >/dev/null && echo ok || echo wait)
             execution=$(curl -fsS http://localhost:8006/health >/dev/null && echo ok || echo wait)
 
-            echo "health: manager=$manager fundamental=$fundamental technical=$technical scanner=$scanner database=$database risk=$risk learning=$learning execution=$execution"
-            if [ "$manager$fundamental$technical$scanner$database$risk$learning$execution" = "okokokokokokokok" ]; then
+            echo "health: manager=$manager fundamental=$fundamental technical=$technical scanner=$scanner database=$database risk=$risk performance=$performance learning=$learning execution=$execution"
+            if [ "$manager$fundamental$technical$scanner$database$risk$performance$learning$execution" = "okokokokokokokokok" ]; then
               echo "All services are reachable."
               exit 0
             fi
@@ -138,6 +145,7 @@ jobs:
           curl -f http://localhost:8003/health
           curl -f http://localhost:8004/health
           curl -f http://localhost:8007/health
+          curl -f http://localhost:8013/health
           curl -f http://localhost:8005/health
           curl -f http://localhost:8006/health
 
@@ -146,6 +154,12 @@ jobs:
           curl -f -X POST http://localhost:8003/scan \
             -H "Content-Type: application/json" \
             -d '{"symbols":["AAPL","MSFT"],"screener":"default","exchange":"NASDAQ"}'
+
+      - name: Test Performance session risk endpoint
+        run: |
+          curl -f -X POST http://localhost:8013/performance/session-risk \
+            -H "Content-Type: application/json" \
+            -d '{"account_id":1,"symbol":"AAPL","equity":100000,"fills":[]}'
 
       - name: Test Execution Agent broker reconciliation
         run: |
@@ -159,7 +173,7 @@ jobs:
         working-directory: Manager_Agent
         run: |
           docker compose ps || true
-          for service in database-agent technical-agent scanner-agent fundamental-agent risk-agent learning-agent execution-agent manager-agent db; do
+          for service in database-agent technical-agent scanner-agent fundamental-agent risk-agent performance-agent learning-agent execution-agent manager-agent db; do
             echo "---- ${service} logs tail ----"
             docker compose logs --tail=160 "$service" || true
           done
