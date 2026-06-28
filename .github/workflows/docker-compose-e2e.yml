@@ -1,186 +1,341 @@
 name: Docker Compose E2E
 
 on:
+
   workflow_dispatch:
+
   push:
+
     branches:
+
       - main
+
   pull_request:
+
     branches:
+
       - main
 
 jobs:
+
   docker-compose-e2e:
+
     runs-on: ubuntu-latest
+
     timeout-minutes: 35
 
+    env:
+
+      BACKTEST_AGENT_ENABLED: "true"
+
+      RUNTIME_SERVICES: database-agent technical-agent scanner-agent fundamental-agent risk-agent backtest-agent performance-agent learning-agent execution-agent manager-agent db
+
     steps:
+
       - name: Checkout Manager_Agent
+
         uses: actions/checkout@v4
+
         with:
+
           path: Manager_Agent
 
       - name: Checkout Scanner_Agent
+
         uses: actions/checkout@v4
+
         with:
+
           repository: athipan1/Scanner_Agent
+
           path: Scanner_Agent
 
       - name: Checkout Technical_Agent
+
         uses: actions/checkout@v4
+
         with:
+
           repository: athipan1/Technical_Agent
+
           path: Technical_Agent
 
       - name: Checkout Fundamental_Agent
+
         uses: actions/checkout@v4
+
         with:
+
           repository: athipan1/Fundamental_Agent
+
           path: Fundamental_Agent
 
       - name: Checkout Database_Agent
+
         uses: actions/checkout@v4
+
         with:
+
           repository: athipan1/Database_Agent
+
           path: Database_Agent
 
       - name: Checkout Risk_Agent
+
         uses: actions/checkout@v4
+
         with:
+
           repository: athipan1/Risk_Agent
+
           path: Risk_Agent
 
-      - name: Checkout Performance_Agent
+      - name: Checkout Backtest_Agent
+
         uses: actions/checkout@v4
+
         with:
+
+          repository: athipan1/Backtest_Agent
+
+          path: Backtest_Agent
+
+      - name: Checkout Performance_Agent
+
+        uses: actions/checkout@v4
+
+        with:
+
           repository: athipan1/Performance_Agent
+
           path: Performance_Agent
 
       - name: Checkout Learning_Agent
+
         uses: actions/checkout@v4
+
         with:
+
           repository: athipan1/Learning_Agent
+
           path: Learning_Agent
 
       - name: Checkout Execution_Agent
+
         uses: actions/checkout@v4
+
         with:
+
           repository: athipan1/Execution_Agent
+
           path: Execution_Agent
 
       - name: Show Docker versions
+
         run: |
+
           docker --version
+
           docker compose version
 
       - name: Validate compose file
+
         working-directory: Manager_Agent
+
         run: |
-          docker compose config
+
+          docker compose --profile backtest config
 
       - name: Build and start stack
+
         working-directory: Manager_Agent
+
         run: |
+
           set +e
-          docker compose up --build -d 2>&1 | tee compose-up.log
+
+          docker compose --profile backtest up --build -d 2>&1 | tee compose-up.log
+
           status=${PIPESTATUS[0]}
+
           if [ "$status" != "0" ]; then
+
             echo "docker compose up failed with status $status"
+
             echo "---- docker compose ps ----"
-            docker compose ps || true
-            for service in database-agent technical-agent scanner-agent fundamental-agent risk-agent performance-agent learning-agent execution-agent manager-agent db; do
+
+            docker compose --profile backtest ps || true
+
+            for service in $RUNTIME_SERVICES; do
+
               echo "---- ${service} logs tail ----"
-              docker compose logs --tail=160 "$service" || true
+
+              docker compose --profile backtest logs --tail=160 "$service" || true
+
             done
+
             exit "$status"
+
           fi
 
       - name: Wait for services to become healthy
+
         working-directory: Manager_Agent
+
         run: |
-          runtime_services="database-agent technical-agent scanner-agent fundamental-agent risk-agent performance-agent learning-agent execution-agent manager-agent db"
+
           for i in {1..60}; do
-            docker compose ps
-            exited=$(docker compose ps --status exited -q $runtime_services | wc -l | tr -d ' ')
+
+            docker compose --profile backtest ps
+
+            exited=$(docker compose --profile backtest ps --status exited -q $RUNTIME_SERVICES | wc -l | tr -d ' ')
+
             if [ "$exited" != "0" ]; then
+
               echo "One or more runtime containers exited."
-              for service in $runtime_services; do
+
+              for service in $RUNTIME_SERVICES; do
+
                 echo "---- ${service} logs tail ----"
-                docker compose logs --tail=160 "$service" || true
+
+                docker compose --profile backtest logs --tail=160 "$service" || true
+
               done
+
               exit 1
+
             fi
 
-            manager=$(docker compose exec -T manager-agent python /app/healthcheck.py >/dev/null && echo ok || echo wait)
+            manager=$(docker compose --profile backtest exec -T manager-agent python /app/healthcheck.py >/dev/null && echo ok || echo wait)
+
             fundamental=$(curl -fsS http://localhost:8001/health >/dev/null && echo ok || echo wait)
+
             technical=$(curl -fsS http://localhost:8002/health >/dev/null && echo ok || echo wait)
+
             scanner=$(curl -fsS http://localhost:8003/health >/dev/null && echo ok || echo wait)
+
             database=$(curl -fsS http://localhost:8004/health >/dev/null && echo ok || echo wait)
+
             risk=$(curl -fsS http://localhost:8007/health >/dev/null && echo ok || echo wait)
+
+            backtest=$(curl -fsS http://localhost:8016/health >/dev/null && echo ok || echo wait)
+
             performance=$(curl -fsS http://localhost:8013/health >/dev/null && echo ok || echo wait)
+
             learning=$(curl -fsS http://localhost:8005/health >/dev/null && echo ok || echo wait)
+
             execution=$(curl -fsS http://localhost:8006/health >/dev/null && echo ok || echo wait)
 
-            echo "health: manager=$manager fundamental=$fundamental technical=$technical scanner=$scanner database=$database risk=$risk performance=$performance learning=$learning execution=$execution"
-            if [ "$manager$fundamental$technical$scanner$database$risk$performance$learning$execution" = "okokokokokokokokok" ]; then
+            echo "health: manager=$manager fundamental=$fundamental technical=$technical scanner=$scanner database=$database risk=$risk backtest=$backtest performance=$performance learning=$learning execution=$execution"
+
+            if [ "$manager$fundamental$technical$scanner$database$risk$backtest$performance$learning$execution" = "okokokokokokokokokok" ]; then
+
               echo "All services are reachable."
+
               exit 0
+
             fi
+
             sleep 5
+
           done
+
           echo "Services did not become reachable in time."
-          docker compose ps
-          for service in $runtime_services; do
+
+          docker compose --profile backtest ps
+
+          for service in $RUNTIME_SERVICES; do
+
             echo "---- ${service} logs tail ----"
-            docker compose logs --tail=160 "$service" || true
+
+            docker compose --profile backtest logs --tail=160 "$service" || true
+
           done
+
           exit 1
 
       - name: Check health endpoints
+
         working-directory: Manager_Agent
+
         run: |
-          docker compose exec -T manager-agent python /app/healthcheck.py
+
+          docker compose --profile backtest exec -T manager-agent python /app/healthcheck.py
+
           curl -f http://localhost:8001/health
+
           curl -f http://localhost:8002/health
+
           curl -f http://localhost:8003/health
+
           curl -f http://localhost:8004/health
+
           curl -f http://localhost:8007/health
+
+          curl -f http://localhost:8016/health
+
           curl -f http://localhost:8013/health
+
           curl -f http://localhost:8005/health
+
           curl -f http://localhost:8006/health
 
       - name: Test Scanner Agent
+
         run: |
-          curl -f -X POST http://localhost:8003/scan \
-            -H "Content-Type: application/json" \
-            -d '{"symbols":["AAPL","MSFT"],"screener":"default","exchange":"NASDAQ"}'
+
+          curl -f -X POST http://localhost:8003/scan -H "Content-Type: application/json" -d '{"symbols":["AAPL","MSFT"],"screener":"america","exchange":"NASDAQ"}'
+
+      - name: Test Backtest Agent
+
+        run: |
+
+          curl -f http://localhost:8016/health
 
       - name: Test Performance session risk endpoint
+
         run: |
-          curl -f -X POST http://localhost:8013/performance/session-risk \
-            -H "Content-Type: application/json" \
-            -d '{"account_id":1,"symbol":"AAPL","equity":100000,"fills":[]}'
+
+          curl -f -X POST http://localhost:8013/performance/session-risk -H "Content-Type: application/json" -d '{"account_id":1,"symbol":"AAPL","equity":100000,"fills":[]}'
 
       - name: Test Execution Agent broker reconciliation
+
         run: |
-          curl -f -X POST 'http://localhost:8006/broker/reconcile?account_id=1&push_to_database=true' \
-            -H "X-API-KEY: dev_execution_key"
-          curl -f 'http://localhost:8004/broker-sync/status?account_id=1' \
-            -H "X-API-KEY: dev_database_key"
+
+          curl -f -X POST 'http://localhost:8006/broker/reconcile?account_id=1&push_to_database=true' -H "X-API-KEY: dev_execution_key"
+
+          curl -f 'http://localhost:8004/broker-sync/status?account_id=1' -H "X-API-KEY: dev_database_key"
 
       - name: Show logs on failure
+
         if: failure()
+
         working-directory: Manager_Agent
+
         run: |
-          docker compose ps || true
-          for service in database-agent technical-agent scanner-agent fundamental-agent risk-agent performance-agent learning-agent execution-agent manager-agent db; do
+
+          docker compose --profile backtest ps || true
+
+          for service in $RUNTIME_SERVICES; do
+
             echo "---- ${service} logs tail ----"
-            docker compose logs --tail=160 "$service" || true
+
+            docker compose --profile backtest logs --tail=160 "$service" || true
+
           done
-          if [ -f compose-up.log ]; then tail -200 compose-up.log; fi
+
+          if [ -f compose-up.log ]; then
+
+            tail -200 compose-up.log
+
+          fi
 
       - name: Stop stack
+
         if: always()
+
         working-directory: Manager_Agent
+
         run: |
-          docker compose down -v || true
+
+          docker compose --profile backtest down -v || true
