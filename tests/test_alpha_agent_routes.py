@@ -33,3 +33,53 @@ def test_alpha_health_disabled_by_default():
     assert payload["status"] == "success"
     assert payload["data"]["enabled"] is False
     assert payload["data"]["services"]["portfolio"]["status"] == "disabled"
+
+
+def test_alpha_market_strategy_route(monkeypatch):
+    async def fake_recommend_market_strategy(payload, correlation_id):
+        return {
+            "enabled": True,
+            "recommendation": {
+                "symbol": payload["symbol"],
+                "regime": "bull",
+                "recommended_strategy": "trend_following",
+                "position_size_multiplier": 1.0,
+            },
+        }
+
+    monkeypatch.setattr("app.routes.alpha_agents.recommend_market_strategy", fake_recommend_market_strategy)
+
+    response = client.post(
+        "/alpha/market-strategy",
+        json={
+            "symbol": "SPY",
+            "price": 550,
+            "sma_50": 530,
+            "sma_200": 500,
+            "atr_pct": 0.015,
+            "vix": 15,
+            "market_breadth_pct": 0.70,
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "success"
+    assert payload["data"]["enabled"] is True
+    assert payload["data"]["recommendation"]["recommended_strategy"] == "trend_following"
+    assert payload["data"]["recommendation"]["position_size_multiplier"] == 1.0
+
+
+def test_alpha_market_strategy_route_returns_error_payload(monkeypatch):
+    async def fake_recommend_market_strategy(payload, correlation_id):
+        raise RuntimeError("market regime unavailable")
+
+    monkeypatch.setattr("app.routes.alpha_agents.recommend_market_strategy", fake_recommend_market_strategy)
+
+    response = client.post("/alpha/market-strategy", json={"symbol": "SPY"})
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "error"
+    assert payload["data"]["recommendation"] is None
+    assert "market_strategy" in payload["error"]
