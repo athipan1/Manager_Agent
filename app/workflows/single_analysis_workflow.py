@@ -25,6 +25,7 @@ from ..stock_guard import StockGuardError, validate_stock_scope
 from ..services.audit_service import audit_trade_decision, persist_signal
 from ..services.context_service import fetch_context_value, fetch_session_risk_context
 from ..services.trade_plan_builder import attach_trade_plan_to_decision
+from ..services.trade_plan_lifecycle_service import persist_trade_plan_created, persist_trade_plan_status
 from .analysis_workflow import analyze_single_asset
 from .execution_workflow import execute_trade
 from .learning_workflow import trigger_learning_cycle_if_allowed
@@ -111,6 +112,22 @@ def execution_result_for_decision(
     return _with_trade_plan_id({"status": "ready_for_execution"}, trade_decision)
 
 
+def lifecycle_status_for_execution_result(execution_result: Dict[str, Any]) -> tuple[str, str]:
+    """Map Manager execution result states to Database TradePlan lifecycle states."""
+    status = execution_result.get("status")
+    if status == "submitted":
+        return "execution_submitted", "TradePlan submitted to Execution_Agent."
+    if status == "dry_run":
+        return "queued", "Execution skipped by dry-run mode."
+    if status == "manual_approval_required":
+        return "queued", "Manual approval required before execution."
+    if status == "rejected":
+        return "rejected", str(execution_result.get("reason") or "Risk rejected TradePlan.")
+    if status == "ready_for_execution":
+        return "queued", "TradePlan ready for execution."
+    return "queued", str(execution_result.get("reason") or f"Manager execution state: {status}")
+
+
 async def run_single_analysis_flow(
     request: AgentRequestBody,
     *,
@@ -162,6 +179,11 @@ async def run_single_analysis_flow(
                     dry_run=dry_run,
                     source="single_analysis",
                 )
+                await persist_trade_plan_created(
+                    db_client=db_client,
+                    trade_decision=trade_decision,
+                    correlation_id=correlation_id,
+                )
 
                 execution_result = execution_result_for_decision(
                     trade_decision=trade_decision,
@@ -179,6 +201,16 @@ async def run_single_analysis_flow(
                         )
                         if trade_decision and trade_decision.get("trade_plan_id"):
                             execution_result["trade_plan_id"] = trade_decision.get("trade_plan_id")
+
+                lifecycle_status, lifecycle_reason = lifecycle_status_for_execution_result(execution_result)
+                await persist_trade_plan_status(
+                    db_client=db_client,
+                    trade_decision=trade_decision,
+                    correlation_id=correlation_id,
+                    status=lifecycle_status,
+                    reason=lifecycle_reason,
+                    execution_result=execution_result,
+                )
 
             audit = await audit_trade_decision(
                 db_client=db_client,
