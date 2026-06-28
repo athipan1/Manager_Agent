@@ -89,7 +89,9 @@ def trade_plan_status_payload(
     job = execution_result.get("execution_job") if isinstance(execution_result, dict) else None
     if isinstance(job, dict) and job.get("job_id") is not None:
         payload["execution_job_id"] = str(job.get("job_id"))
-    broker_order_id = execution_result.get("broker_order_id") or (order or {}).get("broker_order_id") if isinstance(order, dict) else None
+    broker_order_id = execution_result.get("broker_order_id")
+    if not broker_order_id and isinstance(order, dict):
+        broker_order_id = order.get("broker_order_id")
     if broker_order_id:
         payload["broker_order_id"] = str(broker_order_id)
     return payload
