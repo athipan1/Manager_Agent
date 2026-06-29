@@ -76,7 +76,7 @@ services:
 
       ALPHA_AGENTS_ENABLED: ${ALPHA_AGENTS_ENABLED:-true}
 
-      MARKET_REGIME_AGENT_ENABLED: ${MARKET_REGIME_AGENT_ENABLED:-true}
+      MARKET_REGIME_AGENT_ENABLED: ${MARKET_REGIME_AGENT_ENABLED:-false}
 
       MARKET_REGIME_AGENT_URL: http://market-regime-agent:8014
 
@@ -165,14 +165,6 @@ services:
         condition: service_healthy
 
       risk-agent:
-
-        condition: service_healthy
-
-      backtest-agent:
-
-        condition: service_healthy
-
-      market-regime-agent:
 
         condition: service_healthy
 
@@ -362,7 +354,15 @@ services:
 
     healthcheck:
 
-      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8007/health', timeout=3)\" || exit 1"]
+      test:
+
+        [
+
+          "CMD-SHELL",
+
+          "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8007/health', timeout=3)\" || exit 1"
+
+        ]
 
       interval: 10s
 
@@ -428,7 +428,15 @@ services:
 
     healthcheck:
 
-      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8016/health', timeout=3)\" || exit 1"]
+      test:
+
+        [
+
+          "CMD-SHELL",
+
+          "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8016/health', timeout=3)\" || exit 1"
+
+        ]
 
       interval: 10s
 
@@ -466,7 +474,15 @@ services:
 
     healthcheck:
 
-      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8014/health', timeout=3)\" || exit 1"]
+      test:
+
+        [
+
+          "CMD-SHELL",
+
+          "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8014/health', timeout=3)\" || exit 1"
+
+        ]
 
       interval: 10s
 
@@ -500,7 +516,15 @@ services:
 
     healthcheck:
 
-      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8013/health', timeout=3)\" || exit 1"]
+      test:
+
+        [
+
+          "CMD-SHELL",
+
+          "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8013/health', timeout=3)\" || exit 1"
+
+        ]
 
       interval: 10s
 
