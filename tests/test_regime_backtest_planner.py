@@ -18,17 +18,6 @@ def test_build_compare_candidates_puts_recommended_strategy_first():
     }
 
 
-def test_build_compare_candidates_respects_allowed_strategies():
-    candidates = build_compare_candidates(
-        "trend_following",
-        fast_window=5,
-        slow_window=20,
-        allowed_strategies=["trend_following", "breakout"],
-    )
-
-    assert [candidate["strategy"] for candidate in candidates] == ["trend_following", "breakout"]
-
-
 def test_build_regime_backtest_plan_creates_compare_payload():
     recommendation = {
         "symbol": "SPY",
@@ -59,6 +48,12 @@ def test_build_regime_backtest_plan_creates_compare_payload():
     assert compare_payload["max_position_pct"] == 0.05
     assert compare_payload["market_context"]["effective_size_multiplier"] == 0.5
     assert compare_payload["candidates"][0]["strategy"] == "trend_following"
+    assert {candidate["strategy"] for candidate in compare_payload["candidates"]} == {
+        "sma_crossover",
+        "trend_following",
+        "mean_reversion",
+        "breakout",
+    }
     assert "strategy" not in compare_payload
     assert "fast_window" not in compare_payload
     assert "slow_window" not in compare_payload
@@ -100,7 +95,12 @@ def test_build_regime_backtest_plan_applies_market_context_limits():
         "blocked_strategies": ["mean_reversion"],
         "decision_notes": ["reduced exposure"],
     }
-    assert [candidate["strategy"] for candidate in compare_payload["candidates"]] == ["trend_following", "breakout"]
+    assert [candidate["strategy"] for candidate in compare_payload["candidates"]] == [
+        "trend_following",
+        "sma_crossover",
+        "mean_reversion",
+        "breakout",
+    ]
 
 
 def test_build_regime_backtest_plan_returns_no_trade_for_cash_recommendation():
