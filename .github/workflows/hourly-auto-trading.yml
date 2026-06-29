@@ -120,7 +120,11 @@ jobs:
 
           repository: athipan1/Technical_Agent
 
+          ref: main
+
           path: Technical_Agent
+
+          fetch-depth: 1
 
       - name: Checkout Fundamental_Agent
 
@@ -130,7 +134,11 @@ jobs:
 
           repository: athipan1/Fundamental_Agent
 
+          ref: main
+
           path: Fundamental_Agent
+
+          fetch-depth: 1
 
       - name: Checkout Database_Agent
 
@@ -140,7 +148,11 @@ jobs:
 
           repository: athipan1/Database_Agent
 
+          ref: main
+
           path: Database_Agent
+
+          fetch-depth: 1
 
       - name: Checkout Learning_Agent
 
@@ -150,7 +162,11 @@ jobs:
 
           repository: athipan1/Learning_Agent
 
+          ref: main
+
           path: Learning_Agent
+
+          fetch-depth: 1
 
       - name: Checkout Execution_Agent
 
@@ -177,6 +193,20 @@ jobs:
           ref: main
 
           path: Risk_Agent
+
+          fetch-depth: 1
+
+      - name: Checkout Performance_Agent
+
+        uses: actions/checkout@v4
+
+        with:
+
+          repository: athipan1/Performance_Agent
+
+          ref: main
+
+          path: Performance_Agent
 
           fetch-depth: 1
 
@@ -213,6 +243,8 @@ jobs:
           echo "Execution_Agent=$(git -C Execution_Agent rev-parse HEAD)"
 
           echo "Risk_Agent=$(git -C Risk_Agent rev-parse HEAD)"
+
+          echo "Performance_Agent=$(git -C Performance_Agent rev-parse HEAD)"
 
           echo "Curator_Agent=$(git -C Curator_Agent rev-parse HEAD)"
 
@@ -260,13 +292,15 @@ jobs:
 
         run: |
 
-          runtime_services="database-agent technical-agent scanner-agent fundamental-agent learning-agent risk-agent execution-agent curator-agent manager-agent db"
+          compose="docker compose -f docker-compose.yml -f docker-compose.risk.yml -f docker-compose.curator.yml"
+
+          runtime_services="database-agent technical-agent scanner-agent fundamental-agent learning-agent risk-agent performance-agent execution-agent curator-agent manager-agent db"
 
           for i in {1..60}; do
 
-            docker compose -f docker-compose.yml -f docker-compose.risk.yml -f docker-compose.curator.yml ps
+            $compose ps
 
-            exited=$(docker compose -f docker-compose.yml -f docker-compose.risk.yml -f docker-compose.curator.yml ps --status exited -q $runtime_services | wc -l | tr -d ' ')
+            exited=$($compose ps --status exited -q $runtime_services | wc -l | tr -d ' ')
 
             if [ "$exited" != "0" ]; then
 
@@ -276,7 +310,7 @@ jobs:
 
                 echo "---- ${service} logs tail ----"
 
-                docker compose -f docker-compose.yml -f docker-compose.risk.yml -f docker-compose.curator.yml logs --tail=160 "$service" || true
+                $compose logs --tail=160 "$service" || true
 
               done
 
@@ -284,7 +318,7 @@ jobs:
 
             fi
 
-            manager=$(docker compose -f docker-compose.yml -f docker-compose.risk.yml -f docker-compose.curator.yml exec -T manager-agent python /app/healthcheck.py >/dev/null && echo ok || echo wait)
+            manager=$($compose exec -T manager-agent python /app/healthcheck.py >/dev/null && echo ok || echo wait)
 
             fundamental=$(curl -fsS http://localhost:8001/health >/dev/null && echo ok || echo wait)
 
@@ -298,11 +332,13 @@ jobs:
 
             risk=$(curl -fsS http://localhost:8007/health >/dev/null && echo ok || echo wait)
 
+            performance=$(curl -fsS http://localhost:8013/health >/dev/null && echo ok || echo wait)
+
             execution=$(curl -fsS http://localhost:8006/health >/dev/null && echo ok || echo wait)
 
             curator=$(curl -fsS http://localhost:8010/health >/dev/null && echo ok || echo wait)
 
-            manager_to_scanner=$(docker compose -f docker-compose.yml -f docker-compose.risk.yml -f docker-compose.curator.yml exec -T manager-agent python - <<'PY' >/dev/null 2>&1 && echo ok || echo wait
+            manager_to_scanner=$($compose exec -T manager-agent python - <<'PY' >/dev/null 2>&1 && echo ok || echo wait
 
           import urllib.request
 
@@ -312,7 +348,7 @@ jobs:
 
           )
 
-            manager_to_curator=$(docker compose -f docker-compose.yml -f docker-compose.risk.yml -f docker-compose.curator.yml exec -T manager-agent python - <<'PY' >/dev/null 2>&1 && echo ok || echo wait
+            manager_to_curator=$($compose exec -T manager-agent python - <<'PY' >/dev/null 2>&1 && echo ok || echo wait
 
           import urllib.request
 
@@ -322,9 +358,9 @@ jobs:
 
           )
 
-            echo "health: manager=$manager fundamental=$fundamental technical=$technical scanner=$scanner database=$database learning=$learning risk=$risk execution=$execution curator=$curator manager_to_scanner=$manager_to_scanner manager_to_curator=$manager_to_curator"
+            echo "health: manager=$manager fundamental=$fundamental technical=$technical scanner=$scanner database=$database learning=$learning risk=$risk performance=$performance execution=$execution curator=$curator manager_to_scanner=$manager_to_scanner manager_to_curator=$manager_to_curator"
 
-            if [ "$manager$fundamental$technical$scanner$database$learning$risk$execution$curator$manager_to_scanner$manager_to_curator" = "okokokokokokokokokokok" ]; then
+            if [ "$manager$fundamental$technical$scanner$database$learning$risk$performance$execution$curator$manager_to_scanner$manager_to_curator" = "okokokokokokokokokokokok" ]; then
 
               echo "All services are reachable, including manager-agent -> scanner-agent and manager-agent -> curator-agent."
 
@@ -338,13 +374,13 @@ jobs:
 
           echo "Services did not become reachable in time."
 
-          docker compose -f docker-compose.yml -f docker-compose.risk.yml -f docker-compose.curator.yml ps
+          $compose ps
 
           for service in $runtime_services; do
 
             echo "---- ${service} logs tail ----"
 
-            docker compose -f docker-compose.yml -f docker-compose.risk.yml -f docker-compose.curator.yml logs --tail=160 "$service" || true
+            $compose logs --tail=160 "$service" || true
 
           done
 
@@ -426,11 +462,25 @@ jobs:
 
                   body = exc.read().decode("utf-8")
 
-                  return {"status": "error", "http_status": exc.code, "body": body}
+                  return {
+
+                      "status": "error",
+
+                      "http_status": exc.code,
+
+                      "body": body,
+
+                  }
 
               except Exception as exc:
 
-                  return {"status": "error", "error": str(exc)}
+                  return {
+
+                      "status": "error",
+
+                      "error": str(exc),
+
+                  }
 
           def request_manager(path, payload=None, method="GET"):
 
@@ -438,7 +488,17 @@ jobs:
 
           def request_execution(path):
 
-              return request_json("http://execution-agent:8006", path, api_key=execution_api_key, timeout=120)
+              return request_json(
+
+                  "http://execution-agent:8006",
+
+                  path,
+
+                  api_key=execution_api_key,
+
+                  timeout=120,
+
+              )
 
           payload = {
 
@@ -560,13 +620,15 @@ jobs:
 
         run: |
 
-          docker compose -f docker-compose.yml -f docker-compose.risk.yml -f docker-compose.curator.yml ps || true
+          compose="docker compose -f docker-compose.yml -f docker-compose.risk.yml -f docker-compose.curator.yml"
 
-          for service in database-agent technical-agent scanner-agent fundamental-agent learning-agent risk-agent execution-agent curator-agent manager-agent db; do
+          $compose ps || true
+
+          for service in database-agent technical-agent scanner-agent fundamental-agent learning-agent risk-agent performance-agent execution-agent curator-agent manager-agent db; do
 
             echo "---- ${service} logs tail ----"
 
-            docker compose -f docker-compose.yml -f docker-compose.risk.yml -f docker-compose.curator.yml logs --tail=180 "$service" || true
+            $compose logs --tail=180 "$service" || true
 
           done
 
