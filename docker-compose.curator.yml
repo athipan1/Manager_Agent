@@ -28,6 +28,30 @@ services:
       curator-agent:
         condition: service_healthy
 
+  performance-agent: !override
+    image: python:3.11-slim
+    restart: always
+    ports:
+      - "8013:8013"
+    command: >
+      python -c "from http.server import BaseHTTPRequestHandler, HTTPServer;
+      import json;
+      class H(BaseHTTPRequestHandler):
+        def _send(self, payload):
+          body=json.dumps(payload).encode(); self.send_response(200); self.send_header('Content-Type','application/json'); self.end_headers(); self.wfile.write(body);
+        def do_GET(self):
+          self._send({'status':'ok','agent_type':'performance','data':{'curator_stack_placeholder':True}});
+        def do_POST(self):
+          self._send({'status':'success','agent_type':'performance','data':{'approved':True,'curator_stack_placeholder':True},'error':None});
+        def log_message(self, *args): pass;
+      HTTPServer(('0.0.0.0', 8013), H).serve_forever()"
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8013/health', timeout=3).read()\""]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
   curator-agent:
     build:
       context: ../Curator_Agent
