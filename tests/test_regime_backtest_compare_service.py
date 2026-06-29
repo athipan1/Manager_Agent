@@ -1,6 +1,6 @@
 import pytest
 
-from app.regime_backtest_compare_service import run_regime_backtest_compare
+from app.regime_backtest_compare_service import build_regime_backtest_decision, run_regime_backtest_compare
 
 
 @pytest.mark.asyncio
@@ -87,3 +87,53 @@ async def test_run_regime_backtest_compare_skips_no_trade(monkeypatch):
     assert result["executed"] is False
     assert result["plan"]["action"] == "no_trade"
     assert result["backtest_compare"] is None
+
+
+def test_build_regime_backtest_decision_approves_when_best_matches_recommendation():
+    decision = build_regime_backtest_decision(
+        {
+            "executed": True,
+            "plan": {"action": "compare", "recommendation": {"recommended_strategy": "trend_following"}},
+            "backtest_compare": {
+                "best": {"strategy": "trend_following"},
+                "ranked_results": [{"strategy": "trend_following"}, {"strategy": "sma_crossover"}],
+            },
+        }
+    )
+
+    assert decision["decision"] == "candidate_approved"
+    assert decision["confidence"] == "high"
+    assert decision["recommended_strategy"] == "trend_following"
+    assert decision["backtest_best_strategy"] == "trend_following"
+
+
+def test_build_regime_backtest_decision_requires_review_when_best_differs():
+    decision = build_regime_backtest_decision(
+        {
+            "executed": True,
+            "plan": {"action": "compare", "recommendation": {"recommended_strategy": "trend_following"}},
+            "backtest_compare": {
+                "best": {"strategy": "mean_reversion"},
+                "ranked_results": [{"strategy": "mean_reversion"}, {"strategy": "trend_following"}],
+            },
+        }
+    )
+
+    assert decision["decision"] == "needs_review"
+    assert decision["confidence"] == "medium"
+    assert decision["recommended_strategy"] == "trend_following"
+    assert decision["backtest_best_strategy"] == "mean_reversion"
+
+
+def test_build_regime_backtest_decision_no_trade_when_compare_not_run():
+    decision = build_regime_backtest_decision(
+        {
+            "executed": False,
+            "plan": {"action": "no_trade", "reason": "capital protection"},
+            "backtest_compare": None,
+        }
+    )
+
+    assert decision["decision"] == "no_trade"
+    assert decision["confidence"] == "low"
+    assert decision["backtest_best_strategy"] is None
