@@ -786,6 +786,150 @@ jobs:
 
           PY
 
+      - name: Test Manager regime backtest compare route
+
+        working-directory: Manager_Agent
+
+        run: |
+
+          docker compose --profile backtest exec -T manager-agent python - <<'PY'
+
+          import json
+
+          import urllib.request
+
+          payload = {
+
+              "market_regime": {
+
+                  "symbol": "SPY",
+
+                  "price": 550,
+
+                  "sma_50": 530,
+
+                  "sma_200": 500,
+
+                  "atr_pct": 0.015,
+
+                  "vix": 15,
+
+                  "market_breadth_pct": 0.70,
+
+              },
+
+              "backtest": {
+
+                  "symbols": ["AAPL"],
+
+                  "initial_equity": 100000,
+
+                  "strategy": "sma_crossover",
+
+                  "fast_window": 2,
+
+                  "slow_window": 3,
+
+                  "risk_per_trade": 0.01,
+
+                  "max_position_pct": 0.10,
+
+                  "fee_bps": 1,
+
+                  "slippage_bps": 1,
+
+                  "use_risk_agent": True,
+
+                  "bars": {
+
+                      "AAPL": [
+
+                          {"timestamp":"2026-01-01T00:00:00Z","open":100,"high":101,"low":99,"close":100,"volume":1000},
+
+                          {"timestamp":"2026-01-02T00:00:00Z","open":100,"high":102,"low":99,"close":101,"volume":1000},
+
+                          {"timestamp":"2026-01-03T00:00:00Z","open":101,"high":103,"low":100,"close":102,"volume":1000},
+
+                          {"timestamp":"2026-01-04T00:00:00Z","open":102,"high":104,"low":101,"close":103,"volume":1000},
+
+                          {"timestamp":"2026-01-05T00:00:00Z","open":103,"high":105,"low":102,"close":104,"volume":1000},
+
+                          {"timestamp":"2026-01-06T00:00:00Z","open":104,"high":105,"low":100,"close":101,"volume":1000},
+
+                          {"timestamp":"2026-01-07T00:00:00Z","open":101,"high":102,"low":97,"close":98,"volume":1000},
+
+                          {"timestamp":"2026-01-08T00:00:00Z","open":98,"high":99,"low":95,"close":96,"volume":1000},
+
+                          {"timestamp":"2026-01-09T00:00:00Z","open":96,"high":98,"low":94,"close":97,"volume":1000},
+
+                          {"timestamp":"2026-01-10T00:00:00Z","open":97,"high":101,"low":96,"close":100,"volume":1000},
+
+                          {"timestamp":"2026-01-11T00:00:00Z","open":100,"high":104,"low":99,"close":103,"volume":1000},
+
+                          {"timestamp":"2026-01-12T00:00:00Z","open":103,"high":106,"low":102,"close":105,"volume":1000},
+
+                      ]
+
+                  },
+
+              },
+
+          }
+
+          request = urllib.request.Request(
+
+              "http://localhost:80/alpha/regime-backtest-compare",
+
+              data=json.dumps(payload).encode("utf-8"),
+
+              headers={"Content-Type": "application/json"},
+
+              method="POST",
+
+          )
+
+          with urllib.request.urlopen(request, timeout=20) as response:
+
+              body = json.loads(response.read().decode("utf-8"))
+
+          assert body.get("status") == "success", body
+
+          data = body.get("data") or {}
+
+          market_strategy = data.get("market_strategy") or {}
+
+          plan = data.get("plan") or {}
+
+          backtest_compare = data.get("backtest_compare") or {}
+
+          assert data.get("enabled") is True, data
+
+          assert data.get("executed") is True, data
+
+          assert market_strategy.get("enabled") is True, market_strategy
+
+          assert plan.get("action") == "compare", plan
+
+          assert plan.get("recommendation", {}).get("regime") == "bull", plan
+
+          assert plan.get("recommendation", {}).get("recommended_strategy") == "trend_following", plan
+
+          ranked_results = backtest_compare.get("ranked_results") or []
+
+          assert len(ranked_results) == 4, backtest_compare
+
+          assert backtest_compare.get("best") is not None, backtest_compare
+
+          strategies = {item.get("strategy") for item in ranked_results}
+
+          expected = {"sma_crossover", "trend_following", "mean_reversion", "breakout"}
+
+          assert expected.issubset(strategies), strategies
+
+          print("Manager regime backtest compare smoke passed.")
+
+          PY
+
       - name: Test Performance session risk endpoint
 
         run: |
