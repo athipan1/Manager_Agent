@@ -48,6 +48,25 @@ async def test_backtest_client_calls_compare_endpoint(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_backtest_client_adds_missing_timestamp(monkeypatch):
+    async def fake_post(self, path, correlation_id, json_data):
+        return {
+            "status": "success",
+            "agent_type": "backtest-agent",
+            "version": "0.1.0",
+            "data": {"ranked_results": [], "best": None},
+            "error": None,
+        }
+
+    monkeypatch.setattr(BacktestAgentClient, "_post", fake_post)
+
+    client = BacktestAgentClient()
+    result = await client.compare_strategies({"candidates": []}, "cid-6")
+
+    assert result == {"ranked_results": [], "best": None}
+
+
+@pytest.mark.asyncio
 async def test_backtest_client_calls_walk_forward_and_report(monkeypatch):
     calls = []
 
