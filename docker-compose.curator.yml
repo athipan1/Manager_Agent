@@ -8,53 +8,25 @@ services:
       CURATOR_AGENT_FAILURE_THRESHOLD: ${CURATOR_AGENT_FAILURE_THRESHOLD:-2}
       CURATOR_AGENT_COOLDOWN_SECONDS: ${CURATOR_AGENT_COOLDOWN_SECONDS:-30}
       CURATOR_SKILL_TIMEOUT_SECONDS: ${CURATOR_SKILL_TIMEOUT_SECONDS:-1.0}
-    depends_on:
+    depends_on: !override
+      technical-agent:
+        condition: service_healthy
+      fundamental-agent:
+        condition: service_healthy
+      scanner-agent:
+        condition: service_healthy
+      database-agent:
+        condition: service_healthy
+      risk-agent:
+        condition: service_healthy
+      performance-agent:
+        condition: service_healthy
+      learning-agent:
+        condition: service_healthy
+      execution-agent:
+        condition: service_healthy
       curator-agent:
         condition: service_healthy
-
-  backtest-agent:
-    profiles: null
-    image: python:3.11-slim
-    restart: always
-    ports:
-      - "8016:8016"
-    command: >
-      python -c "from http.server import BaseHTTPRequestHandler, HTTPServer;
-      import json;
-      class H(BaseHTTPRequestHandler):
-        def do_GET(self):
-          self.send_response(200); self.send_header('Content-Type','application/json'); self.end_headers();
-          self.wfile.write(json.dumps({'status':'ok','service':'backtest-agent-placeholder'}).encode());
-        def log_message(self, *args): pass;
-      HTTPServer(('0.0.0.0', 8016), H).serve_forever()"
-    healthcheck:
-      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8016/health', timeout=3).read()\""]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-      start_period: 10s
-
-  market-regime-agent:
-    profiles: null
-    image: python:3.11-slim
-    restart: always
-    ports:
-      - "8014:8014"
-    command: >
-      python -c "from http.server import BaseHTTPRequestHandler, HTTPServer;
-      import json;
-      class H(BaseHTTPRequestHandler):
-        def do_GET(self):
-          self.send_response(200); self.send_header('Content-Type','application/json'); self.end_headers();
-          self.wfile.write(json.dumps({'status':'ok','service':'market-regime-agent-placeholder'}).encode());
-        def log_message(self, *args): pass;
-      HTTPServer(('0.0.0.0', 8014), H).serve_forever()"
-    healthcheck:
-      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8014/health', timeout=3).read()\""]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-      start_period: 10s
 
   curator-agent:
     build:
