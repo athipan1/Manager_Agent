@@ -33,7 +33,7 @@ def _strategy_value(strategy: Any) -> str:
 
 def _allowed_strategy_names(recommendation: Dict[str, Any]) -> List[str]:
     raw_allowed = recommendation.get("allowed_strategies")
-    if not raw_allowed:
+    if raw_allowed is None:
         return DEFAULT_COMPARE_STRATEGIES.copy()
     allowed = [_strategy_value(strategy) for strategy in raw_allowed]
     return [strategy for strategy in allowed if strategy in DEFAULT_COMPARE_STRATEGIES]
@@ -43,7 +43,7 @@ def _ordered_strategy_names(recommended_strategy: str | None, allowed_strategies
     if not recommended_strategy or recommended_strategy in NO_TRADE_STRATEGIES:
         return []
 
-    allowed = allowed_strategies or DEFAULT_COMPARE_STRATEGIES
+    allowed = DEFAULT_COMPARE_STRATEGIES if allowed_strategies is None else allowed_strategies
     ordered: List[str] = []
     if recommended_strategy in allowed:
         ordered.append(recommended_strategy)
