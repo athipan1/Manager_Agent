@@ -171,3 +171,38 @@ def test_alpha_regime_backtest_compare_route(monkeypatch):
     assert payload["data"]["executed"] is True
     assert payload["data"]["plan"]["action"] == "compare"
     assert payload["data"]["backtest_compare"]["best"]["strategy"] == "trend_following"
+
+
+def test_alpha_regime_backtest_decision_route(monkeypatch):
+    async def fake_run_regime_backtest_decision(payload, correlation_id):
+        return {
+            "enabled": True,
+            "market_strategy": {"enabled": True},
+            "plan": {"action": "compare"},
+            "backtest_compare": {"best": {"strategy": "trend_following"}},
+            "executed": True,
+            "decision": {
+                "decision": "candidate_approved",
+                "confidence": "high",
+                "recommended_strategy": "trend_following",
+                "backtest_best_strategy": "trend_following",
+                "reason": "Market regime recommendation matches the best Backtest_Agent compare result.",
+            },
+        }
+
+    monkeypatch.setattr("app.routes.alpha_agents.run_regime_backtest_decision", fake_run_regime_backtest_decision)
+
+    response = client.post(
+        "/alpha/regime-backtest-decision",
+        json={
+            "market_regime": {"symbol": "SPY"},
+            "backtest": {"symbols": ["AAPL"], "bars": {"AAPL": []}},
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "success"
+    assert payload["data"]["executed"] is True
+    assert payload["data"]["decision"]["decision"] == "candidate_approved"
+    assert payload["data"]["decision"]["confidence"] == "high"
