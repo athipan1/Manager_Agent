@@ -39,15 +39,14 @@ def _allowed_strategy_names(recommendation: Dict[str, Any]) -> List[str]:
     return [strategy for strategy in allowed if strategy in DEFAULT_COMPARE_STRATEGIES]
 
 
-def _ordered_strategy_names(recommended_strategy: str | None, allowed_strategies: List[str] | None = None) -> List[str]:
+def _ordered_strategy_names(recommended_strategy: str | None) -> List[str]:
     if not recommended_strategy or recommended_strategy in NO_TRADE_STRATEGIES:
         return []
 
-    allowed = DEFAULT_COMPARE_STRATEGIES if allowed_strategies is None else allowed_strategies
     ordered: List[str] = []
-    if recommended_strategy in allowed:
+    if recommended_strategy in DEFAULT_COMPARE_STRATEGIES:
         ordered.append(recommended_strategy)
-    ordered.extend(strategy for strategy in allowed if strategy != recommended_strategy)
+    ordered.extend(strategy for strategy in DEFAULT_COMPARE_STRATEGIES if strategy != recommended_strategy)
     return ordered
 
 
@@ -56,11 +55,10 @@ def build_compare_candidates(
     *,
     fast_window: int = 2,
     slow_window: int = 3,
-    allowed_strategies: List[str] | None = None,
 ) -> List[Dict[str, Any]]:
     """Build Backtest_Agent candidate configs, putting the regime-selected strategy first."""
     candidates: List[Dict[str, Any]] = []
-    for strategy in _ordered_strategy_names(recommended_strategy, allowed_strategies):
+    for strategy in _ordered_strategy_names(recommended_strategy):
         candidates.append(
             {
                 "name": strategy,
@@ -129,7 +127,6 @@ def build_regime_backtest_plan(
         recommended_strategy,
         fast_window=fast_window,
         slow_window=slow_window,
-        allowed_strategies=allowed_strategies,
     )
 
     # Backtest compare accepts strategy candidates instead of a top-level strategy.
