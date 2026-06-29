@@ -46,10 +46,61 @@ def test_build_regime_backtest_plan_creates_compare_payload():
     assert plan["recommendation"] == recommendation
     compare_payload = plan["backtest_compare_payload"]
     assert compare_payload["max_position_pct"] == 0.05
+    assert compare_payload["market_context"]["effective_size_multiplier"] == 0.5
     assert compare_payload["candidates"][0]["strategy"] == "trend_following"
+    assert {candidate["strategy"] for candidate in compare_payload["candidates"]} == {
+        "sma_crossover",
+        "trend_following",
+        "mean_reversion",
+        "breakout",
+    }
     assert "strategy" not in compare_payload
     assert "fast_window" not in compare_payload
     assert "slow_window" not in compare_payload
+
+
+def test_build_regime_backtest_plan_applies_market_context_limits():
+    recommendation = {
+        "symbol": "SPY",
+        "regime": "bull",
+        "recommended_strategy": "trend_following",
+        "position_size_multiplier": 1.0,
+        "risk_budget_multiplier": 0.6,
+        "exposure_cap": 0.4,
+        "allowed_strategies": ["trend_following", "breakout"],
+        "blocked_strategies": ["mean_reversion"],
+        "decision_notes": ["reduced exposure"],
+    }
+    backtest_payload = {
+        "symbols": ["AAPL"],
+        "initial_equity": 100000,
+        "strategy": "sma_crossover",
+        "fast_window": 2,
+        "slow_window": 3,
+        "max_position_pct": 0.10,
+        "bars": {"AAPL": []},
+    }
+
+    plan = build_regime_backtest_plan(recommendation, backtest_payload)
+
+    assert plan["action"] == "compare"
+    compare_payload = plan["backtest_compare_payload"]
+    assert compare_payload["max_position_pct"] == 0.04
+    assert compare_payload["market_context"] == {
+        "position_size_multiplier": 1.0,
+        "risk_budget_multiplier": 0.6,
+        "exposure_cap": 0.4,
+        "effective_size_multiplier": 0.4,
+        "allowed_strategies": ["trend_following", "breakout"],
+        "blocked_strategies": ["mean_reversion"],
+        "decision_notes": ["reduced exposure"],
+    }
+    assert [candidate["strategy"] for candidate in compare_payload["candidates"]] == [
+        "trend_following",
+        "sma_crossover",
+        "mean_reversion",
+        "breakout",
+    ]
 
 
 def test_build_regime_backtest_plan_returns_no_trade_for_cash_recommendation():
@@ -66,3 +117,18 @@ def test_build_regime_backtest_plan_returns_no_trade_for_cash_recommendation():
     assert plan["action"] == "no_trade"
     assert plan["backtest_compare_payload"] is None
     assert plan["recommendation"] == recommendation
+
+
+def test_build_regime_backtest_plan_returns_no_trade_when_allowed_empty():
+    recommendation = {
+        "symbol": "SPY",
+        "regime": "volatile",
+        "recommended_strategy": "trend_following",
+        "position_size_multiplier": 1.0,
+        "allowed_strategies": [],
+    }
+
+    plan = build_regime_backtest_plan(recommendation, {"symbols": ["AAPL"], "max_position_pct": 0.10})
+
+    assert plan["action"] == "no_trade"
+    assert plan["backtest_compare_payload"] is None
