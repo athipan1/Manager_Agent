@@ -1,4 +1,4 @@
-from scripts.bucket_profit_review import build_profit_request, review_bucket
+from scripts.bucket_profit_review import build_profit_request, parse_bucket_hints, review_bucket
 
 
 def test_review_bucket_uses_profit_agent_for_matching_bucket(monkeypatch):
@@ -96,3 +96,58 @@ def test_review_bucket_falls_back_without_profit_agent():
     row = report["reviewed_positions"][0]
     assert row["profit_source"] == "fallback"
     assert row["profit_plan"]["primary_action"] == "move_stop"
+
+
+def test_parse_bucket_hints_accepts_json_and_csv():
+    assert parse_bucket_hints('{"acgl":"value_rebound","ADBE":"core_dividend"}') == {
+        "ACGL": "value_rebound",
+        "ADBE": "core_dividend",
+    }
+    assert parse_bucket_hints("ACGL:value_rebound,CINF:value_rebound,NOPE:bad") == {
+        "ACGL": "value_rebound",
+        "CINF": "value_rebound",
+    }
+
+
+def test_review_bucket_uses_bucket_hints_when_position_bucket_missing(monkeypatch):
+    dashboard = {"data": {"positions": []}}
+    broker_snapshot = {
+        "positions": {
+            "data": [
+                {"symbol": "ACGL", "qty": 82, "avg_entry_price": 96.79, "current_price": 98.06},
+                {"symbol": "BKNG", "qty": 47, "avg_entry_price": 184.65, "current_price": 184.92},
+            ]
+        },
+        "orders": {
+            "data": [
+                {"symbol": "ACGL", "side": "sell", "type": "stop", "status": "new", "stop_price": 92.94},
+            ]
+        },
+    }
+
+    def fake_profit_agent(url, payload):
+        return {
+            "symbol": payload["position"]["symbol"],
+            "primary_action": "hold",
+            "actions": [{"action": "hold", "reason": "No take-profit or exit condition is triggered"}],
+            "metadata": {"advisory_only": True},
+        }
+
+    monkeypatch.setattr("scripts.bucket_profit_review.call_profit_agent", fake_profit_agent)
+
+    report = review_bucket(
+        "value_rebound",
+        dashboard,
+        broker_snapshot,
+        "http://profit-agent",
+        bucket_hints={"ACGL": "value_rebound", "CINF": "value_rebound"},
+    )
+
+    assert report["summary"]["positions_seen"] == 2
+    assert report["summary"]["bucket_hints_applied"] == 1
+    assert report["summary"]["reviewed_positions"] == 1
+    assert report["bucket_distribution"] == {"unassigned": 1, "value_rebound": 1}
+    row = report["reviewed_positions"][0]
+    assert row["symbol"] == "ACGL"
+    assert row["bucket_source"] == "bucket_hint"
+    assert row["has_protective_stop"] is True
