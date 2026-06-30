@@ -46,6 +46,7 @@ jobs:
       DEFAULT_ACCOUNT_ID: 1
       PROFIT_AGENT_URL: http://localhost:8011
       DEFAULT_BUCKET_REVIEW_HINTS: '{"ADBE":"core_dividend","ACGL":"value_rebound","CINF":"value_rebound"}'
+      POSITION_BUCKET_ASSIGNMENTS: '[{"symbol":"ADBE","strategy_bucket":"core_dividend","reason":"current known core bucket"},{"symbol":"ACGL","strategy_bucket":"value_rebound","reason":"current known value rebound bucket"},{"symbol":"CINF","strategy_bucket":"value_rebound","reason":"current known value rebound bucket"}]'
     steps:
       - name: Resolve bucket
         id: bucket
@@ -239,6 +240,17 @@ jobs:
           done
           docker logs profit-agent-review || true
           exit 1
+
+      - name: Seed Database position buckets
+        working-directory: Manager_Agent
+        run: |
+          mkdir -p reports
+          python scripts/seed_position_buckets.py \
+            --database-url "${DATABASE_AGENT_URL}" \
+            --database-api-key "${DATABASE_AGENT_API_KEY}" \
+            --account-id "${DEFAULT_ACCOUNT_ID}" \
+            --assignments-json "${POSITION_BUCKET_ASSIGNMENTS}" \
+            --output-json "reports/position-bucket-seed.json"
 
       - name: Run bucket profit review report
         working-directory: Manager_Agent
