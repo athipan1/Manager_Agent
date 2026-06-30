@@ -41,6 +41,9 @@ jobs:
       ALLOW_LIVE_TRADING: "false"
       DRY_RUN: "true"
       EXECUTION_API_KEY: ${{ secrets.EXECUTION_API_KEY || 'dev_execution_key' }}
+      DATABASE_AGENT_URL: http://localhost:8004
+      DATABASE_AGENT_API_KEY: ${{ secrets.DATABASE_AGENT_API_KEY || 'dev_database_key' }}
+      DEFAULT_ACCOUNT_ID: 1
       PROFIT_AGENT_URL: http://localhost:8011
       DEFAULT_BUCKET_REVIEW_HINTS: '{"ADBE":"core_dividend","ACGL":"value_rebound","CINF":"value_rebound"}'
     steps:
@@ -163,6 +166,7 @@ jobs:
       - name: Show checked out agent commits
         run: |
           echo "Manager_Agent=$(git -C Manager_Agent rev-parse HEAD)"
+          echo "Database_Agent=$(git -C Database_Agent rev-parse HEAD)"
           echo "Execution_Agent=$(git -C Execution_Agent rev-parse HEAD)"
           echo "Risk_Agent=$(git -C Risk_Agent rev-parse HEAD)"
           echo "Profit_Agent=$(git -C Profit_Agent rev-parse HEAD)"
@@ -243,6 +247,9 @@ jobs:
           python scripts/bucket_profit_review.py \
             --bucket "${{ steps.bucket.outputs.bucket }}" \
             --bucket-hints '${{ steps.bucket_hints.outputs.bucket_hints }}' \
+            --database-url "${DATABASE_AGENT_URL}" \
+            --database-api-key "${DATABASE_AGENT_API_KEY}" \
+            --account-id "${DEFAULT_ACCOUNT_ID}" \
             --profit-url "${PROFIT_AGENT_URL}" \
             --output-json "reports/bucket-profit-review-${{ steps.bucket.outputs.bucket }}.json" \
             --output-md "reports/bucket-profit-review-${{ steps.bucket.outputs.bucket }}.md"
