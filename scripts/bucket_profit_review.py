@@ -101,6 +101,31 @@ def parse_bucket_hints(value: str | None) -> Dict[str, str]:
     return {str(symbol).upper(): _normalize_bucket(bucket) for symbol, bucket in raw.items() if str(symbol).strip() and _normalize_bucket(bucket) != UNASSIGNED}
 
 
+def fetch_database_bucket_hints(database_url: str | None, account_id: int | str = 1, api_key: str | None = None) -> Dict[str, str]:
+    if not database_url:
+        return {}
+    response = _request_json(database_url.rstrip("/"), f"/accounts/{account_id}/position-buckets", api_key=api_key, timeout=20)
+    data = _unwrap(response)
+    if not isinstance(data, list):
+        return {}
+    hints: Dict[str, str] = {}
+    for row in data:
+        if not isinstance(row, dict):
+            continue
+        symbol = _symbol(row)
+        bucket = _normalize_bucket(row.get("strategy_bucket") or row.get("bucket"))
+        if symbol and bucket != UNASSIGNED:
+            hints[symbol] = bucket
+    return hints
+
+
+def merge_bucket_sources(database_hints: Optional[Dict[str, str]] = None, fallback_hints: Optional[Dict[str, str]] = None) -> Dict[str, str]:
+    merged: Dict[str, str] = {}
+    merged.update(fallback_hints or {})
+    merged.update(database_hints or {})
+    return {symbol: bucket for symbol, bucket in merged.items() if _normalize_bucket(bucket) != UNASSIGNED}
+
+
 def _positions_from_dashboard(dashboard: Any) -> List[Dict[str, Any]]:
     data = _unwrap(dashboard) or {}
     return [p for p in (data.get("positions") if isinstance(data, dict) else []) or [] if isinstance(p, dict)]
@@ -116,7 +141,7 @@ def _orders_from_broker_snapshot(snapshot: Any) -> List[Dict[str, Any]]:
     return [o for o in _unwrap(data.get("orders")) or [] if isinstance(o, dict)]
 
 
-def _merge_positions(dashboard_positions: Iterable[Dict[str, Any]], broker_positions: Iterable[Dict[str, Any]], bucket_hints: Optional[Dict[str, str]] = None) -> Dict[str, Dict[str, Any]]:
+def _merge_positions(dashboard_positions: Iterable[Dict[str, Any]], broker_positions: Iterable[Dict[str, Any]], bucket_hints: Optional[Dict[str, str]] = None, database_bucket_hints: Optional[Dict[str, str]] = None) -> Dict[str, Dict[str, Any]]:
     merged: Dict[str, Dict[str, Any]] = {}
     for source_name, rows in (("dashboard", dashboard_positions), ("broker", broker_positions)):
         for row in rows:
@@ -130,6 +155,10 @@ def _merge_positions(dashboard_positions: Iterable[Dict[str, Any]], broker_posit
         if symbol in merged and _bucket(merged[symbol]) == UNASSIGNED:
             merged[symbol]["strategy_bucket"] = bucket
             merged[symbol]["strategy_bucket_source"] = "bucket_hint"
+    for symbol, bucket in (database_bucket_hints or {}).items():
+        if symbol in merged:
+            merged[symbol]["strategy_bucket"] = bucket
+            merged[symbol]["strategy_bucket_source"] = "database_agent"
     return merged
 
 
@@ -143,7 +172,7 @@ def _find_stop_order(symbol: str, orders: Iterable[Dict[str, Any]]) -> Optional[
 
 def _position_prices(position: Dict[str, Any], stop_row: Optional[Dict[str, Any]]) -> Dict[str, Optional[float]]:
     entry = _as_float(position.get("entry_price") or position.get("avg_entry_price") or position.get("average_entry_price") or position.get("avg_price"))
-    current = _as_float(position.get("current_price") or position.get("market_price") or position.get("last_price"))
+    current = _as_float(position.get("current_price") or position.get("current_market_price") or position.get("market_price") or position.get("last_price"))
     if current is None:
         qty, market_value = _as_float(position.get("qty") or position.get("quantity")), _as_float(position.get("market_value"))
         current = market_value / qty if qty and market_value else None
@@ -192,10 +221,10 @@ def _bucket_distribution(positions: Dict[str, Dict[str, Any]]) -> Dict[str, int]
     return dict(sorted(output.items()))
 
 
-def review_bucket(bucket_name: str, dashboard: Any, broker_snapshot: Any, profit_agent_url: str | None, bucket_hints: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
+def review_bucket(bucket_name: str, dashboard: Any, broker_snapshot: Any, profit_agent_url: str | None, bucket_hints: Optional[Dict[str, str]] = None, database_bucket_hints: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
     if bucket_name not in BUCKET_CONFIG:
         raise ValueError(f"unknown bucket: {bucket_name}")
-    rows_by_symbol = _merge_positions(_positions_from_dashboard(dashboard), _positions_from_broker_snapshot(broker_snapshot), bucket_hints)
+    rows_by_symbol = _merge_positions(_positions_from_dashboard(dashboard), _positions_from_broker_snapshot(broker_snapshot), bucket_hints, database_bucket_hints)
     orders = _orders_from_broker_snapshot(broker_snapshot)
     reviewed: List[Dict[str, Any]] = []
     for position in sorted([p for p in rows_by_symbol.values() if _bucket(p) == bucket_name], key=_symbol):
@@ -209,12 +238,12 @@ def review_bucket(bucket_name: str, dashboard: Any, broker_snapshot: Any, profit
         else:
             plan, source = fallback_profit_plan(bucket_name, position, stop_row), "fallback"
         reviewed.append({"symbol": _symbol(position), "bucket": bucket_name, "bucket_source": position.get("strategy_bucket_source") or "position_data", "quantity": request_payload["position"]["quantity"], "entry_price": request_payload["position"]["entry_price"], "current_price": request_payload["position"]["current_price"], "stop_loss": request_payload["position"].get("stop_loss"), "has_protective_stop": stop_row is not None, "profit_source": source, "profit_request": request_payload, "profit_plan": plan, "risk_status": "not_submitted", "execution_status": "not_submitted", "safety": "report_only_no_orders_submitted"})
-    return {"generated_at": datetime.now(timezone.utc).isoformat(), "bucket": bucket_name, "config": BUCKET_CONFIG[bucket_name], "mode": "BUCKET_PROFIT_REVIEW_REPORT_ONLY", "bucket_hints": bucket_hints or {}, "bucket_distribution": _bucket_distribution(rows_by_symbol), "reviewed_positions": reviewed, "summary": {"positions_seen": len(rows_by_symbol), "reviewed_positions": len(reviewed), "positions_without_protective_stop": sum(1 for row in reviewed if not row["has_protective_stop"]), "positions_without_stop": sum(1 for row in reviewed if not row["has_protective_stop"]), "bucket_hints_applied": sum(1 for row in rows_by_symbol.values() if row.get("strategy_bucket_source") == "bucket_hint"), "profit_agent_used": sum(1 for row in reviewed if row["profit_source"] == "profit_agent"), "risk_submissions": 0, "execution_submissions": 0}, "safety": {"advisory_only": True, "orders_submitted": False, "risk_agent_submitted": False, "execution_agent_submitted": False}}
+    return {"generated_at": datetime.now(timezone.utc).isoformat(), "bucket": bucket_name, "config": BUCKET_CONFIG[bucket_name], "mode": "BUCKET_PROFIT_REVIEW_REPORT_ONLY", "bucket_hints": bucket_hints or {}, "database_bucket_hints": database_bucket_hints or {}, "bucket_distribution": _bucket_distribution(rows_by_symbol), "reviewed_positions": reviewed, "summary": {"positions_seen": len(rows_by_symbol), "reviewed_positions": len(reviewed), "positions_without_protective_stop": sum(1 for row in reviewed if not row["has_protective_stop"]), "positions_without_stop": sum(1 for row in reviewed if not row["has_protective_stop"]), "bucket_hints_applied": sum(1 for row in rows_by_symbol.values() if row.get("strategy_bucket_source") == "bucket_hint"), "database_bucket_hints_applied": sum(1 for row in rows_by_symbol.values() if row.get("strategy_bucket_source") == "database_agent"), "profit_agent_used": sum(1 for row in reviewed if row["profit_source"] == "profit_agent"), "risk_submissions": 0, "execution_submissions": 0}, "safety": {"advisory_only": True, "orders_submitted": False, "risk_agent_submitted": False, "execution_agent_submitted": False}}
 
 
 def render_markdown(report: Dict[str, Any]) -> str:
     config, summary = report.get("config") or {}, report.get("summary") or {}
-    lines = [f"# {config.get('review_title', 'Bucket Profit Review')}", "", f"Generated at UTC: `{report.get('generated_at', '-')}`", f"Bucket: `{report.get('bucket', '-')}`", f"Frequency: `{config.get('frequency', '-')}`", f"Mode: `{report.get('mode', '-')}`", "", "## Safety", "- Advisory only: `true`", "- Risk submissions: `0`", "- Execution submissions: `0`", "- Orders submitted: `false`", "", "## Summary", f"- Positions Seen: `{summary.get('positions_seen', 0)}`", f"- Reviewed Positions: `{summary.get('reviewed_positions', 0)}`", f"- Positions Without Protective Stop: `{summary.get('positions_without_protective_stop', summary.get('positions_without_stop', 0))}`", f"- Bucket Hints Applied: `{summary.get('bucket_hints_applied', 0)}`", f"- Profit Agent Used: `{summary.get('profit_agent_used', 0)}`", "", "## Bucket Distribution", "```json", json.dumps(report.get("bucket_distribution") or {}, ensure_ascii=False, indent=2, default=str), "```", "", "## Review Checks"]
+    lines = [f"# {config.get('review_title', 'Bucket Profit Review')}", "", f"Generated at UTC: `{report.get('generated_at', '-')}`", f"Bucket: `{report.get('bucket', '-')}`", f"Frequency: `{config.get('frequency', '-')}`", f"Mode: `{report.get('mode', '-')}`", "", "## Safety", "- Advisory only: `true`", "- Risk submissions: `0`", "- Execution submissions: `0`", "- Orders submitted: `false`", "", "## Summary", f"- Positions Seen: `{summary.get('positions_seen', 0)}`", f"- Reviewed Positions: `{summary.get('reviewed_positions', 0)}`", f"- Positions Without Protective Stop: `{summary.get('positions_without_protective_stop', summary.get('positions_without_stop', 0))}`", f"- Database Bucket Hints Applied: `{summary.get('database_bucket_hints_applied', 0)}`", f"- Fallback Bucket Hints Applied: `{summary.get('bucket_hints_applied', 0)}`", f"- Profit Agent Used: `{summary.get('profit_agent_used', 0)}`", "", "## Bucket Distribution", "```json", json.dumps(report.get("bucket_distribution") or {}, ensure_ascii=False, indent=2, default=str), "```", "", "## Review Checks"]
     for check in config.get("checks") or []:
         lines.append(f"- `{check}`")
     lines.extend(["", "## Reviewed Positions"])
@@ -240,6 +269,9 @@ def parse_args(argv: List[str]) -> argparse.Namespace:
     parser.add_argument("--dashboard-url", default=os.getenv("MANAGER_DASHBOARD_URL", "http://localhost/dashboard/data?account_id=1"))
     parser.add_argument("--execution-url", default=os.getenv("EXECUTION_AGENT_URL", "http://localhost:8006"))
     parser.add_argument("--profit-url", default=os.getenv("PROFIT_AGENT_URL", ""))
+    parser.add_argument("--database-url", default=os.getenv("DATABASE_AGENT_URL", ""))
+    parser.add_argument("--database-api-key", default=os.getenv("DATABASE_AGENT_API_KEY", ""))
+    parser.add_argument("--account-id", default=os.getenv("DEFAULT_ACCOUNT_ID", "1"))
     parser.add_argument("--bucket-hints", default=os.getenv("BUCKET_REVIEW_BUCKET_HINTS", ""))
     parser.add_argument("--execution-api-key", default=os.getenv("EXECUTION_API_KEY", "dev_execution_key"))
     parser.add_argument("--dashboard-json", type=Path, default=None)
@@ -257,7 +289,9 @@ def main(argv: List[str] | None = None) -> int:
         base, path = args.dashboard_url.split("/dashboard", 1)
         dashboard = _request_json(base, f"/dashboard{path}")
     broker_snapshot = _load_json_file(args.broker_snapshot_json) if args.broker_snapshot_json else {"positions": _request_json(args.execution_url.rstrip("/"), "/positions", api_key=args.execution_api_key), "orders": _request_json(args.execution_url.rstrip("/"), "/orders", api_key=args.execution_api_key), "account": _request_json(args.execution_url.rstrip("/"), "/account", api_key=args.execution_api_key)}
-    report = review_bucket(args.bucket, dashboard, broker_snapshot, args.profit_url.strip() or None, bucket_hints=parse_bucket_hints(args.bucket_hints))
+    fallback_hints = parse_bucket_hints(args.bucket_hints)
+    database_hints = fetch_database_bucket_hints(args.database_url.strip() or None, args.account_id, args.database_api_key.strip() or None)
+    report = review_bucket(args.bucket, dashboard, broker_snapshot, args.profit_url.strip() or None, bucket_hints=fallback_hints, database_bucket_hints=database_hints)
     args.output_json.parent.mkdir(parents=True, exist_ok=True)
     args.output_json.write_text(json.dumps(report, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
     args.output_md.write_text(render_markdown(report), encoding="utf-8")
