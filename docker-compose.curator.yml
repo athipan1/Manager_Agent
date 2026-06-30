@@ -33,9 +33,9 @@ services:
     restart: always
     ports:
       - "8013:8013"
-    command: ["python", "-u", "-m", "http.server", "8013", "--bind", "0.0.0.0"]
+    command: ["sh", "-c", "printf 'ok' > health && python -u -m http.server 8013 --bind 0.0.0.0"]
     healthcheck:
-      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8013', timeout=3).read()\" || exit 1"]
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8013/health', timeout=3).read()\" || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 5
