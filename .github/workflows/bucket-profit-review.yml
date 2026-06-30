@@ -12,6 +12,10 @@ on:
           - core_dividend
           - value_rebound
           - news_momentum
+      bucket_hints:
+        description: "Optional JSON or comma hints, e.g. {\"ACGL\":\"value_rebound\"}"
+        required: false
+        default: ""
   schedule:
     # core_dividend: quarterly review on Jan/Apr/Jul/Oct 1st at 00:20 UTC
     - cron: "20 0 1 1,4,7,10 *"
@@ -38,6 +42,7 @@ jobs:
       DRY_RUN: "true"
       EXECUTION_API_KEY: ${{ secrets.EXECUTION_API_KEY || 'dev_execution_key' }}
       PROFIT_AGENT_URL: http://localhost:8011
+      DEFAULT_BUCKET_REVIEW_HINTS: '{"ADBE":"core_dividend","ACGL":"value_rebound","CINF":"value_rebound"}'
     steps:
       - name: Resolve bucket
         id: bucket
@@ -54,6 +59,21 @@ jobs:
           fi
           echo "bucket=${bucket}" >> "$GITHUB_OUTPUT"
           echo "Resolved bucket=${bucket}"
+
+      - name: Resolve bucket hints
+        id: bucket_hints
+        run: |
+          manual_hints='${{ github.event.inputs.bucket_hints }}'
+          if [ -n "${manual_hints}" ]; then
+            hints="${manual_hints}"
+            source="workflow_dispatch"
+          else
+            hints="${DEFAULT_BUCKET_REVIEW_HINTS}"
+            source="default_workflow_hints"
+          fi
+          echo "bucket_hints=${hints}" >> "$GITHUB_OUTPUT"
+          echo "Bucket hint source=${source}"
+          echo "Bucket hints=${hints}"
 
       - name: Checkout Manager_Agent
         uses: actions/checkout@v4
@@ -147,6 +167,7 @@ jobs:
           echo "Risk_Agent=$(git -C Risk_Agent rev-parse HEAD)"
           echo "Profit_Agent=$(git -C Profit_Agent rev-parse HEAD)"
           echo "Resolved bucket=${{ steps.bucket.outputs.bucket }}"
+          echo "Resolved bucket hints=${{ steps.bucket_hints.outputs.bucket_hints }}"
           echo "TRADING_MODE=${TRADING_MODE}"
           echo "ALLOW_LIVE_TRADING=${ALLOW_LIVE_TRADING}"
           echo "DRY_RUN=${DRY_RUN}"
@@ -221,6 +242,7 @@ jobs:
           mkdir -p reports
           python scripts/bucket_profit_review.py \
             --bucket "${{ steps.bucket.outputs.bucket }}" \
+            --bucket-hints '${{ steps.bucket_hints.outputs.bucket_hints }}' \
             --profit-url "${PROFIT_AGENT_URL}" \
             --output-json "reports/bucket-profit-review-${{ steps.bucket.outputs.bucket }}.json" \
             --output-md "reports/bucket-profit-review-${{ steps.bucket.outputs.bucket }}.md"
