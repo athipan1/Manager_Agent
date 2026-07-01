@@ -88,6 +88,8 @@ jobs:
 
       RISK_AGENT_URL: http://localhost:8007
 
+      EXECUTION_AGENT_URL: http://localhost:8006
+
       DEFAULT_BUCKET_REVIEW_HINTS: '{"ADBE":"core_dividend","ACGL":"value_rebound","CINF":"value_rebound"}'
 
       POSITION_BUCKET_ASSIGNMENTS: '[{"symbol":"ADBE","strategy_bucket":"core_dividend","reason":"current known core bucket"},{"symbol":"ACGL","strategy_bucket":"value_rebound","reason":"current known value rebound bucket"},{"symbol":"CINF","strategy_bucket":"value_rebound","reason":"current known value rebound bucket"}]'
@@ -483,6 +485,14 @@ jobs:
         run: |
 
           python scripts/apply_profit_risk_gate.py --risk-url "${RISK_AGENT_URL}" --input-json "reports/bucket-profit-review-${{ steps.bucket.outputs.bucket }}.json" --output-json "reports/bucket-profit-review-${{ steps.bucket.outputs.bucket }}.json" --output-md "reports/bucket-profit-risk-gate-${{ steps.bucket.outputs.bucket }}.md"
+
+      - name: Apply Execution Agent profit preview to bucket review report
+
+        working-directory: Manager_Agent
+
+        run: |
+
+          python scripts/apply_execution_profit_preview.py --execution-url "${EXECUTION_AGENT_URL}" --execution-api-key "${EXECUTION_API_KEY}" --input-json "reports/bucket-profit-review-${{ steps.bucket.outputs.bucket }}.json" --output-json "reports/bucket-profit-review-${{ steps.bucket.outputs.bucket }}.json" --output-md "reports/bucket-profit-execution-preview-${{ steps.bucket.outputs.bucket }}.md"
 
       - name: Upload bucket profit review report
 
