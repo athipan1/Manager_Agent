@@ -494,6 +494,14 @@ jobs:
 
           python scripts/apply_execution_profit_preview.py --execution-url "${EXECUTION_AGENT_URL}" --execution-api-key "${EXECUTION_API_KEY}" --input-json "reports/bucket-profit-review-${{ steps.bucket.outputs.bucket }}.json" --output-json "reports/bucket-profit-review-${{ steps.bucket.outputs.bucket }}.json" --output-md "reports/bucket-profit-execution-preview-${{ steps.bucket.outputs.bucket }}.md"
 
+      - name: Render final bucket review report
+
+        working-directory: Manager_Agent
+
+        run: |
+
+          python scripts/render_bucket_final_report.py --input-json "reports/bucket-profit-review-${{ steps.bucket.outputs.bucket }}.json" --output-md "reports/bucket-profit-final-${{ steps.bucket.outputs.bucket }}.md"
+
       - name: Upload bucket profit review report
 
         if: always()
