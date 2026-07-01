@@ -283,6 +283,11 @@ jobs:
         run: |
           python scripts/store_bucket_review_history.py --database-url "${DATABASE_AGENT_URL}" --database-api-key "${DATABASE_AGENT_API_KEY}" --account-id "${DEFAULT_ACCOUNT_ID}" --input-json "reports/bucket-profit-review-${{ steps.bucket.outputs.bucket }}.json" --output-json "reports/bucket-profit-history-store-${{ steps.bucket.outputs.bucket }}.json"
 
+      - name: Verify bucket review history storage
+        working-directory: Manager_Agent
+        run: |
+          python scripts/verify_bucket_review_history.py --database-url "${DATABASE_AGENT_URL}" --database-api-key "${DATABASE_AGENT_API_KEY}" --input-json "reports/bucket-profit-history-store-${{ steps.bucket.outputs.bucket }}.json" --output-json "reports/bucket-profit-history-verify-${{ steps.bucket.outputs.bucket }}.json"
+
       - name: Upload bucket profit review report
         if: always()
         uses: actions/upload-artifact@v4
