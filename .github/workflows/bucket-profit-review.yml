@@ -1,551 +1,311 @@
 name: Bucket Profit Review
 
 on:
-
   workflow_dispatch:
-
     inputs:
-
       bucket:
-
         description: "Bucket to review"
-
         required: true
-
         default: "value_rebound"
-
         type: choice
-
         options:
-
           - core_dividend
-
           - value_rebound
-
           - news_momentum
-
       bucket_hints:
-
         description: "Optional JSON or comma hints, e.g. {\"ACGL\":\"value_rebound\"}"
-
         required: false
-
         default: ""
-
   schedule:
-
     # core_dividend: quarterly review on Jan/Apr/Jul/Oct 1st at 00:20 UTC
-
     - cron: "20 0 1 1,4,7,10 *"
-
     # value_rebound: daily review at 00:35 UTC
-
     - cron: "35 0 * * *"
-
     # news_momentum: hourly monitor at minute 45
-
     - cron: "45 * * * *"
 
 concurrency:
-
   group: bucket-profit-review-${{ github.event.inputs.bucket || github.event.schedule || github.ref }}
-
   cancel-in-progress: false
 
 jobs:
-
   bucket-profit-review:
-
     runs-on: ubuntu-latest
-
     timeout-minutes: 45
-
     env:
-
       ALPACA_API_KEY_ID: ${{ secrets.ALPACA_API_KEY_ID }}
-
       ALPACA_SECRET_KEY: ${{ secrets.ALPACA_SECRET_KEY }}
-
       ALPACA_API_URL: ${{ secrets.ALPACA_API_URL || 'https://paper-api.alpaca.markets' }}
-
       BROKER_MODE: ALPACA
-
       TRADING_MODE: PAPER
-
       ALLOW_LIVE_TRADING: "false"
-
       DRY_RUN: "true"
-
       EXECUTION_API_KEY: ${{ secrets.EXECUTION_API_KEY || 'dev_execution_key' }}
-
       DATABASE_AGENT_URL: http://localhost:8004
-
       DATABASE_AGENT_API_KEY: ${{ secrets.DATABASE_AGENT_API_KEY || 'dev_database_key' }}
-
       DEFAULT_ACCOUNT_ID: 1
-
       PROFIT_AGENT_URL: http://localhost:8011
-
       RISK_AGENT_URL: http://localhost:8007
-
       EXECUTION_AGENT_URL: http://localhost:8006
-
       DEFAULT_BUCKET_REVIEW_HINTS: '{"ADBE":"core_dividend","ACGL":"value_rebound","CINF":"value_rebound"}'
-
       POSITION_BUCKET_ASSIGNMENTS: '[{"symbol":"ADBE","strategy_bucket":"core_dividend","reason":"current known core bucket"},{"symbol":"ACGL","strategy_bucket":"value_rebound","reason":"current known value rebound bucket"},{"symbol":"CINF","strategy_bucket":"value_rebound","reason":"current known value rebound bucket"}]'
 
     steps:
-
       - name: Resolve bucket
-
         id: bucket
-
         run: |
-
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-
             bucket="${{ github.event.inputs.bucket }}"
-
           else
-
             case "${{ github.event.schedule }}" in
-
               "20 0 1 1,4,7,10 *") bucket="core_dividend" ;;
-
               "35 0 * * *") bucket="value_rebound" ;;
-
               "45 * * * *") bucket="news_momentum" ;;
-
               *) echo "Unknown schedule: ${{ github.event.schedule }}"; exit 1 ;;
-
             esac
-
           fi
-
           echo "bucket=${bucket}" >> "$GITHUB_OUTPUT"
-
           echo "Resolved bucket=${bucket}"
 
       - name: Resolve bucket hints
-
         id: bucket_hints
-
         run: |
-
           manual_hints='${{ github.event.inputs.bucket_hints }}'
-
           if [ -n "${manual_hints}" ]; then
-
             hints="${manual_hints}"
-
             source="workflow_dispatch"
-
           else
-
             hints="${DEFAULT_BUCKET_REVIEW_HINTS}"
-
             source="default_workflow_hints"
-
           fi
-
           echo "bucket_hints=${hints}" >> "$GITHUB_OUTPUT"
-
           echo "Bucket hint source=${source}"
-
           echo "Bucket hints=${hints}"
 
       - name: Checkout Manager_Agent
-
         uses: actions/checkout@v4
-
         with:
-
           path: Manager_Agent
 
       - name: Checkout Scanner_Agent
-
         uses: actions/checkout@v4
-
         with:
-
           repository: athipan1/Scanner_Agent
-
           ref: main
-
           path: Scanner_Agent
-
           fetch-depth: 1
 
       - name: Checkout Technical_Agent
-
         uses: actions/checkout@v4
-
         with:
-
           repository: athipan1/Technical_Agent
-
           ref: main
-
           path: Technical_Agent
-
           fetch-depth: 1
 
       - name: Checkout Fundamental_Agent
-
         uses: actions/checkout@v4
-
         with:
-
           repository: athipan1/Fundamental_Agent
-
           ref: main
-
           path: Fundamental_Agent
-
           fetch-depth: 1
 
       - name: Checkout Database_Agent
-
         uses: actions/checkout@v4
-
         with:
-
           repository: athipan1/Database_Agent
-
           ref: main
-
           path: Database_Agent
-
           fetch-depth: 1
 
       - name: Checkout Learning_Agent
-
         uses: actions/checkout@v4
-
         with:
-
           repository: athipan1/Learning_Agent
-
           ref: main
-
           path: Learning_Agent
-
           fetch-depth: 1
 
       - name: Checkout Execution_Agent
-
         uses: actions/checkout@v4
-
         with:
-
           repository: athipan1/Execution_Agent
-
           ref: main
-
           path: Execution_Agent
-
           fetch-depth: 1
 
       - name: Checkout Risk_Agent
-
         uses: actions/checkout@v4
-
         with:
-
           repository: athipan1/Risk_Agent
-
           ref: main
-
           path: Risk_Agent
-
           fetch-depth: 1
 
       - name: Checkout Performance_Agent
-
         uses: actions/checkout@v4
-
         with:
-
           repository: athipan1/Performance_Agent
-
           ref: main
-
           path: Performance_Agent
-
           fetch-depth: 1
 
       - name: Checkout Curator_Agent
-
         uses: actions/checkout@v4
-
         with:
-
           repository: athipan1/Curator_Agent
-
           ref: main
-
           path: Curator_Agent
-
           fetch-depth: 1
 
       - name: Checkout Profit_Agent
-
         uses: actions/checkout@v4
-
         with:
-
           repository: athipan1/Profit_Agent
-
           ref: main
-
           path: Profit_Agent
-
           fetch-depth: 1
 
       - name: Show checked out agent commits
-
         run: |
-
           echo "Manager_Agent=$(git -C Manager_Agent rev-parse HEAD)"
-
           echo "Database_Agent=$(git -C Database_Agent rev-parse HEAD)"
-
           echo "Execution_Agent=$(git -C Execution_Agent rev-parse HEAD)"
-
           echo "Risk_Agent=$(git -C Risk_Agent rev-parse HEAD)"
-
           echo "Profit_Agent=$(git -C Profit_Agent rev-parse HEAD)"
-
           echo "Resolved bucket=${{ steps.bucket.outputs.bucket }}"
-
           echo "Resolved bucket hints=${{ steps.bucket_hints.outputs.bucket_hints }}"
-
           echo "TRADING_MODE=${TRADING_MODE}"
-
           echo "ALLOW_LIVE_TRADING=${ALLOW_LIVE_TRADING}"
-
           echo "DRY_RUN=${DRY_RUN}"
 
       - name: Validate paper-only settings
-
         run: |
-
           if [ "${ALLOW_LIVE_TRADING}" != "false" ]; then
-
             echo "Bucket Profit Review must not run with ALLOW_LIVE_TRADING=true"
-
             exit 1
-
           fi
-
           if [ "${TRADING_MODE}" != "PAPER" ]; then
-
             echo "Bucket Profit Review must stay in PAPER mode"
-
             exit 1
-
           fi
-
           if [ -z "${ALPACA_API_KEY_ID}" ] || [ -z "${ALPACA_SECRET_KEY}" ]; then
-
             echo "Missing GitHub Secrets: ALPACA_API_KEY_ID or ALPACA_SECRET_KEY"
-
             exit 1
-
           fi
-
           echo "Paper-only safety settings validated."
 
       - name: Build and start trading stack
-
         working-directory: Manager_Agent
-
         run: |
-
           docker compose -f docker-compose.yml -f docker-compose.risk.yml -f docker-compose.curator.yml up --build -d
 
       - name: Start Profit_Agent advisory service
-
         working-directory: Profit_Agent
-
         run: |
-
           docker build -t profit-agent-review .
-
           docker run -d --name profit-agent-review -p 8011:8011 profit-agent-review
 
       - name: Wait for services
-
         working-directory: Manager_Agent
-
         run: |
-
           compose="docker compose -f docker-compose.yml -f docker-compose.risk.yml -f docker-compose.curator.yml"
-
           runtime_services="database-agent technical-agent scanner-agent fundamental-agent learning-agent risk-agent performance-agent execution-agent curator-agent manager-agent db"
-
           for i in {1..60}; do
-
             $compose ps
-
             exited=$($compose ps --status exited -q $runtime_services | wc -l | tr -d ' ')
-
             if [ "$exited" != "0" ]; then
-
               echo "One or more runtime containers exited."
-
               for service in $runtime_services; do
-
                 echo "---- ${service} logs tail ----"
-
                 $compose logs --tail=160 "$service" || true
-
               done
-
               docker logs profit-agent-review || true
-
               exit 1
-
             fi
-
             manager=$($compose exec -T manager-agent python /app/healthcheck.py >/dev/null && echo ok || echo wait)
-
             database=$(curl -fsS http://localhost:8004/health >/dev/null && echo ok || echo wait)
-
             execution=$(curl -fsS http://localhost:8006/health >/dev/null && echo ok || echo wait)
-
             risk=$(curl -fsS http://localhost:8007/health >/dev/null && echo ok || echo wait)
-
             profit=$(curl -fsS http://localhost:8011/health >/dev/null && echo ok || echo wait)
-
             echo "health: manager=$manager database=$database execution=$execution risk=$risk profit=$profit"
-
             if [ "$manager$database$execution$risk$profit" = "okokokokok" ]; then
-
               echo "Bucket review services are reachable."
-
               exit 0
-
             fi
-
             sleep 5
-
           done
-
           echo "Services did not become reachable in time."
-
           $compose ps
-
           for service in $runtime_services; do
-
             echo "---- ${service} logs tail ----"
-
             $compose logs --tail=160 "$service" || true
-
           done
-
           docker logs profit-agent-review || true
-
           exit 1
 
       - name: Prepare Database positions
-
         working-directory: Manager_Agent
-
         run: |
-
           mkdir -p reports
-
           python scripts/prepare_database_positions.py --execution-url "http://localhost:8006" --execution-api-key "${EXECUTION_API_KEY}" --database-url "${DATABASE_AGENT_URL}" --database-api-key "${DATABASE_AGENT_API_KEY}" --account-id "${DEFAULT_ACCOUNT_ID}" --output-json "reports/database-position-prepare.json"
 
       - name: Seed Database position buckets
-
         working-directory: Manager_Agent
-
         run: |
-
           mkdir -p reports
-
           python scripts/seed_position_buckets.py --database-url "${DATABASE_AGENT_URL}" --database-api-key "${DATABASE_AGENT_API_KEY}" --account-id "${DEFAULT_ACCOUNT_ID}" --assignments-json "${POSITION_BUCKET_ASSIGNMENTS}" --output-json "reports/position-bucket-seed.json"
 
       - name: Run bucket profit review report
-
         working-directory: Manager_Agent
-
         run: |
-
           mkdir -p reports
-
           python scripts/bucket_profit_review.py --bucket "${{ steps.bucket.outputs.bucket }}" --bucket-hints '${{ steps.bucket_hints.outputs.bucket_hints }}' --database-url "${DATABASE_AGENT_URL}" --database-api-key "${DATABASE_AGENT_API_KEY}" --account-id "${DEFAULT_ACCOUNT_ID}" --profit-url "${PROFIT_AGENT_URL}" --output-json "reports/bucket-profit-review-${{ steps.bucket.outputs.bucket }}.json" --output-md "reports/bucket-profit-review-${{ steps.bucket.outputs.bucket }}.md"
 
       - name: Apply Risk Agent gate to bucket review report
-
         working-directory: Manager_Agent
-
         run: |
-
           python scripts/apply_profit_risk_gate.py --risk-url "${RISK_AGENT_URL}" --input-json "reports/bucket-profit-review-${{ steps.bucket.outputs.bucket }}.json" --output-json "reports/bucket-profit-review-${{ steps.bucket.outputs.bucket }}.json" --output-md "reports/bucket-profit-risk-gate-${{ steps.bucket.outputs.bucket }}.md"
 
       - name: Apply Execution Agent profit preview to bucket review report
-
         working-directory: Manager_Agent
-
         run: |
-
           python scripts/apply_execution_profit_preview.py --execution-url "${EXECUTION_AGENT_URL}" --execution-api-key "${EXECUTION_API_KEY}" --input-json "reports/bucket-profit-review-${{ steps.bucket.outputs.bucket }}.json" --output-json "reports/bucket-profit-review-${{ steps.bucket.outputs.bucket }}.json" --output-md "reports/bucket-profit-execution-preview-${{ steps.bucket.outputs.bucket }}.md"
 
       - name: Render final bucket review report
-
         working-directory: Manager_Agent
-
         run: |
-
           python scripts/render_bucket_final_report.py --input-json "reports/bucket-profit-review-${{ steps.bucket.outputs.bucket }}.json" --output-md "reports/bucket-profit-final-${{ steps.bucket.outputs.bucket }}.md"
 
+      - name: Store final bucket review history
+        working-directory: Manager_Agent
+        run: |
+          python scripts/store_bucket_review_history.py --database-url "${DATABASE_AGENT_URL}" --database-api-key "${DATABASE_AGENT_API_KEY}" --account-id "${DEFAULT_ACCOUNT_ID}" --input-json "reports/bucket-profit-review-${{ steps.bucket.outputs.bucket }}.json" --output-json "reports/bucket-profit-history-store-${{ steps.bucket.outputs.bucket }}.json"
+
       - name: Upload bucket profit review report
-
         if: always()
-
         uses: actions/upload-artifact@v4
-
         with:
-
           name: bucket-profit-review-${{ steps.bucket.outputs.bucket }}
-
           path: Manager_Agent/reports/
-
           if-no-files-found: warn
 
       - name: Show logs on failure
-
         if: failure()
-
         working-directory: Manager_Agent
-
         run: |
-
           compose="docker compose -f docker-compose.yml -f docker-compose.risk.yml -f docker-compose.curator.yml"
-
           $compose ps || true
-
           for service in database-agent technical-agent scanner-agent fundamental-agent learning-agent risk-agent performance-agent execution-agent curator-agent manager-agent db; do
-
             echo "---- ${service} logs tail ----"
-
             $compose logs --tail=180 "$service" || true
-
           done
-
           docker logs profit-agent-review || true
 
       - name: Stop stack
-
         if: always()
-
         working-directory: Manager_Agent
-
         run: |
-
           docker compose -f docker-compose.yml -f docker-compose.risk.yml -f docker-compose.curator.yml down -v || true
-
           docker rm -f profit-agent-review || true
