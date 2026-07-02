@@ -17,6 +17,12 @@ BUCKET_CONFIG: Dict[str, Dict[str, Any]] = {
         "profit_rules": {"first_take_profit_r": 2.0, "second_take_profit_r": 3.0, "partial_exit_pct": 0.30, "trailing_stop_pct": 0.08, "break_even_trigger_r": 1.0},
         "checks": ["quality_or_dividend_thesis_still_valid", "large_trend_reversal_or_drawdown", "protective_stop_exists", "profit_lock_needed_when_thesis_weakens"],
     },
+    "quality_growth": {
+        "frequency": "weekly",
+        "review_title": "Weekly Quality Growth Review",
+        "profit_rules": {"first_take_profit_r": 2.0, "second_take_profit_r": 3.5, "partial_exit_pct": 0.25, "trailing_stop_pct": 0.10, "break_even_trigger_r": 1.25},
+        "checks": ["growth_thesis_still_valid", "quality_metrics_still_strong", "valuation_or_multiple_compression_risk", "trend_damage_or_stop_review", "profit_lock_after_extended_run"],
+    },
     "value_rebound": {
         "frequency": "daily",
         "review_title": "Daily Value Rebound Review",
@@ -203,6 +209,8 @@ def fallback_profit_plan(bucket_name: str, position: Dict[str, Any], stop_order:
         action, reason, confidence = "partial_exit", "News momentum position has fast unrealized profit; review partial take-profit", 0.68
     elif bucket_name == "value_rebound" and unrealized_pct >= 0.08:
         action, reason, confidence = "partial_exit", "Value rebound position has meaningful unrealized profit; review partial take-profit", 0.64
+    elif bucket_name == "quality_growth" and unrealized_pct >= 0.15:
+        action, reason, confidence = "partial_exit", "Quality growth position has extended unrealized profit; review modest partial take-profit", 0.62
     return {"symbol": symbol, "primary_action": action, "current_r_multiple": None, "unrealized_pl_pct": round(unrealized_pct, 6), "actions": [{"action": action, "symbol": symbol, "quantity": 0, "recommended_stop": stop, "reason": reason, "confidence_score": confidence}], "warnings": ["Profit_Agent was unavailable; used Manager_Agent fallback advisory rules"], "metadata": {"advisory_only": True, "fallback": True}}
 
 
