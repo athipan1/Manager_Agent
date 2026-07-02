@@ -257,6 +257,11 @@ jobs:
           mkdir -p reports
           python scripts/seed_position_buckets.py --database-url "${DATABASE_AGENT_URL}" --database-api-key "${DATABASE_AGENT_API_KEY}" --account-id "${DEFAULT_ACCOUNT_ID}" --assignments-json "${POSITION_BUCKET_ASSIGNMENTS}" --output-json "reports/position-bucket-seed.json"
 
+      - name: Render bucket assignment audit
+        working-directory: Manager_Agent
+        run: |
+          python scripts/render_bucket_assignment_audit.py --execution-url "${EXECUTION_AGENT_URL}" --execution-api-key "${EXECUTION_API_KEY}" --database-url "${DATABASE_AGENT_URL}" --database-api-key "${DATABASE_AGENT_API_KEY}" --account-id "${DEFAULT_ACCOUNT_ID}" --output-json "reports/bucket-assignment-audit.json" --output-md "reports/bucket-assignment-audit.md"
+
       - name: Run bucket profit review report
         working-directory: Manager_Agent
         run: |
