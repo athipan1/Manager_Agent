@@ -12,9 +12,10 @@ from typing import Any, Dict, List
 DEFAULT_ASSIGNMENTS = [
     {"symbol": "ADBE", "strategy_bucket": "core_dividend", "reason": "current known core bucket"},
     {"symbol": "ACGL", "strategy_bucket": "value_rebound", "reason": "current known value rebound bucket"},
+    {"symbol": "BKNG", "strategy_bucket": "quality_growth", "reason": "high-quality growth compounder bucket"},
     {"symbol": "CINF", "strategy_bucket": "value_rebound", "reason": "current known value rebound bucket"},
 ]
-VALID_BUCKETS = {"core_dividend", "value_rebound", "news_momentum", "unassigned"}
+VALID_BUCKETS = {"core_dividend", "quality_growth", "value_rebound", "news_momentum", "unassigned"}
 
 
 def normalize_bucket(value: Any) -> str:
