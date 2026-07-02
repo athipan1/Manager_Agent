@@ -10,6 +10,7 @@ on:
         type: choice
         options:
           - core_dividend
+          - quality_growth
           - value_rebound
           - news_momentum
       bucket_hints:
@@ -19,6 +20,8 @@ on:
   schedule:
     # core_dividend: quarterly review on Jan/Apr/Jul/Oct 1st at 00:20 UTC
     - cron: "20 0 1 1,4,7,10 *"
+    # quality_growth: weekly review on Mondays at 00:30 UTC
+    - cron: "30 0 * * 1"
     # value_rebound: daily review at 00:35 UTC
     - cron: "35 0 * * *"
     # news_momentum: hourly monitor at minute 45
@@ -47,8 +50,8 @@ jobs:
       PROFIT_AGENT_URL: http://localhost:8011
       RISK_AGENT_URL: http://localhost:8007
       EXECUTION_AGENT_URL: http://localhost:8006
-      DEFAULT_BUCKET_REVIEW_HINTS: '{"ADBE":"core_dividend","ACGL":"value_rebound","CINF":"value_rebound"}'
-      POSITION_BUCKET_ASSIGNMENTS: '[{"symbol":"ADBE","strategy_bucket":"core_dividend","reason":"current known core bucket"},{"symbol":"ACGL","strategy_bucket":"value_rebound","reason":"current known value rebound bucket"},{"symbol":"CINF","strategy_bucket":"value_rebound","reason":"current known value rebound bucket"}]'
+      DEFAULT_BUCKET_REVIEW_HINTS: '{"ADBE":"core_dividend","ACGL":"value_rebound","BKNG":"quality_growth","CINF":"value_rebound"}'
+      POSITION_BUCKET_ASSIGNMENTS: '[{"symbol":"ADBE","strategy_bucket":"core_dividend","reason":"current known core bucket"},{"symbol":"ACGL","strategy_bucket":"value_rebound","reason":"current known value rebound bucket"},{"symbol":"BKNG","strategy_bucket":"quality_growth","reason":"high-quality growth compounder bucket"},{"symbol":"CINF","strategy_bucket":"value_rebound","reason":"current known value rebound bucket"}]'
 
     steps:
       - name: Resolve bucket
@@ -59,6 +62,7 @@ jobs:
           else
             case "${{ github.event.schedule }}" in
               "20 0 1 1,4,7,10 *") bucket="core_dividend" ;;
+              "30 0 * * 1") bucket="quality_growth" ;;
               "35 0 * * *") bucket="value_rebound" ;;
               "45 * * * *") bucket="news_momentum" ;;
               *) echo "Unknown schedule: ${{ github.event.schedule }}"; exit 1 ;;
