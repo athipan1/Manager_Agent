@@ -83,10 +83,12 @@ def _status_icon(status: Any) -> str:
         "stop_only": "⚠️",
         "unprotected": "🚨",
         "ready_for_manual_review": "🟡",
+        "manual_approval_required": "🟡",
         "blocked_missing_stop_price": "⛔",
         "blocked_missing_reference_price": "⛔",
         "blocked_invalid_stop_direction": "⛔",
         "blocked_unprotected_position": "🚨",
+        "blocked_symbol_not_found_in_preview": "⛔",
         "no_action_required": "✅",
     }.get(str(status or "").lower(), "ℹ️")
 
@@ -325,6 +327,67 @@ def render_order_review_preview(lines: List[str], preview_response: Dict[str, An
         lines.append("")
 
 
+def render_order_review_approval_ticket(lines: List[str], ticket_response: Dict[str, Any]) -> None:
+    if not ticket_response:
+        return
+
+    ticket = unwrap_data(ticket_response) or {}
+    if not isinstance(ticket, dict):
+        return
+
+    summary = _dict(ticket.get("summary"))
+    ready = _list(ticket.get("ready_for_manual_approval"))
+    blocked = _list(ticket.get("blocked"))
+    if not summary and not ready and not blocked:
+        return
+
+    lines.append("## Broker Order Review Approval Ticket")
+    lines.append(f"- Mode: `{ticket.get('mode', '-')}`")
+    lines.append(f"- Safety: `{ticket.get('safety', '-')}`")
+    lines.append(f"- Ticket ID: `{ticket.get('ticket_id', '-')}`")
+    lines.append(f"- Approval Required: `{ticket.get('approval_required', True)}`")
+    lines.append(f"- Execution Enabled: `{ticket.get('execution_enabled', False)}`")
+    lines.append(f"- Manual Confirmation Phrase: `{ticket.get('manual_confirmation_phrase', '-')}`")
+    lines.append(f"- Requested Symbols: `{', '.join(ticket.get('requested_symbols') or []) or '-'}`")
+    lines.append(f"- Ready For Manual Approval: `{summary.get('ready_for_manual_approval_count', len(ready))}`")
+    lines.append(f"- Blocked: `{summary.get('blocked_count', len(blocked))}`")
+    lines.append(f"- Orders Submitted By Ticket: `{summary.get('orders_submitted', False)}`")
+    lines.append(f"- Orders Cancelled By Ticket: `{summary.get('orders_cancelled', False)}`")
+    lines.append("")
+
+    if ready:
+        lines.append("| Symbol | Qty | Current Stop Order | Stop | TP | R/R | Approval Status | Proposed Actions |")
+        lines.append("|---|---:|---|---:|---:|---:|---|---:|")
+        for row in ready:
+            row = _dict(row)
+            actions = _list(row.get("proposed_actions"))
+            status = row.get("approval_status", "manual_approval_required")
+            lines.append(
+                f"| {row.get('symbol', '-')} | {row.get('position_qty', '-')} | "
+                f"{row.get('current_stop_order_id', '-')} | {row.get('stop_price', '-')} | "
+                f"{row.get('take_profit_price', '-')} | {row.get('reward_risk_ratio', '-')} | "
+                f"{_status_icon(status)} `{status}` | {len(actions)} |"
+            )
+        lines.append("")
+
+    if blocked:
+        lines.append("### Blocked Approval Ticket Items")
+        lines.append("| Symbol | Status | Reason | Recommended Next Step |")
+        lines.append("|---|---|---|---|")
+        for row in blocked:
+            row = _dict(row)
+            status = row.get("preview_status", "-")
+            lines.append(
+                f"| {row.get('symbol', '-')} | {_status_icon(status)} `{status}` | "
+                f"{row.get('reason', '-')} | {row.get('recommended_next_step', '-')} |"
+            )
+        lines.append("")
+
+    lines.append("### Manual Approval Safety")
+    lines.append("Ticket นี้เป็น read-only/manual-approval เท่านั้น ยังไม่ cancel/replace/submit order จริง ต้องมีขั้นตอนอนุมัติแยกก่อน execution")
+    lines.append("")
+
+
 def render_portfolio_section(lines: List[str], data: Dict[str, Any]) -> None:
     allocation_plan = data.get("allocation_plan") or {}
     bucket_selection = data.get("bucket_selection") or {}
@@ -508,6 +571,7 @@ def main() -> int:
         render_ranked_candidates(lines, response)
     render_protection_diagnostics(lines, raw.get("protection_diagnostics") or {})
     render_order_review_preview(lines, raw.get("order_review_preview") or {})
+    render_order_review_approval_ticket(lines, raw.get("order_review_approval_ticket") or {})
     render_broker_snapshot(lines, raw.get("broker_snapshot") or {})
     output_path.write_text("\n".join(lines), encoding="utf-8")
     print(output_path.read_text(encoding="utf-8"))
