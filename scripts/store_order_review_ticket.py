@@ -172,6 +172,41 @@ def attach_audit_to_report(report: Dict[str, Any], store_result: Dict[str, Any])
     return updated
 
 
+def render_audit_summary_markdown(summary_response: Dict[str, Any], store_result: Dict[str, Any]) -> str:
+    summary = unwrap_data(summary_response) or {}
+    latest = summary.get("latest_ticket") if isinstance(summary, dict) else {}
+    if not isinstance(latest, dict):
+        latest = {}
+    response = store_result.get("response") if isinstance(store_result, dict) else {}
+    lines = [
+        "# Order Review Ticket Audit Summary",
+        "",
+        f"- Store Status: `{response.get('status', '-') if isinstance(response, dict) else '-'}`",
+        f"- Total Tickets: `{summary.get('total_count', 0) if isinstance(summary, dict) else 0}`",
+        f"- Ready Tickets: `{summary.get('ready_ticket_count', 0) if isinstance(summary, dict) else 0}`",
+        f"- Blocked Tickets: `{summary.get('blocked_ticket_count', 0) if isinstance(summary, dict) else 0}`",
+        f"- Approval Required Count: `{summary.get('approval_required_count', 0) if isinstance(summary, dict) else 0}`",
+        f"- Execution Enabled Count: `{summary.get('execution_enabled_count', 0) if isinstance(summary, dict) else 0}`",
+        f"- Total Ready Items: `{summary.get('total_ready_items', 0) if isinstance(summary, dict) else 0}`",
+        f"- Total Blocked Items: `{summary.get('total_blocked_items', 0) if isinstance(summary, dict) else 0}`",
+        "",
+        "## Latest Ticket",
+        f"- Ticket ID: `{latest.get('ticket_id', '-')}`",
+        f"- Status: `{latest.get('status', '-')}`",
+        f"- Ready Count: `{latest.get('ready_count', '-')}`",
+        f"- Blocked Count: `{latest.get('blocked_count', '-')}`",
+        f"- Approval Required: `{latest.get('approval_required', '-')}`",
+        f"- Execution Enabled: `{latest.get('execution_enabled', '-')}`",
+        f"- Created At: `{latest.get('created_at', '-')}`",
+        f"- Updated At: `{latest.get('updated_at', '-')}`",
+        "",
+        "## Safety",
+        "Audit summary is read-only and does not perform broker actions.",
+        "",
+    ]
+    return "\n".join(lines)
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Store the hourly order review ticket in Database_Agent audit history.")
     parser.add_argument("--database-url", default=os.getenv("DATABASE_AGENT_URL", "http://localhost:8004"))
@@ -197,6 +232,10 @@ def main() -> int:
     args.output_json.write_text(json.dumps(result, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
     updated_report = attach_audit_to_report(report, result)
     args.input_json.write_text(json.dumps(updated_report, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
+    audit_summary = result.get("audit_summary")
+    if isinstance(audit_summary, dict):
+        summary_markdown_path = args.output_json.parent / "order-review-ticket-audit-summary.md"
+        summary_markdown_path.write_text(render_audit_summary_markdown(audit_summary, result), encoding="utf-8")
     print(json.dumps(result, ensure_ascii=False, indent=2, default=str))
     if result.get("response", {}).get("status") == "error":
         return 1
