@@ -64,11 +64,13 @@ def approved_decision(**overrides):
         "position_size": 10,
         "entry_price": 100.0,
         "stop_loss": 95.0,
+        "take_profit": 110.0,
         "risk_amount": 50.0,
         "risk_agent_response": {"data": {"approval_id": "risk-approved-1"}},
         "guard_plan": {
             "source": "risk_agent",
-            "stop_loss": 95.0,
+            "trigger_price": 95.0,
+            "take_profit_price": 110.0,
             "max_loss_amount": 50.0,
         },
         "stock_risk_context": {"strategy_bucket": "core_dividend"},
@@ -102,6 +104,8 @@ async def test_execute_trade_persists_approval_before_sending_execution_order():
     assert order.quantity == 10
     assert order.final_quantity == 10
     assert order.guard_plan == decision["guard_plan"]
+    assert order.guard_plan["trigger_price"] == 95.0
+    assert order.guard_plan["take_profit_price"] == 110.0
     assert order.strategy_bucket == "core_dividend"
 
 
@@ -120,6 +124,25 @@ async def test_execute_trade_rejects_missing_database_client_in_live(monkeypatch
 
     assert result["status"] == "failed"
     assert "Database client is required" in result["reason"]
+    assert exec_client.created_orders == []
+
+
+@pytest.mark.asyncio
+async def test_execute_trade_rejects_decision_missing_take_profit_before_execution():
+    db_client = FakeDatabaseClient()
+    exec_client = FakeExecutionClient()
+    decision = approved_decision(guard_plan={"source": "risk_agent", "trigger_price": 95.0})
+
+    result = await execute_trade(
+        exec_client=exec_client,
+        trade_decision=decision,
+        account_id=1,
+        correlation_id="corr-no-tp",
+        db_client=db_client,
+    )
+
+    assert result["status"] == "failed"
+    assert "take_profit_price" in result["reason"]
     assert exec_client.created_orders == []
 
 
@@ -149,3 +172,5 @@ async def test_execute_portfolio_batch_sends_only_risk_approved_order_contracts(
     assert [order.risk_approval_id for order in executed_orders] == ["risk-aapl", "risk-msft"]
     assert [order.final_quantity for order in executed_orders] == [10, 5]
     assert all(order.guard_plan for order in executed_orders)
+    assert all(order.guard_plan["trigger_price"] for order in executed_orders)
+    assert all(order.guard_plan["take_profit_price"] for order in executed_orders)
