@@ -1,4 +1,10 @@
-from scripts.store_order_review_ticket import build_payload, store_order_review_ticket, ticket_from_report
+from scripts.store_order_review_ticket import (
+    attach_audit_to_report,
+    build_payload,
+    render_audit_summary_markdown,
+    store_order_review_ticket,
+    ticket_from_report,
+)
 
 
 def sample_report():
@@ -27,6 +33,31 @@ def sample_report():
                     {"symbol": "ACGL", "position_qty": "82"},
                     {"symbol": "ADBE", "position_qty": "52"},
                 ],
+            },
+        },
+    }
+
+
+def sample_audit_summary_response():
+    return {
+        "status": "success",
+        "data": {
+            "total_count": 3,
+            "ready_ticket_count": 2,
+            "blocked_ticket_count": 1,
+            "approval_required_count": 3,
+            "execution_enabled_count": 0,
+            "total_ready_items": 6,
+            "total_blocked_items": 1,
+            "latest_ticket": {
+                "ticket_id": "order-review-abc123",
+                "status": "ready_for_manual_approval",
+                "ready_count": 2,
+                "blocked_count": 0,
+                "approval_required": True,
+                "execution_enabled": False,
+                "created_at": "2026-07-03T16:46:36Z",
+                "updated_at": "2026-07-03T16:46:36Z",
             },
         },
     }
@@ -73,19 +104,50 @@ def test_build_payload_marks_blocked_status_when_ticket_has_blocked_items():
     assert payload["blocked_count"] == 1
 
 
-def test_store_order_review_ticket_posts_to_database(monkeypatch):
-    calls = []
+def test_store_order_review_ticket_posts_to_database_and_fetches_summary(monkeypatch):
+    post_calls = []
+    get_calls = []
 
     def fake_post_json(base_url, path, payload, api_key=None):
-        calls.append((base_url, path, payload, api_key))
+        post_calls.append((base_url, path, payload, api_key))
         return {"status": "success", "data": {"ticket_id": payload["ticket_id"]}}
 
+    def fake_get_json(base_url, path, params=None, api_key=None):
+        get_calls.append((base_url, path, params, api_key))
+        return sample_audit_summary_response()
+
     monkeypatch.setattr("scripts.store_order_review_ticket.post_json", fake_post_json)
+    monkeypatch.setattr("scripts.store_order_review_ticket.get_json", fake_get_json)
 
     result = store_order_review_ticket(sample_report(), "http://database-agent:8004", "test-key", account_id=1)
 
-    assert calls[0][0] == "http://database-agent:8004"
-    assert calls[0][1] == "/order-review-tickets"
-    assert calls[0][3] == "test-key"
-    assert calls[0][2]["ticket_id"] == "order-review-abc123"
+    assert post_calls[0][0] == "http://database-agent:8004"
+    assert post_calls[0][1] == "/order-review-tickets"
+    assert post_calls[0][3] == "test-key"
+    assert post_calls[0][2]["ticket_id"] == "order-review-abc123"
+    assert get_calls[0][1] == "/order-review-tickets/summary"
+    assert get_calls[0][2]["latest_ticket_id"] == "order-review-abc123"
     assert result["response"]["status"] == "success"
+    assert result["audit_summary"]["status"] == "success"
+
+
+def test_attach_audit_to_report_adds_store_result_and_summary():
+    store_result = {"response": {"status": "success"}, "audit_summary": sample_audit_summary_response()}
+
+    updated = attach_audit_to_report(sample_report(), store_result)
+
+    assert updated["order_review_ticket_store_result"] == store_result
+    assert updated["order_review_ticket_audit_summary"]["data"]["total_count"] == 3
+
+
+def test_render_audit_summary_markdown_includes_latest_ticket_and_counts():
+    markdown = render_audit_summary_markdown(
+        sample_audit_summary_response(),
+        {"response": {"status": "success"}},
+    )
+
+    assert "# Order Review Ticket Audit Summary" in markdown
+    assert "Store Status: `success`" in markdown
+    assert "Total Tickets: `3`" in markdown
+    assert "Ticket ID: `order-review-abc123`" in markdown
+    assert "Execution Enabled: `False`" in markdown
