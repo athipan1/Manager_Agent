@@ -325,7 +325,7 @@ jobs:
           print(json.dumps(report, ensure_ascii=False, indent=2, default=str))
           PY
           python scripts/store_order_review_ticket.py \
-            --database-url http://database-agent:8004 \
+            --database-url http://localhost:8004 \
             --database-api-key "${DATABASE_AGENT_API_KEY:-dev_database_key}" \
             --account-id 1 \
             --input-json reports/hourly-auto-trading-report.json \
