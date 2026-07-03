@@ -294,6 +294,11 @@ jobs:
               payload={"reward_risk_ratio": 2.0},
               method="POST",
           )
+          order_review_approval_ticket = request_execution(
+              "/broker/order-review/manual-approval-ticket",
+              payload={"reward_risk_ratio": 2.0},
+              method="POST",
+          )
           broker_snapshot = {
               "account": request_execution("/account"),
               "orders": request_execution("/orders"),
@@ -312,6 +317,7 @@ jobs:
               "response": response,
               "protection_diagnostics": protection_diagnostics,
               "order_review_preview": order_review_preview,
+              "order_review_approval_ticket": order_review_approval_ticket,
               "broker_snapshot": broker_snapshot,
               "dashboard_data": dashboard_data,
           }
