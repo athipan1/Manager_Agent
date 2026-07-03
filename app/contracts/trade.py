@@ -108,20 +108,36 @@ class TradePlan(BaseModel):
             raise ValueError("limit_price is required when order_type is limit")
         if self.final_quantity is None:
             self.final_quantity = self.quantity
-        if self.side == OrderSide.BUY and self.exit.stop_loss is not None:
-            reference_price = self.entry_price or self.limit_price
-            if reference_price is not None and self.exit.stop_loss >= reference_price:
+        reference_price = self.entry_price or self.limit_price
+        if self.exit.stop_loss is not None:
+            if self.side == OrderSide.BUY and reference_price is not None and self.exit.stop_loss >= reference_price:
                 raise ValueError("buy trade stop_loss must be below entry/limit price")
-        if self.side == OrderSide.SELL and self.exit.stop_loss is not None:
-            reference_price = self.entry_price or self.limit_price
-            if reference_price is not None and self.exit.stop_loss <= reference_price:
+            if self.side == OrderSide.SELL and reference_price is not None and self.exit.stop_loss <= reference_price:
                 raise ValueError("sell trade stop_loss must be above entry/limit price")
+        if self.exit.take_profit is not None:
+            if self.side == OrderSide.BUY and reference_price is not None and self.exit.take_profit <= reference_price:
+                raise ValueError("buy trade take_profit must be above entry/limit price")
+            if self.side == OrderSide.SELL and reference_price is not None and self.exit.take_profit >= reference_price:
+                raise ValueError("sell trade take_profit must be below entry/limit price")
         return self
+
+    def assert_execution_ready(self) -> None:
+        """Fail closed unless this TradePlan can be safely sent to Execution_Agent."""
+        reference_price = self.entry_price or self.limit_price
+        if reference_price is None:
+            raise ValueError("entry_price or limit_price is required before creating an execution order")
+        if not self.risk_approval_id:
+            raise ValueError("risk_approval_id is required before creating an execution order")
+        if not self.final_quantity or self.final_quantity <= 0:
+            raise ValueError("final_quantity is required before creating an execution order")
+        if self.exit.stop_loss is None:
+            raise ValueError("exit.stop_loss is required before creating an execution order")
+        if self.exit.take_profit is None:
+            raise ValueError("exit.take_profit is required before creating an execution order")
 
     def to_execution_order(self) -> "CreateOrderRequest":
         """Convert an approved trade plan into the existing Execution_Agent order contract."""
-        if not self.risk_approval_id:
-            raise ValueError("risk_approval_id is required before creating an execution order")
+        self.assert_execution_ready()
         return CreateOrderRequest(
             client_order_id=self.plan_id,
             account_id=self.account_id,
@@ -129,7 +145,7 @@ class TradePlan(BaseModel):
             side=self.side,
             order_type=self.order_type,
             price=self.limit_price or self.entry_price,
-            quantity=self.quantity,
+            quantity=self.final_quantity or self.quantity,
             time_in_force=self.time_in_force,
             strategy_bucket=self.strategy_bucket,
             risk_approval_id=self.risk_approval_id,
