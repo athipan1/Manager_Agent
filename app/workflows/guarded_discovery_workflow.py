@@ -7,6 +7,8 @@ Database_Agent so a missing snapshot can become a fresh sync result.
 
 from __future__ import annotations
 
+import json
+import os
 from typing import Any, Dict
 
 from ..contracts import StandardAgentResponse
@@ -23,6 +25,12 @@ from .discovery_workflow import run_discover_analyze_trade_flow as run_unguarded
 
 
 VALID_STRATEGY_BUCKETS = {"core_dividend", "value_rebound", "news_momentum"}
+DEFAULT_HELD_POSITION_BUCKET_OVERRIDES = {
+    # CINF is already held in the broker account but can fall out of the current
+    # selected/ranked discovery set. Keep its broker-sync bucket stable so it no
+    # longer reverts to unassigned during hourly backfill.
+    "CINF": "core_dividend",
+}
 
 
 def _request_with_execution_disabled(request: DiscoverAnalyzeTradeRequest) -> DiscoverAnalyzeTradeRequest:
@@ -92,8 +100,44 @@ def _row_dict(row: Any) -> Dict[str, Any]:
     return {}
 
 
+def _configured_held_position_bucket_overrides() -> Dict[str, str]:
+    """Return symbol -> bucket overrides for already-held broker positions.
+
+    The default map keeps known held positions from becoming `unassigned` when
+    they are absent from the current discovery selection. Operators can extend or
+    replace values with MANAGER_POSITION_BUCKET_OVERRIDES_JSON, for example:
+    {"CINF": "core_dividend"}.
+    """
+    overrides: Dict[str, str] = dict(DEFAULT_HELD_POSITION_BUCKET_OVERRIDES)
+    raw = os.getenv("MANAGER_POSITION_BUCKET_OVERRIDES_JSON", "").strip()
+    if not raw:
+        return overrides
+
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        report_logger.warning(f"Invalid MANAGER_POSITION_BUCKET_OVERRIDES_JSON ignored: {exc}")
+        return overrides
+
+    if not isinstance(parsed, dict):
+        report_logger.warning("MANAGER_POSITION_BUCKET_OVERRIDES_JSON must be a JSON object; ignoring override payload")
+        return overrides
+
+    for symbol, bucket in parsed.items():
+        normalized_symbol = str(symbol or "").strip().upper()
+        normalized_bucket = str(bucket or "").strip().lower()
+        if normalized_symbol and normalized_bucket in VALID_STRATEGY_BUCKETS:
+            overrides[normalized_symbol] = normalized_bucket
+    return overrides
+
+
 def _bucket_by_symbol_from_response(data: Dict[str, Any]) -> Dict[str, str]:
-    """Build symbol -> strategy_bucket hints from Manager discovery output."""
+    """Build symbol -> strategy_bucket hints from Manager discovery output.
+
+    Selected/risk/execution rows remain authoritative. Held-position overrides
+    are only backfilled when the current discovery result has no bucket for that
+    symbol, which keeps broker sync stable for already-held names like CINF.
+    """
     bucket_by_symbol: Dict[str, str] = {}
     for section in ("selected_positions", "risk_approvals", "execution_candidates"):
         for row in data.get(section) or []:
@@ -102,6 +146,9 @@ def _bucket_by_symbol_from_response(data: Dict[str, Any]) -> Dict[str, str]:
             bucket = str(item.get("strategy_bucket") or item.get("bucket") or "").strip().lower()
             if symbol and bucket in VALID_STRATEGY_BUCKETS:
                 bucket_by_symbol[symbol] = bucket
+
+    for symbol, bucket in _configured_held_position_bucket_overrides().items():
+        bucket_by_symbol.setdefault(symbol, bucket)
     return bucket_by_symbol
 
 
@@ -138,7 +185,7 @@ def _enrich_broker_state_with_buckets(
     enriched["open_orders"] = enriched_orders
     enriched["bucket_backfill"] = {
         "symbols": bucket_by_symbol,
-        "source": "selected_positions",
+        "source": "selected_positions_and_held_position_overrides",
     }
     enriched["summary"] = {
         **(enriched.get("summary") or {}),
