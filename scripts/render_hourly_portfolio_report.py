@@ -52,6 +52,11 @@ def _row_value(row: Dict[str, Any], *keys: str, default: Any = "-") -> Any:
     return default
 
 
+def _execution_job_status(row: Dict[str, Any]) -> Any:
+    job = _dict(row.get("execution_job"))
+    return job.get("status") or job.get("job_status") or "-"
+
+
 def approval_status(row: Dict[str, Any]) -> str:
     if row.get("approved") is True:
         return "approved"
@@ -192,8 +197,8 @@ def render_execution_details(lines: List[str], execution: Dict[str, Any]) -> Non
 
     if created:
         lines.append("### Created Orders")
-        lines.append("| Symbol | Bucket | Quantity | Final Qty | Broker Order ID | Risk Approval ID | Status |")
-        lines.append("|---|---|---:|---:|---|---|---|")
+        lines.append("| Symbol | Bucket | Quantity | Final Qty | Broker Order ID | Risk Approval ID | Status | Job Status |")
+        lines.append("|---|---|---:|---:|---|---|---|---|")
         for row in created:
             row = _dict(row)
             order = _dict(row.get("order"))
@@ -201,7 +206,7 @@ def render_execution_details(lines: List[str], execution: Dict[str, Any]) -> Non
                 f"| {_row_value(row, 'symbol')} | {_row_value(row, 'strategy_bucket')} | "
                 f"{_row_value(row, 'quantity')} | {_row_value(row, 'final_quantity')} | "
                 f"{_row_value(row, 'broker_order_id', default=order.get('broker_order_id') or '-')} | "
-                f"{_row_value(row, 'risk_approval_id')} | {_row_value(row, 'status', default=order.get('status') or '-')} |"
+                f"{_row_value(row, 'risk_approval_id')} | {_row_value(row, 'status', default=order.get('status') or '-')} | {_execution_job_status(row)} |"
             )
         lines.append("")
 
