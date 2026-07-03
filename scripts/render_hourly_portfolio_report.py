@@ -80,6 +80,15 @@ def _sync_summary(database_sync: Dict[str, Any]) -> Dict[str, Any]:
     return _dict(mismatch.get("summary"))
 
 
+def _status_icon(status: Any) -> str:
+    return {
+        "bracket_protected": "✅",
+        "tp_sl_protected": "✅",
+        "stop_only": "⚠️",
+        "unprotected": "🚨",
+    }.get(str(status or "").lower(), "ℹ️")
+
+
 def render_sync_preflight(lines: List[str], data: Dict[str, Any]) -> None:
     database_sync = _dict(data.get("database_sync"))
     database_sync_after_bucket_backfill = _dict(data.get("database_sync_after_bucket_backfill"))
@@ -238,6 +247,50 @@ def render_execution_details(lines: List[str], execution: Dict[str, Any]) -> Non
         lines.append("```json")
         lines.append(json.dumps(validation, ensure_ascii=False, indent=2, default=str))
         lines.append("```")
+        lines.append("")
+
+
+def render_protection_diagnostics(lines: List[str], diagnostics_response: Dict[str, Any]) -> None:
+    if not diagnostics_response:
+        return
+
+    diagnostics = unwrap_data(diagnostics_response) or {}
+    if not isinstance(diagnostics, dict):
+        return
+
+    summary = _dict(diagnostics.get("summary"))
+    rows = _list(diagnostics.get("positions"))
+    if not summary and not rows:
+        return
+
+    lines.append("## Broker Protection Diagnostics")
+    lines.append(f"- Mode: `{diagnostics.get('mode', '-')}`")
+    lines.append(f"- Safety: `{diagnostics.get('safety', '-')}`")
+    lines.append(f"- Positions Checked: `{summary.get('position_count', len(rows))}`")
+    lines.append(f"- Open Orders Checked: `{summary.get('open_order_count', '-')}`")
+    lines.append(f"- Stop-only Positions: `{summary.get('stop_only_count', 0)}`")
+    lines.append(f"- Needs Bracket Upgrade: `{summary.get('needs_bracket_upgrade_count', 0)}`")
+    lines.append(f"- Unprotected Positions: `{summary.get('unprotected_position_count', 0)}`")
+    lines.append(f"- Orders Submitted By Diagnostic: `{summary.get('orders_submitted', False)}`")
+    lines.append("")
+
+    if rows:
+        lines.append("| Symbol | Status | Stop Loss | Take Profit | Bracket | Open Orders | Recommended Action |")
+        lines.append("|---|---|---|---|---|---:|---|")
+        for row in rows:
+            row = _dict(row)
+            status = row.get("protection_status", "-")
+            lines.append(
+                f"| {row.get('symbol', '-')} | {_status_icon(status)} `{status}` | "
+                f"{row.get('has_protective_stop', '-')} | {row.get('has_take_profit', '-')} | "
+                f"{row.get('has_bracket', '-')} | {row.get('open_order_count', '-')} | "
+                f"{row.get('recommended_action', '-')} |"
+            )
+        lines.append("")
+
+    if summary.get("needs_bracket_upgrade_count", 0) or summary.get("unprotected_position_count", 0):
+        lines.append("### Protection Attention Required")
+        lines.append("ตรวจพบ position ที่ยังไม่ครบ TP/SL แบบใหม่ รอบนี้เป็น diagnostic-only จึงยังไม่ cancel/replace order จริง")
         lines.append("")
 
 
@@ -422,6 +475,7 @@ def main() -> int:
     if isinstance(response, dict):
         render_portfolio_section(lines, response)
         render_ranked_candidates(lines, response)
+    render_protection_diagnostics(lines, raw.get("protection_diagnostics") or {})
     render_broker_snapshot(lines, raw.get("broker_snapshot") or {})
     output_path.write_text("\n".join(lines), encoding="utf-8")
     print(output_path.read_text(encoding="utf-8"))
