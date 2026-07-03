@@ -16,6 +16,25 @@ class FakeDatabaseClient:
         return {"status": "success"}
 
 
+def execution_ready_decision(**overrides):
+    decision = {
+        "symbol": "ACGL",
+        "action": "buy",
+        "position_size": 10,
+        "entry_price": 100,
+        "risk_approval_id": "risk-1",
+        "guard_plan": {
+            "symbol": "ACGL",
+            "side": "sell",
+            "quantity": 10,
+            "trigger_price": 95,
+            "take_profit_price": 110,
+        },
+    }
+    decision.update(overrides)
+    return decision
+
+
 def test_strategy_bucket_from_decision_prefers_stock_risk_context():
     decision = {
         "symbol": "ADBE",
@@ -27,14 +46,7 @@ def test_strategy_bucket_from_decision_prefers_stock_risk_context():
 
 
 def test_order_request_preserves_top_level_strategy_bucket():
-    decision = {
-        "symbol": "ACGL",
-        "action": "buy",
-        "position_size": 10,
-        "entry_price": 100,
-        "risk_approval_id": "risk-1",
-        "strategy_bucket": "value_rebound",
-    }
+    decision = execution_ready_decision(strategy_bucket="value_rebound")
 
     order = order_request_from_decision(decision, account_id=1, client_order_id_factory=lambda: "client-1")
 
@@ -43,14 +55,20 @@ def test_order_request_preserves_top_level_strategy_bucket():
 
 
 def test_order_request_preserves_portfolio_context_strategy_bucket():
-    decision = {
-        "symbol": "ADBE",
-        "action": "buy",
-        "position_size": 5,
-        "entry_price": 200,
-        "risk_approval_id": "risk-2",
-        "portfolio_context": {"strategy_bucket": "core_dividend"},
-    }
+    decision = execution_ready_decision(
+        symbol="ADBE",
+        position_size=5,
+        entry_price=200,
+        risk_approval_id="risk-2",
+        guard_plan={
+            "symbol": "ADBE",
+            "side": "sell",
+            "quantity": 5,
+            "trigger_price": 190,
+            "take_profit_price": 220,
+        },
+        portfolio_context={"strategy_bucket": "core_dividend"},
+    )
 
     order = order_request_from_decision(decision, account_id=1, client_order_id_factory=lambda: "client-2")
 
