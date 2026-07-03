@@ -1,0 +1,130 @@
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import urllib.error
+import urllib.request
+from pathlib import Path
+from typing import Any, Dict
+
+
+def unwrap_data(value: Any) -> Any:
+    if isinstance(value, dict) and "data" in value:
+        return value.get("data")
+    return value
+
+
+def post_json(base_url: str, path: str, payload: Dict[str, Any], api_key: str | None = None, timeout: int = 30) -> Dict[str, Any]:
+    headers = {"Content-Type": "application/json"}
+    if api_key:
+        headers["X-API-KEY"] = api_key
+    request = urllib.request.Request(
+        f"{base_url.rstrip('/')}{path}",
+        data=json.dumps(payload).encode("utf-8"),
+        headers=headers,
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            body = response.read().decode("utf-8")
+            return json.loads(body) if body else {}
+    except urllib.error.HTTPError as exc:
+        return {
+            "status": "error",
+            "http_status": exc.code,
+            "body": exc.read().decode("utf-8", errors="replace"),
+        }
+    except Exception as exc:
+        return {"status": "error", "error": str(exc)}
+
+
+def ticket_from_report(report: Dict[str, Any]) -> Dict[str, Any]:
+    ticket_response = report.get("order_review_approval_ticket") or {}
+    ticket = unwrap_data(ticket_response) or {}
+    return ticket if isinstance(ticket, dict) else {}
+
+
+def _summary(ticket: Dict[str, Any]) -> Dict[str, Any]:
+    summary = ticket.get("summary")
+    return summary if isinstance(summary, dict) else {}
+
+
+def build_payload(
+    report: Dict[str, Any],
+    account_id: str | int = 1,
+    source: str = "manager-agent-hourly-workflow",
+) -> Dict[str, Any]:
+    ticket = ticket_from_report(report)
+    summary = _summary(ticket)
+    ticket_id = ticket.get("ticket_id")
+    if not ticket_id:
+        generated_at = str(report.get("generated_at") or "unknown")
+        safe_generated = generated_at.replace(":", "").replace("-", "").replace("+", "").replace(".", "")
+        ticket_id = f"order-review-ticket-missing-{safe_generated}"
+
+    ready_count = summary.get("ready_for_manual_approval_count", 0)
+    blocked_count = summary.get("blocked_count", 0)
+    status = "blocked" if blocked_count else "ready_for_manual_approval" if ready_count else "created"
+
+    return {
+        "ticket_id": ticket_id,
+        "account_id": account_id,
+        "source": source,
+        "mode": ticket.get("mode") or "manual_approval_ticket",
+        "safety": ticket.get("safety") or "read_only_no_orders_submitted_no_orders_cancelled",
+        "status": status,
+        "approval_required": bool(ticket.get("approval_required", True)),
+        "execution_enabled": bool(ticket.get("execution_enabled", False)),
+        "manual_confirmation_phrase": ticket.get("manual_confirmation_phrase"),
+        "requested_symbols": ticket.get("requested_symbols") or [],
+        "ready_count": int(ready_count or 0),
+        "blocked_count": int(blocked_count or 0),
+        "orders_submitted": bool(summary.get("orders_submitted", False)),
+        "orders_cancelled": bool(summary.get("orders_cancelled", False)),
+        "ticket_payload": report.get("order_review_approval_ticket") or {},
+        "metadata": {
+            "generated_at": report.get("generated_at"),
+            "mode": report.get("mode"),
+            "broker_mode": report.get("broker_mode"),
+            "flow": report.get("flow"),
+            "workflow": "hourly-auto-trading",
+        },
+    }
+
+
+def store_order_review_ticket(
+    report: Dict[str, Any],
+    database_url: str,
+    database_api_key: str | None,
+    account_id: str | int = 1,
+) -> Dict[str, Any]:
+    payload = build_payload(report, account_id=account_id)
+    response = post_json(database_url, "/order-review-tickets", payload, api_key=database_api_key)
+    return {"request": payload, "response": response}
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Store the hourly order review ticket in Database_Agent audit history.")
+    parser.add_argument("--database-url", default=os.getenv("DATABASE_AGENT_URL", "http://localhost:8004"))
+    parser.add_argument("--database-api-key", default=os.getenv("DATABASE_AGENT_API_KEY", "dev_database_key"))
+    parser.add_argument("--account-id", default=os.getenv("DEFAULT_ACCOUNT_ID", "1"))
+    parser.add_argument("--input-json", type=Path, required=True)
+    parser.add_argument("--output-json", type=Path, required=True)
+    return parser.parse_args()
+
+
+def main() -> int:
+    args = parse_args()
+    report = json.loads(args.input_json.read_text(encoding="utf-8"))
+    result = store_order_review_ticket(report, args.database_url, args.database_api_key, account_id=args.account_id)
+    args.output_json.parent.mkdir(parents=True, exist_ok=True)
+    args.output_json.write_text(json.dumps(result, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
+    print(json.dumps(result, ensure_ascii=False, indent=2, default=str))
+    if result.get("response", {}).get("status") == "error":
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
