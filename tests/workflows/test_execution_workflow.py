@@ -60,6 +60,38 @@ def force_paper_mode(monkeypatch):
     monkeypatch.setattr(config, "TRADING_MODE", "PAPER")
 
 
+def execution_ready_decision(
+    *,
+    symbol="AAPL",
+    action="buy",
+    position_size=2,
+    entry_price=100,
+    risk_approval_id=None,
+    **overrides,
+):
+    exit_side = "sell" if action in {"buy", "strong_buy"} else "buy"
+    stop_price = entry_price * 0.95 if exit_side == "sell" else entry_price * 1.05
+    take_profit_price = entry_price * 1.10 if exit_side == "sell" else entry_price * 0.90
+    decision = {
+        "symbol": symbol,
+        "action": action,
+        "position_size": position_size,
+        "entry_price": entry_price,
+        "guard_plan": {
+            "source": "risk",
+            "symbol": symbol,
+            "side": exit_side,
+            "quantity": position_size,
+            "trigger_price": stop_price,
+            "take_profit_price": take_profit_price,
+        },
+    }
+    if risk_approval_id is not None:
+        decision["risk_approval_id"] = risk_approval_id
+    decision.update(overrides)
+    return decision
+
+
 def test_ensure_risk_approval_id_prefers_risk_agent_response():
     decision = {"symbol": "AAPL", "risk_agent_response": {"data": {"approval_id": "risk-api-1"}}}
 
@@ -77,13 +109,7 @@ def test_ensure_risk_approval_id_falls_back_to_correlation_symbol():
 @pytest.mark.asyncio
 async def test_execute_trade_submits_order_in_paper_without_db_client():
     exec_client = FakeExecutionClient(create_status="PENDING")
-    decision = {
-        "symbol": "AAPL",
-        "action": "buy",
-        "position_size": 2,
-        "entry_price": 100,
-        "guard_plan": {"source": "risk"},
-    }
+    decision = execution_ready_decision()
 
     result = await execute_trade(exec_client, decision, account_id=1, correlation_id="cid")
 
@@ -93,6 +119,8 @@ async def test_execute_trade_submits_order_in_paper_without_db_client():
     order_request, correlation_id = exec_client.created_orders[0]
     assert order_request.symbol == "AAPL"
     assert order_request.quantity == 2
+    assert order_request.guard_plan["trigger_price"] == 95.0
+    assert order_request.guard_plan["take_profit_price"] == 110.00000000000001
     assert correlation_id == "cid"
 
 
@@ -100,12 +128,7 @@ async def test_execute_trade_submits_order_in_paper_without_db_client():
 async def test_execute_trade_fails_closed_in_live_without_db_client(monkeypatch):
     monkeypatch.setattr(config, "TRADING_MODE", "LIVE")
     exec_client = FakeExecutionClient(create_status="PENDING")
-    decision = {
-        "symbol": "AAPL",
-        "action": "buy",
-        "position_size": 2,
-        "entry_price": 100,
-    }
+    decision = execution_ready_decision()
 
     result = await execute_trade(exec_client, decision, account_id=1, correlation_id="cid")
 
@@ -117,12 +140,7 @@ async def test_execute_trade_fails_closed_in_live_without_db_client(monkeypatch)
 @pytest.mark.asyncio
 async def test_execute_trade_rejects_non_pending_execution_status():
     exec_client = FakeExecutionClient(create_status="FAILED")
-    decision = {
-        "symbol": "AAPL",
-        "action": "buy",
-        "position_size": 2,
-        "entry_price": 100,
-    }
+    decision = execution_ready_decision()
 
     result = await execute_trade(exec_client, decision, account_id=1, correlation_id="cid")
 
@@ -143,8 +161,8 @@ async def test_execute_portfolio_batch_validates_and_executes_orders(monkeypatch
     )
 
     decisions = [
-        {"symbol": "AAPL", "action": "buy", "position_size": 1, "entry_price": 100},
-        {"symbol": "MSFT", "action": "sell", "position_size": 2, "entry_price": 200},
+        execution_ready_decision(symbol="AAPL", action="buy", position_size=1, entry_price=100),
+        execution_ready_decision(symbol="MSFT", action="sell", position_size=2, entry_price=200),
     ]
 
     result = await execute_portfolio_batch(
@@ -191,8 +209,8 @@ async def test_execute_portfolio_batch_retries_after_open_order_conflict(monkeyp
     )
 
     decisions = [
-        {"symbol": "ADBE", "action": "buy", "position_size": 5, "quantity": 5, "final_quantity": 5, "entry_price": 196},
-        {"symbol": "ACGL", "action": "buy", "position_size": 10, "quantity": 10, "final_quantity": 10, "entry_price": 90},
+        execution_ready_decision(symbol="ADBE", action="buy", position_size=5, entry_price=196, quantity=5, final_quantity=5),
+        execution_ready_decision(symbol="ACGL", action="buy", position_size=10, entry_price=90, quantity=10, final_quantity=10),
     ]
 
     result = await execute_portfolio_batch(
@@ -234,7 +252,7 @@ async def test_execute_portfolio_batch_rejects_when_validation_rejects(monkeypat
 
     result = await execute_portfolio_batch(
         exec_client=exec_client,
-        decisions=[{"symbol": "AAPL", "action": "buy", "position_size": 1, "entry_price": 100}],
+        decisions=[execution_ready_decision(symbol="AAPL", action="buy", position_size=1, entry_price=100)],
         account_id=1,
         correlation_id="cid",
         db_client=FakeDbClient(),
@@ -259,7 +277,7 @@ async def test_execute_portfolio_batch_skips_zero_position_size(monkeypatch):
 
     result = await execute_portfolio_batch(
         exec_client=exec_client,
-        decisions=[{"symbol": "AAPL", "action": "buy", "position_size": 0, "entry_price": 100}],
+        decisions=[execution_ready_decision(symbol="AAPL", action="buy", position_size=0, entry_price=100)],
         account_id=1,
         correlation_id="cid",
         db_client=FakeDbClient(),
