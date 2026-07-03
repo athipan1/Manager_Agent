@@ -4,9 +4,10 @@ import argparse
 import json
 import os
 import urllib.error
+import urllib.parse
 import urllib.request
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 
 def unwrap_data(value: Any) -> Any:
@@ -24,6 +25,34 @@ def post_json(base_url: str, path: str, payload: Dict[str, Any], api_key: str | 
         data=json.dumps(payload).encode("utf-8"),
         headers=headers,
         method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            body = response.read().decode("utf-8")
+            return json.loads(body) if body else {}
+    except urllib.error.HTTPError as exc:
+        return {
+            "status": "error",
+            "http_status": exc.code,
+            "body": exc.read().decode("utf-8", errors="replace"),
+        }
+    except Exception as exc:
+        return {"status": "error", "error": str(exc)}
+
+
+def get_json(base_url: str, path: str, params: Optional[Dict[str, Any]] = None, api_key: str | None = None, timeout: int = 30) -> Dict[str, Any]:
+    query = ""
+    if params:
+        filtered = {key: value for key, value in params.items() if value not in (None, "")}
+        if filtered:
+            query = "?" + urllib.parse.urlencode(filtered)
+    headers = {}
+    if api_key:
+        headers["X-API-KEY"] = api_key
+    request = urllib.request.Request(
+        f"{base_url.rstrip('/')}{path}{query}",
+        headers=headers,
+        method="GET",
     )
     try:
         with urllib.request.urlopen(request, timeout=timeout) as response:
@@ -93,15 +122,89 @@ def build_payload(
     }
 
 
+def fetch_order_review_ticket_audit_summary(
+    database_url: str,
+    database_api_key: str | None,
+    account_id: str | int = 1,
+    source: str = "manager-agent-hourly-workflow",
+    latest_ticket_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    return get_json(
+        database_url,
+        "/order-review-tickets/summary",
+        params={
+            "account_id": account_id,
+            "source": source,
+            "latest_ticket_id": latest_ticket_id,
+        },
+        api_key=database_api_key,
+    )
+
+
 def store_order_review_ticket(
     report: Dict[str, Any],
     database_url: str,
     database_api_key: str | None,
     account_id: str | int = 1,
+    source: str = "manager-agent-hourly-workflow",
+    include_summary: bool = True,
 ) -> Dict[str, Any]:
-    payload = build_payload(report, account_id=account_id)
+    payload = build_payload(report, account_id=account_id, source=source)
     response = post_json(database_url, "/order-review-tickets", payload, api_key=database_api_key)
-    return {"request": payload, "response": response}
+    result = {"request": payload, "response": response}
+    if include_summary and response.get("status") != "error":
+        result["audit_summary"] = fetch_order_review_ticket_audit_summary(
+            database_url,
+            database_api_key,
+            account_id=account_id,
+            source=source,
+            latest_ticket_id=payload.get("ticket_id"),
+        )
+    return result
+
+
+def attach_audit_to_report(report: Dict[str, Any], store_result: Dict[str, Any]) -> Dict[str, Any]:
+    updated = dict(report)
+    updated["order_review_ticket_store_result"] = store_result
+    audit_summary = store_result.get("audit_summary")
+    if audit_summary is not None:
+        updated["order_review_ticket_audit_summary"] = audit_summary
+    return updated
+
+
+def render_audit_summary_markdown(summary_response: Dict[str, Any], store_result: Dict[str, Any]) -> str:
+    summary = unwrap_data(summary_response) or {}
+    latest = summary.get("latest_ticket") if isinstance(summary, dict) else {}
+    if not isinstance(latest, dict):
+        latest = {}
+    response = store_result.get("response") if isinstance(store_result, dict) else {}
+    lines = [
+        "# Order Review Ticket Audit Summary",
+        "",
+        f"- Store Status: `{response.get('status', '-') if isinstance(response, dict) else '-'}`",
+        f"- Total Tickets: `{summary.get('total_count', 0) if isinstance(summary, dict) else 0}`",
+        f"- Ready Tickets: `{summary.get('ready_ticket_count', 0) if isinstance(summary, dict) else 0}`",
+        f"- Blocked Tickets: `{summary.get('blocked_ticket_count', 0) if isinstance(summary, dict) else 0}`",
+        f"- Approval Required Count: `{summary.get('approval_required_count', 0) if isinstance(summary, dict) else 0}`",
+        f"- Execution Enabled Count: `{summary.get('execution_enabled_count', 0) if isinstance(summary, dict) else 0}`",
+        f"- Total Ready Items: `{summary.get('total_ready_items', 0) if isinstance(summary, dict) else 0}`",
+        f"- Total Blocked Items: `{summary.get('total_blocked_items', 0) if isinstance(summary, dict) else 0}`",
+        "",
+        "## Latest Ticket",
+        f"- Ticket ID: `{latest.get('ticket_id', '-')}`",
+        f"- Status: `{latest.get('status', '-')}`",
+        f"- Ready Count: `{latest.get('ready_count', '-')}`",
+        f"- Blocked Count: `{latest.get('blocked_count', '-')}`",
+        f"- Approval Required: `{latest.get('approval_required', '-')}`",
+        f"- Execution Enabled: `{latest.get('execution_enabled', '-')}`",
+        f"- Created At: `{latest.get('created_at', '-')}`",
+        f"- Updated At: `{latest.get('updated_at', '-')}`",
+        "",
+        "## Safety",
+        "Audit summary is read-only and does not perform broker actions.",
+        "",
+    ]
+    return "\n".join(lines)
 
 
 def parse_args() -> argparse.Namespace:
@@ -109,6 +212,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--database-url", default=os.getenv("DATABASE_AGENT_URL", "http://localhost:8004"))
     parser.add_argument("--database-api-key", default=os.getenv("DATABASE_AGENT_API_KEY", "dev_database_key"))
     parser.add_argument("--account-id", default=os.getenv("DEFAULT_ACCOUNT_ID", "1"))
+    parser.add_argument("--source", default="manager-agent-hourly-workflow")
     parser.add_argument("--input-json", type=Path, required=True)
     parser.add_argument("--output-json", type=Path, required=True)
     return parser.parse_args()
@@ -117,11 +221,25 @@ def parse_args() -> argparse.Namespace:
 def main() -> int:
     args = parse_args()
     report = json.loads(args.input_json.read_text(encoding="utf-8"))
-    result = store_order_review_ticket(report, args.database_url, args.database_api_key, account_id=args.account_id)
+    result = store_order_review_ticket(
+        report,
+        args.database_url,
+        args.database_api_key,
+        account_id=args.account_id,
+        source=args.source,
+    )
     args.output_json.parent.mkdir(parents=True, exist_ok=True)
     args.output_json.write_text(json.dumps(result, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
+    updated_report = attach_audit_to_report(report, result)
+    args.input_json.write_text(json.dumps(updated_report, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
+    audit_summary = result.get("audit_summary")
+    if isinstance(audit_summary, dict):
+        summary_markdown_path = args.output_json.parent / "order-review-ticket-audit-summary.md"
+        summary_markdown_path.write_text(render_audit_summary_markdown(audit_summary, result), encoding="utf-8")
     print(json.dumps(result, ensure_ascii=False, indent=2, default=str))
     if result.get("response", {}).get("status") == "error":
+        return 1
+    if result.get("audit_summary", {}).get("status") == "error":
         return 1
     return 0
 
