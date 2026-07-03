@@ -522,6 +522,8 @@ jobs:
 
           time.sleep(10)
 
+          protection_diagnostics = request_execution("/broker/protection-diagnostics")
+
           broker_snapshot = {
 
               "account": request_execution("/account"),
@@ -551,6 +553,8 @@ jobs:
               "request": payload,
 
               "response": response,
+
+              "protection_diagnostics": protection_diagnostics,
 
               "broker_snapshot": broker_snapshot,
 
@@ -620,17 +624,9 @@ jobs:
 
         run: |
 
-          compose="docker compose -f docker-compose.yml -f docker-compose.risk.yml -f docker-compose.curator.yml"
+          docker compose -f docker-compose.yml -f docker-compose.risk.yml -f docker-compose.curator.yml ps || true
 
-          $compose ps || true
-
-          for service in database-agent technical-agent scanner-agent fundamental-agent learning-agent risk-agent performance-agent execution-agent curator-agent manager-agent db; do
-
-            echo "---- ${service} logs tail ----"
-
-            $compose logs --tail=180 "$service" || true
-
-          done
+          docker compose -f docker-compose.yml -f docker-compose.risk.yml -f docker-compose.curator.yml logs --tail=220 manager-agent execution-agent risk-agent database-agent curator-agent || true
 
       - name: Stop stack
 
@@ -640,4 +636,4 @@ jobs:
 
         run: |
 
-          docker compose -f docker-compose.yml -f docker-compose.risk.yml -f docker-compose.curator.yml down -v || true
+          docker compose -f docker-compose.yml -f docker-compose.risk.yml -f docker-compose.curator.yml down -v
