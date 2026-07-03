@@ -22,6 +22,7 @@ def th_execution(value: Any) -> str:
         "failed": "ส่งออเดอร์ไม่สำเร็จ",
         "not_attempted": "ยังไม่ส่งออเดอร์",
         "unknown": "ไม่ทราบสถานะ",
+        "blocked": "ถูกบล็อกเพื่อความปลอดภัย",
     }.get(str(value).lower(), str(value))
 
 
@@ -33,25 +34,6 @@ def unwrap_data(value: Any) -> Any:
 
 def score(item: Dict[str, Any], key: str) -> Any:
     return (item.get("score_breakdown") or {}).get(key)
-
-
-def approval_status(row: Dict[str, Any]) -> str:
-    if row.get("approved") is True:
-        return "approved"
-    if row.get("approved") is False:
-        return "rejected"
-    return str(row.get("status") or "unknown")
-
-
-def approval_reason(row: Dict[str, Any]) -> str:
-    reasons = row.get("reasons") or row.get("errors") or row.get("warnings") or []
-    if isinstance(reasons, list) and reasons:
-        return "; ".join(str(item.get("code") or item.get("reason") or item) if isinstance(item, dict) else str(item) for item in reasons[:4])
-    risk_response = row.get("risk_response") or row.get("risk") or {}
-    nested = risk_response.get("reasons") or risk_response.get("errors") or risk_response.get("warnings") or []
-    if isinstance(nested, list) and nested:
-        return "; ".join(str(item.get("code") or item.get("reason") or item) if isinstance(item, dict) else str(item) for item in nested[:4])
-    return str(row.get("reason") or risk_response.get("reason") or "-")
 
 
 def _list(value: Any) -> List[Any]:
@@ -75,9 +57,23 @@ def _execution_job_status(row: Dict[str, Any]) -> Any:
     return job.get("status") or job.get("job_status") or "-"
 
 
-def _sync_summary(database_sync: Dict[str, Any]) -> Dict[str, Any]:
-    mismatch = _dict(database_sync.get("mismatch"))
-    return _dict(mismatch.get("summary"))
+def approval_status(row: Dict[str, Any]) -> str:
+    if row.get("approved") is True:
+        return "approved"
+    if row.get("approved") is False:
+        return "rejected"
+    return str(row.get("status") or "unknown")
+
+
+def approval_reason(row: Dict[str, Any]) -> str:
+    reasons = row.get("reasons") or row.get("errors") or row.get("warnings") or []
+    if isinstance(reasons, list) and reasons:
+        return "; ".join(str(item.get("code") or item.get("reason") or item) if isinstance(item, dict) else str(item) for item in reasons[:4])
+    risk_response = row.get("risk_response") or row.get("risk") or {}
+    nested = risk_response.get("reasons") or risk_response.get("errors") or risk_response.get("warnings") or []
+    if isinstance(nested, list) and nested:
+        return "; ".join(str(item.get("code") or item.get("reason") or item) if isinstance(item, dict) else str(item) for item in nested[:4])
+    return str(row.get("reason") or risk_response.get("reason") or "-")
 
 
 def _status_icon(status: Any) -> str:
@@ -86,7 +82,18 @@ def _status_icon(status: Any) -> str:
         "tp_sl_protected": "✅",
         "stop_only": "⚠️",
         "unprotected": "🚨",
+        "ready_for_manual_review": "🟡",
+        "blocked_missing_stop_price": "⛔",
+        "blocked_missing_reference_price": "⛔",
+        "blocked_invalid_stop_direction": "⛔",
+        "blocked_unprotected_position": "🚨",
+        "no_action_required": "✅",
     }.get(str(status or "").lower(), "ℹ️")
+
+
+def _sync_summary(database_sync: Dict[str, Any]) -> Dict[str, Any]:
+    mismatch = _dict(database_sync.get("mismatch"))
+    return _dict(mismatch.get("summary"))
 
 
 def render_sync_preflight(lines: List[str], data: Dict[str, Any]) -> None:
@@ -117,37 +124,22 @@ def render_sync_preflight(lines: List[str], data: Dict[str, Any]) -> None:
     else:
         lines.append("- Database Sync Status: `-`")
     if execution.get("status") == "blocked":
-        lines.append(f"- Safety Gate: `blocked`")
+        lines.append("- Safety Gate: `blocked`")
         lines.append(f"- Block Reason: {execution.get('reason', '-')}")
     lines.append("")
 
-    if snapshot_capture:
-        lines.append("### Broker Snapshot Capture")
-        lines.append("```json")
-        lines.append(json.dumps(snapshot_capture, ensure_ascii=False, indent=2, default=str))
-        lines.append("```")
-        lines.append("")
-
-    if bucket_backfill_capture:
-        lines.append("### Bucket Backfill Capture")
-        lines.append("```json")
-        lines.append(json.dumps(bucket_backfill_capture, ensure_ascii=False, indent=2, default=str))
-        lines.append("```")
-        lines.append("")
-
-    if database_sync:
-        lines.append("### Database Sync Diagnostics")
-        lines.append("```json")
-        lines.append(json.dumps(database_sync, ensure_ascii=False, indent=2, default=str))
-        lines.append("```")
-        lines.append("")
-
-    if database_sync_after_bucket_backfill:
-        lines.append("### Database Sync After Bucket Backfill")
-        lines.append("```json")
-        lines.append(json.dumps(database_sync_after_bucket_backfill, ensure_ascii=False, indent=2, default=str))
-        lines.append("```")
-        lines.append("")
+    for title, payload in [
+        ("Broker Snapshot Capture", snapshot_capture),
+        ("Bucket Backfill Capture", bucket_backfill_capture),
+        ("Database Sync Diagnostics", database_sync),
+        ("Database Sync After Bucket Backfill", database_sync_after_bucket_backfill),
+    ]:
+        if payload:
+            lines.append(f"### {title}")
+            lines.append("```json")
+            lines.append(json.dumps(payload, ensure_ascii=False, indent=2, default=str))
+            lines.append("```")
+            lines.append("")
 
 
 def _curator_output(signal: Dict[str, Any]) -> Dict[str, Any]:
@@ -205,15 +197,15 @@ def render_execution_details(lines: List[str], execution: Dict[str, Any]) -> Non
 
     if created:
         lines.append("### Created Orders")
-        lines.append("| Symbol | Bucket | Quantity | Final Qty | Order ID | Broker Order ID | Risk Approval ID | Order Status | Job Status |")
-        lines.append("|---|---|---:|---:|---|---|---|---|---|")
+        lines.append("| Symbol | Bucket | Quantity | Final Qty | Broker Order ID | Risk Approval ID | Status | Job Status |")
+        lines.append("|---|---|---:|---:|---|---|---|---|")
         for row in created:
             row = _dict(row)
             order = _dict(row.get("order"))
             lines.append(
                 f"| {_row_value(row, 'symbol')} | {_row_value(row, 'strategy_bucket')} | "
                 f"{_row_value(row, 'quantity')} | {_row_value(row, 'final_quantity')} | "
-                f"{_row_value(row, 'order_id')} | {_row_value(row, 'broker_order_id', default=order.get('broker_order_id') or '-')} | "
+                f"{_row_value(row, 'broker_order_id', default=order.get('broker_order_id') or '-')} | "
                 f"{_row_value(row, 'risk_approval_id')} | {_row_value(row, 'status', default=order.get('status') or '-')} | {_execution_job_status(row)} |"
             )
         lines.append("")
@@ -224,10 +216,7 @@ def render_execution_details(lines: List[str], execution: Dict[str, Any]) -> Non
         lines.append("|---|---:|---:|---|---|")
         for row in skipped:
             row = _dict(row)
-            lines.append(
-                f"| {_row_value(row, 'symbol')} | {_row_value(row, 'quantity')} | {_row_value(row, 'final_quantity')} | "
-                f"{_row_value(row, 'risk_approval_id')} | {_row_value(row, 'reason')} |"
-            )
+            lines.append(f"| {_row_value(row, 'symbol')} | {_row_value(row, 'quantity')} | {_row_value(row, 'final_quantity')} | {_row_value(row, 'risk_approval_id')} | {_row_value(row, 'reason')} |")
         lines.append("")
 
     if failed or failed_to_build:
@@ -236,10 +225,7 @@ def render_execution_details(lines: List[str], execution: Dict[str, Any]) -> Non
         lines.append("|---|---:|---:|---|---|")
         for row in failed + failed_to_build:
             row = _dict(row)
-            lines.append(
-                f"| {_row_value(row, 'symbol')} | {_row_value(row, 'quantity')} | {_row_value(row, 'final_quantity')} | "
-                f"{_row_value(row, 'risk_approval_id')} | {_row_value(row, 'reason')} |"
-            )
+            lines.append(f"| {_row_value(row, 'symbol')} | {_row_value(row, 'quantity')} | {_row_value(row, 'final_quantity')} | {_row_value(row, 'risk_approval_id')} | {_row_value(row, 'reason')} |")
         lines.append("")
 
     if validation:
@@ -291,6 +277,51 @@ def render_protection_diagnostics(lines: List[str], diagnostics_response: Dict[s
     if summary.get("needs_bracket_upgrade_count", 0) or summary.get("unprotected_position_count", 0):
         lines.append("### Protection Attention Required")
         lines.append("ตรวจพบ position ที่ยังไม่ครบ TP/SL แบบใหม่ รอบนี้เป็น diagnostic-only จึงยังไม่ cancel/replace order จริง")
+        lines.append("")
+
+
+def render_order_review_preview(lines: List[str], preview_response: Dict[str, Any]) -> None:
+    if not preview_response:
+        return
+
+    preview = unwrap_data(preview_response) or {}
+    if not isinstance(preview, dict):
+        return
+
+    summary = _dict(preview.get("summary"))
+    plans = _list(preview.get("plans"))
+    if not summary and not plans:
+        return
+
+    lines.append("## Broker Order Review Preview")
+    lines.append(f"- Mode: `{preview.get('mode', '-')}`")
+    lines.append(f"- Safety: `{preview.get('safety', '-')}`")
+    lines.append(f"- Reward/Risk Ratio: `{preview.get('reward_risk_ratio', '-')}`")
+    lines.append(f"- Candidates: `{summary.get('candidate_count', 0)}`")
+    lines.append(f"- Ready For Manual Review: `{summary.get('ready_for_manual_review_count', 0)}`")
+    lines.append(f"- Blocked: `{summary.get('blocked_count', 0)}`")
+    lines.append(f"- No Action: `{summary.get('no_action_count', 0)}`")
+    lines.append(f"- Orders Submitted By Preview: `{summary.get('orders_submitted', False)}`")
+    lines.append(f"- Orders Cancelled By Preview: `{summary.get('orders_cancelled', False)}`")
+    lines.append("")
+
+    if plans:
+        lines.append("| Symbol | Preview Status | Qty | Stop | TP | Next Step | Proposed Actions |")
+        lines.append("|---|---|---:|---:|---:|---|---:|")
+        for plan in plans:
+            plan = _dict(plan)
+            status = plan.get("preview_status", "-")
+            actions = _list(plan.get("proposed_actions"))
+            lines.append(
+                f"| {plan.get('symbol', '-')} | {_status_icon(status)} `{status}` | "
+                f"{plan.get('position_qty', '-')} | {plan.get('stop_price', '-')} | {plan.get('take_profit_price', '-')} | "
+                f"{plan.get('recommended_next_step', '-')} | {len(actions)} |"
+            )
+        lines.append("")
+
+    if summary.get("blocked_count", 0):
+        lines.append("### Preview Attention Required")
+        lines.append("บางรายการยังสร้างแผน bracket ไม่ได้ เพราะข้อมูล broker order ยังไม่ครบ เช่น stop_price/trigger_price รอบนี้เป็น preview-only จึงยังไม่ cancel/replace order จริง")
         lines.append("")
 
 
@@ -476,6 +507,7 @@ def main() -> int:
         render_portfolio_section(lines, response)
         render_ranked_candidates(lines, response)
     render_protection_diagnostics(lines, raw.get("protection_diagnostics") or {})
+    render_order_review_preview(lines, raw.get("order_review_preview") or {})
     render_broker_snapshot(lines, raw.get("broker_snapshot") or {})
     output_path.write_text("\n".join(lines), encoding="utf-8")
     print(output_path.read_text(encoding="utf-8"))
