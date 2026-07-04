@@ -100,6 +100,23 @@ def _row_dict(row: Any) -> Dict[str, Any]:
     return {}
 
 
+def _normalized_strategy_bucket(value: Any) -> str:
+    bucket = str(value or "").strip().lower()
+    return bucket if bucket in VALID_STRATEGY_BUCKETS else ""
+
+
+def _remember_bucket(bucket_by_symbol: Dict[str, str], row: Any, *, overwrite: bool) -> None:
+    item = _row_dict(row)
+    symbol = str(item.get("symbol") or "").strip().upper()
+    bucket = _normalized_strategy_bucket(item.get("strategy_bucket") or item.get("bucket"))
+    if not symbol or not bucket:
+        return
+    if overwrite:
+        bucket_by_symbol[symbol] = bucket
+    else:
+        bucket_by_symbol.setdefault(symbol, bucket)
+
+
 def _configured_held_position_bucket_overrides() -> Dict[str, str]:
     """Return symbol -> bucket overrides for already-held broker positions.
 
@@ -125,27 +142,50 @@ def _configured_held_position_bucket_overrides() -> Dict[str, str]:
 
     for symbol, bucket in parsed.items():
         normalized_symbol = str(symbol or "").strip().upper()
-        normalized_bucket = str(bucket or "").strip().lower()
-        if normalized_symbol and normalized_bucket in VALID_STRATEGY_BUCKETS:
+        normalized_bucket = _normalized_strategy_bucket(bucket)
+        if normalized_symbol and normalized_bucket:
             overrides[normalized_symbol] = normalized_bucket
     return overrides
 
 
-def _bucket_by_symbol_from_response(data: Dict[str, Any]) -> Dict[str, str]:
-    """Build symbol -> strategy_bucket hints from Manager discovery output.
+def _bucket_by_symbol_from_database_sync(database_sync: Dict[str, Any]) -> Dict[str, str]:
+    """Build symbol -> bucket hints from the latest Database_Agent broker snapshot."""
+    bucket_by_symbol: Dict[str, str] = {}
+    if not isinstance(database_sync, dict):
+        return bucket_by_symbol
 
-    Selected/risk/execution rows remain authoritative. Held-position overrides
-    are only backfilled when the current discovery result has no bucket for that
-    symbol, which keeps broker sync stable for already-held names like CINF.
+    snapshots = []
+    latest_snapshot = database_sync.get("latest_snapshot")
+    if isinstance(latest_snapshot, dict):
+        snapshots.append(latest_snapshot)
+    database = database_sync.get("database")
+    if isinstance(database, dict):
+        snapshots.append(database)
+
+    for snapshot in snapshots:
+        for section in ("positions", "open_orders", "orders"):
+            for row in snapshot.get(section) or []:
+                _remember_bucket(bucket_by_symbol, row, overwrite=False)
+
+    return bucket_by_symbol
+
+
+def _bucket_by_symbol_from_response(data: Dict[str, Any], database_sync: Dict[str, Any] | None = None) -> Dict[str, str]:
+    """Build symbol -> strategy_bucket hints for broker snapshot backfill.
+
+    Priority order:
+    1. current Manager discovery output from selected/risk/execution rows,
+    2. the last known bucket already stored in Database_Agent,
+    3. configured held-position overrides,
+    4. otherwise no hint, so Database_Agent may keep the row unassigned.
     """
     bucket_by_symbol: Dict[str, str] = {}
     for section in ("selected_positions", "risk_approvals", "execution_candidates"):
         for row in data.get(section) or []:
-            item = _row_dict(row)
-            symbol = str(item.get("symbol") or "").upper()
-            bucket = str(item.get("strategy_bucket") or item.get("bucket") or "").strip().lower()
-            if symbol and bucket in VALID_STRATEGY_BUCKETS:
-                bucket_by_symbol[symbol] = bucket
+            _remember_bucket(bucket_by_symbol, row, overwrite=True)
+
+    for symbol, bucket in _bucket_by_symbol_from_database_sync(database_sync or {}).items():
+        bucket_by_symbol.setdefault(symbol, bucket)
 
     for symbol, bucket in _configured_held_position_bucket_overrides().items():
         bucket_by_symbol.setdefault(symbol, bucket)
@@ -155,8 +195,10 @@ def _bucket_by_symbol_from_response(data: Dict[str, Any]) -> Dict[str, str]:
 def _enrich_broker_state_with_buckets(
     broker_state: Dict[str, Any],
     bucket_by_symbol: Dict[str, str],
+    *,
+    source: str = "selected_positions_database_snapshot_and_held_position_overrides",
 ) -> Dict[str, Any]:
-    """Attach Manager bucket hints to broker positions and open orders."""
+    """Attach Manager/Database bucket hints to broker positions and open orders."""
     if not bucket_by_symbol:
         return broker_state
 
@@ -185,7 +227,7 @@ def _enrich_broker_state_with_buckets(
     enriched["open_orders"] = enriched_orders
     enriched["bucket_backfill"] = {
         "symbols": bucket_by_symbol,
-        "source": "selected_positions_and_held_position_overrides",
+        "source": source,
     }
     enriched["summary"] = {
         **(enriched.get("summary") or {}),
@@ -196,7 +238,11 @@ def _enrich_broker_state_with_buckets(
     return enriched
 
 
-async def capture_broker_snapshot(account_id: Any, correlation_id: str) -> Dict[str, Any]:
+async def capture_broker_snapshot(
+    account_id: Any,
+    correlation_id: str,
+    bucket_by_symbol: Dict[str, str] | None = None,
+) -> Dict[str, Any]:
     """Fetch current broker state from Execution_Agent and persist it to Database_Agent."""
     try:
         async with ExecutionAgentClient() as exec_client:
@@ -204,6 +250,13 @@ async def capture_broker_snapshot(account_id: Any, correlation_id: str) -> Dict[
         broker_state = _broker_state_from_execution_response(execution_response, account_id)
         if not broker_state.get("account"):
             return {"status": "skipped", "reason": "broker_state_missing_account"}
+        if bucket_by_symbol:
+            broker_state = _enrich_broker_state_with_buckets(
+                broker_state,
+                bucket_by_symbol,
+                source="previous_database_snapshot",
+            )
+            broker_state["source"] = "manager_preflight_preserve_database_buckets"
         async with DatabaseAgentClient() as db_client:
             result = await db_client.capture_broker_snapshot(broker_state, correlation_id)
         return {"status": "captured", "result": result, "broker_state_summary": broker_state.get("summary") or {}}
@@ -315,7 +368,13 @@ async def run_guarded_discover_analyze_trade_flow(request: DiscoverAnalyzeTradeR
     """Run discovery while blocking new entries when DB/Broker sync is unsafe."""
     correlation_id = "database-sync-gate"
     account_id = request.account_id if request.account_id is not None else 1
-    snapshot_capture = await capture_broker_snapshot(account_id, correlation_id) if request.execute else {"status": "skipped", "reason": "request.execute=false"}
+    previous_database_sync = await load_database_sync_status(account_id, correlation_id) if request.execute else {}
+    previous_bucket_by_symbol = _bucket_by_symbol_from_database_sync(previous_database_sync)
+    snapshot_capture = (
+        await capture_broker_snapshot(account_id, correlation_id, previous_bucket_by_symbol)
+        if request.execute
+        else {"status": "skipped", "reason": "request.execute=false"}
+    )
     database_sync = await load_database_sync_status(account_id, correlation_id)
 
     if request.execute and not database_sync_allows_automation(database_sync):
@@ -329,7 +388,7 @@ async def run_guarded_discover_analyze_trade_flow(request: DiscoverAnalyzeTradeR
             response.data["database_sync"] = database_sync
         response.data["broker_snapshot_capture"] = snapshot_capture
 
-        bucket_by_symbol = _bucket_by_symbol_from_response(response.data)
+        bucket_by_symbol = _bucket_by_symbol_from_response(response.data, previous_database_sync or database_sync)
         bucket_backfill_capture = (
             await capture_bucket_backfilled_broker_snapshot(account_id, correlation_id, bucket_by_symbol)
             if request.execute
