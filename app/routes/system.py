@@ -35,6 +35,11 @@ def utc_now() -> datetime.datetime:
     return datetime.datetime.now(datetime.UTC)
 
 
+def configured_dry_run() -> bool:
+    """Return the configured dry-run flag with a safe default for older configs."""
+    return bool(getattr(config, "DRY_RUN", True))
+
+
 def build_system_response(
     *,
     status_value: str,
@@ -102,7 +107,7 @@ async def readiness_check():
         status_value="success",
         correlation_id=correlation_id,
         data=readiness,
-        metadata=manager_metadata(dry_run=config.DRY_RUN),
+        metadata=manager_metadata(dry_run=configured_dry_run()),
     )
 
 
