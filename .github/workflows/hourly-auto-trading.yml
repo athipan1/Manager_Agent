@@ -1,823 +1,475 @@
 name: Hourly Auto Trading
 
 on:
-
   workflow_dispatch:
-
     inputs:
-
       max_universe:
-
         description: "Maximum symbols Scanner_Agent should analyze from NASDAQ/S&P500 universe"
-
         required: false
-
         default: "1000"
-
       top_n:
-
         description: "Number of fundamentally strong candidates Scanner_Agent returns to Manager_Agent"
-
         required: false
-
         default: "10"
-
       min_final_score:
-
         description: "Minimum final opportunity score required before Manager sends to Execution_Agent"
-
         required: false
-
         default: "0.55"
-
       dry_run:
-
         description: "Keep execution in simulator/safety mode"
-
         required: false
-
         default: "false"
-
       curator_enabled:
-
         description: "Enable Curator_Agent advisory metadata signals"
-
         required: false
-
         default: "true"
-
       manual_review_gate_symbols:
-
         description: "Comma-separated symbols to validate through manual review gate"
-
         required: false
-
         default: "BKNG"
-
+      execute_approved_paper_bracket_upgrade:
+        description: "Actually cancel the validated stop order and submit the approved Paper OCO TP/SL replacement"
+        required: false
+        default: "false"
   schedule:
-
     - cron: "5 * * * *"
 
 concurrency:
-
   group: hourly-auto-trading
-
   cancel-in-progress: false
 
 jobs:
-
   hourly-auto-trading:
-
     runs-on: ubuntu-latest
-
     timeout-minutes: 60
-
     env:
-
       MAX_UNIVERSE: ${{ github.event.inputs.max_universe || '1000' }}
-
       TOP_N: ${{ github.event.inputs.top_n || '10' }}
-
       MIN_FINAL_SCORE: ${{ github.event.inputs.min_final_score || '0.55' }}
-
       DRY_RUN: ${{ github.event.inputs.dry_run || 'false' }}
-
       BROKER_MODE: ${{ (github.event.inputs.dry_run || 'false') == 'false' && 'ALPACA' || 'SIMULATOR' }}
-
       CURATOR_AGENT_ENABLED: ${{ github.event.inputs.curator_enabled || 'true' }}
-
       CURATOR_AGENT_URL: http://curator-agent:8010
-
       CURATOR_SKILL_TIMEOUT_SECONDS: "1.0"
-
       MANUAL_REVIEW_GATE_SYMBOLS: ${{ github.event.inputs.manual_review_gate_symbols || 'BKNG' }}
-
+      EXECUTE_APPROVED_PAPER_BRACKET_UPGRADE: ${{ github.event.inputs.execute_approved_paper_bracket_upgrade || 'false' }}
       ALPACA_API_KEY_ID: ${{ secrets.ALPACA_API_KEY_ID }}
-
       ALPACA_SECRET_KEY: ${{ secrets.ALPACA_SECRET_KEY }}
-
       ALPACA_API_URL: ${{ secrets.ALPACA_API_URL || 'https://paper-api.alpaca.markets' }}
 
     steps:
-
       - name: Checkout Manager_Agent
-
         uses: actions/checkout@v4
-
         with:
-
           path: Manager_Agent
 
       - name: Checkout Scanner_Agent
-
         uses: actions/checkout@v4
-
         with:
-
           repository: athipan1/Scanner_Agent
-
           ref: main
-
           path: Scanner_Agent
-
           fetch-depth: 1
 
       - name: Checkout Technical_Agent
-
         uses: actions/checkout@v4
-
         with:
-
           repository: athipan1/Technical_Agent
-
           ref: main
-
           path: Technical_Agent
-
           fetch-depth: 1
 
       - name: Checkout Fundamental_Agent
-
         uses: actions/checkout@v4
-
         with:
-
           repository: athipan1/Fundamental_Agent
-
           ref: main
-
           path: Fundamental_Agent
-
           fetch-depth: 1
 
       - name: Checkout Database_Agent
-
         uses: actions/checkout@v4
-
         with:
-
           repository: athipan1/Database_Agent
-
           ref: main
-
           path: Database_Agent
-
           fetch-depth: 1
 
       - name: Checkout Learning_Agent
-
         uses: actions/checkout@v4
-
         with:
-
           repository: athipan1/Learning_Agent
-
           ref: main
-
           path: Learning_Agent
-
           fetch-depth: 1
 
       - name: Checkout Execution_Agent
-
         uses: actions/checkout@v4
-
         with:
-
           repository: athipan1/Execution_Agent
-
           ref: main
-
           path: Execution_Agent
-
           fetch-depth: 1
 
       - name: Checkout Risk_Agent
-
         uses: actions/checkout@v4
-
         with:
-
           repository: athipan1/Risk_Agent
-
           ref: main
-
           path: Risk_Agent
-
           fetch-depth: 1
 
       - name: Checkout Performance_Agent
-
         uses: actions/checkout@v4
-
         with:
-
           repository: athipan1/Performance_Agent
-
           ref: main
-
           path: Performance_Agent
-
           fetch-depth: 1
 
       - name: Checkout Curator_Agent
-
         uses: actions/checkout@v4
-
         with:
-
           repository: athipan1/Curator_Agent
-
           ref: main
-
           path: Curator_Agent
-
           fetch-depth: 1
 
       - name: Show checked out agent commits
-
         run: |
-
           echo "Manager_Agent=$(git -C Manager_Agent rev-parse HEAD)"
-
           echo "Scanner_Agent=$(git -C Scanner_Agent rev-parse HEAD)"
-
           echo "Technical_Agent=$(git -C Technical_Agent rev-parse HEAD)"
-
           echo "Fundamental_Agent=$(git -C Fundamental_Agent rev-parse HEAD)"
-
           echo "Database_Agent=$(git -C Database_Agent rev-parse HEAD)"
-
           echo "Learning_Agent=$(git -C Learning_Agent rev-parse HEAD)"
-
           echo "Execution_Agent=$(git -C Execution_Agent rev-parse HEAD)"
-
           echo "Risk_Agent=$(git -C Risk_Agent rev-parse HEAD)"
-
           echo "Performance_Agent=$(git -C Performance_Agent rev-parse HEAD)"
-
           echo "Curator_Agent=$(git -C Curator_Agent rev-parse HEAD)"
-
           echo "DRY_RUN=${DRY_RUN}"
-
           echo "BROKER_MODE=${BROKER_MODE}"
-
           echo "CURATOR_AGENT_ENABLED=${CURATOR_AGENT_ENABLED}"
-
           echo "MANUAL_REVIEW_GATE_SYMBOLS=${MANUAL_REVIEW_GATE_SYMBOLS}"
+          echo "EXECUTE_APPROVED_PAPER_BRACKET_UPGRADE=${EXECUTE_APPROVED_PAPER_BRACKET_UPGRADE}"
 
       - name: Validate Alpaca paper configuration
-
         run: |
-
           if [ "${BROKER_MODE}" = "ALPACA" ]; then
-
             if [ -z "${ALPACA_API_KEY_ID}" ] || [ -z "${ALPACA_SECRET_KEY}" ]; then
-
               echo "Missing GitHub Secrets: ALPACA_API_KEY_ID or ALPACA_SECRET_KEY"
-
               exit 1
-
             fi
-
             echo "Alpaca paper mode configured."
-
           else
-
             echo "Simulator mode."
-
           fi
 
       - name: Build and start trading stack
-
         working-directory: Manager_Agent
-
         run: |
-
           echo "Starting stack. DRY_RUN=${DRY_RUN} BROKER_MODE=${BROKER_MODE} CURATOR_AGENT_ENABLED=${CURATOR_AGENT_ENABLED}"
-
           docker compose -f docker-compose.yml -f docker-compose.risk.yml -f docker-compose.curator.yml up --build -d
 
       - name: Wait for all services
-
         working-directory: Manager_Agent
-
         run: |
-
           compose="docker compose -f docker-compose.yml -f docker-compose.risk.yml -f docker-compose.curator.yml"
-
           runtime_services="database-agent technical-agent scanner-agent fundamental-agent learning-agent risk-agent performance-agent execution-agent curator-agent manager-agent db"
-
           for i in {1..60}; do
-
             $compose ps
-
             exited=$($compose ps --status exited -q $runtime_services | wc -l | tr -d ' ')
-
             if [ "$exited" != "0" ]; then
-
               echo "One or more runtime containers exited."
-
               for service in $runtime_services; do
-
                 echo "---- ${service} logs tail ----"
-
                 $compose logs --tail=160 "$service" || true
-
               done
-
               exit 1
-
             fi
 
             manager=$($compose exec -T manager-agent python /app/healthcheck.py >/dev/null && echo ok || echo wait)
-
             fundamental=$(curl -fsS http://localhost:8001/health >/dev/null && echo ok || echo wait)
-
             technical=$(curl -fsS http://localhost:8002/health >/dev/null && echo ok || echo wait)
-
             scanner=$(curl -fsS http://localhost:8003/health >/dev/null && echo ok || echo wait)
-
             database=$(curl -fsS http://localhost:8004/health >/dev/null && echo ok || echo wait)
-
             learning=$(curl -fsS http://localhost:8005/health >/dev/null && echo ok || echo wait)
-
             risk=$(curl -fsS http://localhost:8007/health >/dev/null && echo ok || echo wait)
-
             performance=$(curl -fsS http://localhost:8013/health >/dev/null && echo ok || echo wait)
-
             execution=$(curl -fsS http://localhost:8006/health >/dev/null && echo ok || echo wait)
-
             curator=$(curl -fsS http://localhost:8010/health >/dev/null && echo ok || echo wait)
-
             manager_to_scanner=$($compose exec -T manager-agent python - <<'PY' >/dev/null 2>&1 && echo ok || echo wait
-
           import urllib.request
-
           urllib.request.urlopen("http://scanner-agent:8003/health", timeout=5).read()
-
           PY
-
           )
-
             manager_to_curator=$($compose exec -T manager-agent python - <<'PY' >/dev/null 2>&1 && echo ok || echo wait
-
           import urllib.request
-
           urllib.request.urlopen("http://curator-agent:8010/health", timeout=5).read()
-
           PY
-
           )
-
             echo "health: manager=$manager fundamental=$fundamental technical=$technical scanner=$scanner database=$database learning=$learning risk=$risk performance=$performance execution=$execution curator=$curator manager_to_scanner=$manager_to_scanner manager_to_curator=$manager_to_curator"
-
             if [ "$manager$fundamental$technical$scanner$database$learning$risk$performance$execution$curator$manager_to_scanner$manager_to_curator" = "okokokokokokokokokokokok" ]; then
-
               echo "All services are reachable, including manager-agent -> scanner-agent and manager-agent -> curator-agent."
-
               exit 0
-
             fi
-
             sleep 5
-
           done
-
           echo "Services did not become reachable in time."
-
           $compose ps
-
           for service in $runtime_services; do
-
             echo "---- ${service} logs tail ----"
-
             $compose logs --tail=160 "$service" || true
-
           done
-
           exit 1
 
       - name: Seed Curator advisory skill
-
         working-directory: Manager_Agent
-
         env:
-
           CURATOR_AGENT_URL: http://localhost:8010
-
         run: |
-
           python scripts/seed_curator_advisory_skill.py
 
       - name: Run hourly portfolio discovery, risk checks, execution, and broker snapshot
-
         working-directory: Manager_Agent
-
         run: |
-
           mkdir -p reports
-
           docker compose -f docker-compose.yml -f docker-compose.risk.yml -f docker-compose.curator.yml exec -T manager-agent python - <<'PY' > reports/hourly-auto-trading-report.json
-
           import json
-
           import os
-
           import time
-
           import urllib.error
-
           import urllib.request
-
           from datetime import datetime, timezone
 
           max_universe = int(os.getenv("MAX_UNIVERSE", "1000"))
-
           top_n = int(os.getenv("TOP_N", "10"))
-
           min_final_score = float(os.getenv("MIN_FINAL_SCORE", "0.55"))
-
           dry_run = os.getenv("DRY_RUN", "true").lower() != "false"
-
           broker_mode = os.getenv("BROKER_MODE", "SIMULATOR")
-
           execution_api_key = os.getenv("EXECUTION_API_KEY", "dev_execution_key")
-
+          execute_approved_paper_bracket_upgrade = os.getenv("EXECUTE_APPROVED_PAPER_BRACKET_UPGRADE", "false").strip().lower() == "true"
           manual_review_gate_symbols = [
-
               symbol.strip().upper()
-
               for symbol in os.getenv("MANUAL_REVIEW_GATE_SYMBOLS", "BKNG").split(",")
-
               if symbol.strip()
-
           ]
 
           def request_json(base_url, path, payload=None, method="GET", api_key=None, timeout=900):
-
               data = None
-
               headers = {}
-
               if api_key:
-
                   headers["X-API-KEY"] = api_key
-
               if payload is not None:
-
                   data = json.dumps(payload).encode("utf-8")
-
                   headers["Content-Type"] = "application/json"
-
-              req = urllib.request.Request(
-
-                  f"{base_url}{path}",
-
-                  data=data,
-
-                  headers=headers,
-
-                  method=method,
-
-              )
-
+              req = urllib.request.Request(f"{base_url}{path}", data=data, headers=headers, method=method)
               try:
-
                   with urllib.request.urlopen(req, timeout=timeout) as resp:
-
                       body = resp.read().decode("utf-8")
-
                       return json.loads(body) if body else None
-
               except urllib.error.HTTPError as exc:
-
                   body = exc.read().decode("utf-8")
-
-                  return {
-
-                      "status": "error",
-
-                      "http_status": exc.code,
-
-                      "body": body,
-
-                  }
-
+                  return {"status": "error", "http_status": exc.code, "body": body}
               except Exception as exc:
-
-                  return {
-
-                      "status": "error",
-
-                      "error": str(exc),
-
-                  }
+                  return {"status": "error", "error": str(exc)}
 
           def unwrap_response_data(value):
-
               if isinstance(value, dict) and isinstance(value.get("data"), dict):
-
                   return value["data"]
-
               return value if isinstance(value, dict) else {}
 
           def build_manual_review_gate_payload(ticket_response, requested_symbols):
-
               ticket = unwrap_response_data(ticket_response)
-
               ready_items = ticket.get("ready_for_manual_approval") or []
-
               ready_by_symbol = {
-
                   str(item.get("symbol") or "").strip().upper(): item
-
                   for item in ready_items
-
                   if isinstance(item, dict) and str(item.get("symbol") or "").strip()
-
+              }
+              selected_symbols = [symbol for symbol in requested_symbols if symbol in ready_by_symbol]
+              if not selected_symbols:
+                  return None
+              expected_orders = {}
+              for symbol in selected_symbols:
+                  item = ready_by_symbol[symbol]
+                  expected_orders[symbol] = {
+                      "qty": str(item.get("position_qty")),
+                      "current_stop_order_id": item.get("current_stop_order_id"),
+                      "stop_price": item.get("stop_price"),
+                      "take_profit_price": item.get("take_profit_price"),
+                  }
+              return {
+                  "ticket_id": ticket.get("ticket_id"),
+                  "confirmation_phrase": ticket.get("manual_confirmation_phrase") or "APPROVE_ORDER_REVIEW_TICKET",
+                  "symbols": selected_symbols,
+                  "expected_orders": expected_orders,
+                  "reward_risk_ratio": 2.0,
+                  "source": "manager-agent-hourly-workflow",
+                  "mode": "manual_review_gate_validation_only",
               }
 
-              selected_symbols = [
-
-                  symbol
-
-                  for symbol in requested_symbols
-
-                  if symbol in ready_by_symbol
-
-              ]
-
-              if not selected_symbols:
-
-                  return None
-
-              expected_orders = {}
-
-              for symbol in selected_symbols:
-
-                  item = ready_by_symbol[symbol]
-
-                  expected_orders[symbol] = {
-
-                      "qty": str(item.get("position_qty")),
-
-                      "current_stop_order_id": item.get("current_stop_order_id"),
-
-                      "stop_price": item.get("stop_price"),
-
-                      "take_profit_price": item.get("take_profit_price"),
-
-                  }
-
+          def build_approved_bracket_upgrade_payload(gate_payload):
               return {
-
-                  "ticket_id": ticket.get("ticket_id"),
-
-                  "confirmation_phrase": ticket.get("manual_confirmation_phrase") or "APPROVE_ORDER_REVIEW_TICKET",
-
-                  "symbols": selected_symbols,
-
-                  "expected_orders": expected_orders,
-
-                  "reward_risk_ratio": 2.0,
-
-                  "source": "manager-agent-hourly-workflow",
-
-                  "mode": "manual_review_gate_validation_only",
-
+                  **gate_payload,
+                  "execute_paper": True,
+                  "execution_confirmation_phrase": "EXECUTE_PAPER_BRACKET_UPGRADE",
+                  "mode": "approved_paper_bracket_upgrade_execution",
               }
 
           def request_manager(path, payload=None, method="GET"):
+              return request_json("http://localhost", path, payload=payload, method=method)
 
+          def request_execution(path, payload=None, method="GET", timeout=120):
               return request_json(
-
-                  "http://localhost",
-
-                  path,
-
-                  payload=payload,
-
-                  method=method,
-
-              )
-
-          def request_execution(path, payload=None, method="GET"):
-
-              return request_json(
-
                   "http://execution-agent:8006",
-
                   path,
-
                   payload=payload,
-
                   method=method,
-
                   api_key=execution_api_key,
-
-                  timeout=120,
-
+                  timeout=timeout,
               )
 
           payload = {
-
               "account_id": 1,
-
               "max_universe": max_universe,
-
               "top_n": top_n,
-
               "exchange": "NASDAQ",
-
               "max_workers": 10,
-
               "min_final_score": min_final_score,
-
               "execute": True,
-
           }
 
           response = request_manager("/discover-analyze-trade", payload, method="POST")
-
           time.sleep(10)
-
           protection_diagnostics = request_execution("/broker/protection-diagnostics")
-
           order_review_preview = request_execution(
-
               "/broker/order-review/preview",
-
               payload={"reward_risk_ratio": 2.0},
-
               method="POST",
-
           )
-
           order_review_approval_ticket = request_execution(
-
               "/broker/order-review/manual-approval-ticket",
-
               payload={"reward_risk_ratio": 2.0},
-
               method="POST",
-
           )
-
           manual_review_gate_payload = build_manual_review_gate_payload(
-
               order_review_approval_ticket,
-
               manual_review_gate_symbols,
-
           )
-
           if manual_review_gate_payload:
-
               manual_review_gate = request_execution(
-
                   "/broker/order-review/manual-review-gate",
-
                   payload=manual_review_gate_payload,
-
                   method="POST",
-
               )
-
           else:
-
               manual_review_gate = {
-
                   "status": "skipped",
-
                   "reason": "No requested symbols were ready in the current manual approval ticket.",
-
                   "requested_symbols": manual_review_gate_symbols,
-
               }
 
-          broker_snapshot = {
-
-              "account": request_execution("/account"),
-
-              "orders": request_execution("/orders"),
-
-              "positions": request_execution("/positions"),
-
-              "portfolio": request_execution("/portfolio"),
-
+          approved_bracket_upgrade_payload = None
+          approved_bracket_upgrade_execution = {
+              "status": "skipped",
+              "reason": "EXECUTE_APPROVED_PAPER_BRACKET_UPGRADE is not true; no broker orders were changed.",
+              "orders_changed": False,
           }
+          broker_snapshot_after_bracket_upgrade = None
+          if execute_approved_paper_bracket_upgrade:
+              if manual_review_gate_payload:
+                  approved_bracket_upgrade_payload = build_approved_bracket_upgrade_payload(manual_review_gate_payload)
+                  approved_bracket_upgrade_execution = request_execution(
+                      "/broker/order-review/execute-approved-bracket-upgrade",
+                      payload=approved_bracket_upgrade_payload,
+                      method="POST",
+                      timeout=180,
+                  )
+                  time.sleep(3)
+                  broker_snapshot_after_bracket_upgrade = {
+                      "account": request_execution("/account"),
+                      "orders": request_execution("/orders"),
+                      "positions": request_execution("/positions"),
+                      "portfolio": request_execution("/portfolio"),
+                  }
+              else:
+                  approved_bracket_upgrade_execution = {
+                      "status": "skipped",
+                      "reason": "manual_review_gate_payload was not built; no approved symbol was ready.",
+                      "orders_changed": False,
+                  }
 
+          broker_snapshot = {
+              "account": request_execution("/account"),
+              "orders": request_execution("/orders"),
+              "positions": request_execution("/positions"),
+              "portfolio": request_execution("/portfolio"),
+          }
           dashboard_data = request_manager("/dashboard/data?account_id=1")
 
           report = {
-
               "generated_at": datetime.now(timezone.utc).isoformat(),
-
               "mode": "ALPACA_PAPER" if broker_mode == "ALPACA" and not dry_run else "SIMULATOR",
-
               "broker_mode": broker_mode,
-
               "flow": "discover_analyze_trade",
-
               "warning": "DRY_RUN=false with BROKER_MODE=ALPACA sends orders to Alpaca Paper.",
-
               "request": payload,
-
               "response": response,
-
               "protection_diagnostics": protection_diagnostics,
-
               "order_review_preview": order_review_preview,
-
               "order_review_approval_ticket": order_review_approval_ticket,
-
               "manual_review_gate_payload": manual_review_gate_payload,
-
               "manual_review_gate": manual_review_gate,
-
+              "execute_approved_paper_bracket_upgrade": execute_approved_paper_bracket_upgrade,
+              "approved_bracket_upgrade_payload": approved_bracket_upgrade_payload,
+              "approved_bracket_upgrade_execution": approved_bracket_upgrade_execution,
+              "broker_snapshot_after_bracket_upgrade": broker_snapshot_after_bracket_upgrade,
               "broker_snapshot": broker_snapshot,
-
               "dashboard_data": dashboard_data,
-
           }
-
           print(json.dumps(report, ensure_ascii=False, indent=2, default=str))
-
           PY
 
           python scripts/store_order_review_ticket.py --database-url http://localhost:8004 --database-api-key "${DATABASE_AGENT_API_KEY:-dev_database_key}" --account-id 1 --input-json reports/hourly-auto-trading-report.json --output-json reports/order-review-ticket-store-result.json
-
           python scripts/render_hourly_portfolio_report.py
-
           python scripts/render_manual_review_gate_report.py
 
       - name: Upload hourly trading report
-
         if: always()
-
         uses: actions/upload-artifact@v4
-
         with:
-
           name: hourly-auto-trading-report
-
           path: Manager_Agent/reports/
-
           if-no-files-found: warn
 
       - name: Send hourly trading email
-
         if: always()
-
         working-directory: Manager_Agent
-
         env:
-
           SMTP_SERVER: ${{ secrets.SMTP_SERVER }}
-
           SMTP_PORT: ${{ secrets.SMTP_PORT }}
-
           SMTP_USERNAME: ${{ secrets.SMTP_USERNAME }}
-
           SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
-
           SMTP_USE_SSL: ${{ secrets.SMTP_USE_SSL }}
-
           EMAIL_FROM: ${{ secrets.EMAIL_FROM }}
-
           EMAIL_TO: ${{ secrets.EMAIL_TO || 'terdoomcom@gmail.com' }}
-
           EMAIL_CC: ${{ secrets.EMAIL_CC }}
-
           EMAIL_SUBJECT: "รายงานระบบเทรดอัตโนมัติรายชั่วโมง - ${{ github.run_number }}"
-
           GITHUB_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-
           REPORTS_DIR: reports
-
         run: |
-
           python scripts/send_workflow_email.py
 
       - name: Show logs on failure
-
         if: failure()
-
         working-directory: Manager_Agent
-
         run: |
-
           docker compose -f docker-compose.yml -f docker-compose.risk.yml -f docker-compose.curator.yml ps || true
-
           docker compose -f docker-compose.yml -f docker-compose.risk.yml -f docker-compose.curator.yml logs --tail=220 manager-agent execution-agent risk-agent database-agent curator-agent || true
 
       - name: Stop stack
-
         if: always()
-
         working-directory: Manager_Agent
-
         run: |
-
           docker compose -f docker-compose.yml -f docker-compose.risk.yml -f docker-compose.curator.yml down -v
