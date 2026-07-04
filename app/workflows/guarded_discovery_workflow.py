@@ -370,11 +370,13 @@ async def run_guarded_discover_analyze_trade_flow(request: DiscoverAnalyzeTradeR
     account_id = request.account_id if request.account_id is not None else 1
     previous_database_sync = await load_database_sync_status(account_id, correlation_id) if request.execute else {}
     previous_bucket_by_symbol = _bucket_by_symbol_from_database_sync(previous_database_sync)
-    snapshot_capture = (
-        await capture_broker_snapshot(account_id, correlation_id, previous_bucket_by_symbol)
-        if request.execute
-        else {"status": "skipped", "reason": "request.execute=false"}
-    )
+    if request.execute:
+        if previous_bucket_by_symbol:
+            snapshot_capture = await capture_broker_snapshot(account_id, correlation_id, previous_bucket_by_symbol)
+        else:
+            snapshot_capture = await capture_broker_snapshot(account_id, correlation_id)
+    else:
+        snapshot_capture = {"status": "skipped", "reason": "request.execute=false"}
     database_sync = await load_database_sync_status(account_id, correlation_id)
 
     if request.execute and not database_sync_allows_automation(database_sync):
