@@ -32,6 +32,7 @@ DEFAULT_HELD_POSITION_BUCKET_OVERRIDES = {
     # unassigned because the current response carried no bucket hint.
     "ACGL": "value_rebound",
     "ADBE": "core_dividend",
+    "BKNG": "value_rebound",
     "CINF": "core_dividend",
 }
 
@@ -212,6 +213,20 @@ def _bucket_by_symbol_from_database_sync(database_sync: Dict[str, Any]) -> Dict[
     return bucket_by_symbol
 
 
+def _preflight_bucket_by_symbol_from_database_sync(database_sync: Dict[str, Any]) -> Dict[str, str]:
+    """Return stable preflight bucket hints for held broker positions.
+
+    The preflight broker sync runs before the current scan has selected/ranked
+    rows. It must still carry stable held-position buckets so Database_Agent does
+    not create an interim snapshot where known holdings become `unassigned`.
+    Last known Database_Agent buckets win over defaults; invalid/unassigned rows
+    are ignored by _bucket_by_symbol_from_database_sync.
+    """
+    bucket_by_symbol = dict(_configured_held_position_bucket_overrides())
+    bucket_by_symbol.update(_bucket_by_symbol_from_database_sync(database_sync))
+    return bucket_by_symbol
+
+
 def _bucket_by_symbol_from_response(data: Dict[str, Any], database_sync: Dict[str, Any] | None = None) -> Dict[str, str]:
     """Build symbol -> strategy_bucket hints for broker snapshot backfill.
 
@@ -306,7 +321,7 @@ async def capture_broker_snapshot(
             broker_state = _enrich_broker_state_with_buckets(
                 broker_state,
                 bucket_by_symbol,
-                source="previous_database_snapshot",
+                source="previous_database_snapshot_and_held_position_overrides",
             )
             broker_state["source"] = "manager_preflight_preserve_database_buckets"
         async with DatabaseAgentClient() as db_client:
@@ -421,14 +436,12 @@ async def run_guarded_discover_analyze_trade_flow(request: DiscoverAnalyzeTradeR
     correlation_id = "database-sync-gate"
     account_id = request.account_id if request.account_id is not None else 1
     previous_database_sync = await load_database_sync_status(account_id, correlation_id) if request.execute else {}
-    previous_bucket_by_symbol = _bucket_by_symbol_from_database_sync(previous_database_sync)
-    if request.execute:
-        if previous_bucket_by_symbol:
-            snapshot_capture = await capture_broker_snapshot(account_id, correlation_id, previous_bucket_by_symbol)
-        else:
-            snapshot_capture = await capture_broker_snapshot(account_id, correlation_id)
-    else:
-        snapshot_capture = {"status": "skipped", "reason": "request.execute=false"}
+    preflight_bucket_by_symbol = _preflight_bucket_by_symbol_from_database_sync(previous_database_sync)
+    snapshot_capture = (
+        await capture_broker_snapshot(account_id, correlation_id, preflight_bucket_by_symbol)
+        if request.execute
+        else {"status": "skipped", "reason": "request.execute=false"}
+    )
     database_sync = await load_database_sync_status(account_id, correlation_id)
 
     if request.execute and not database_sync_allows_automation(database_sync):
