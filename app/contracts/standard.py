@@ -10,6 +10,9 @@ from .learning import LearningResponse, LearningResponseBody
 from .scanner import ScannerResponseData
 from .manager import OrchestratorResponse, MultiOrchestratorResponse
 
+DEFAULT_SCHEMA_VERSION = "1.0"
+
+
 class StandardAgentData(BaseModel):
     """Standardized data schema for all agents."""
     action: Literal["buy", "sell", "hold"]
@@ -20,15 +23,22 @@ class StandardAgentData(BaseModel):
     # Allow arbitrary extra fields for agent-specific data
     model_config = ConfigDict(extra="allow")
 
+
 class StandardAgentResponse(BaseModel):
     """
     The standardized and versioned response schema that all agents
     should conform to.
+
+    `schema_version` and `correlation_id` are optional/defaulted here so legacy
+    routes can migrate incrementally without breaking existing response objects.
+    The public API contract requires new agent-to-agent calls to include both.
     """
     status: Literal["success", "error"]
     agent_type: str
     version: str
+    schema_version: str = DEFAULT_SCHEMA_VERSION
     timestamp: datetime.datetime
+    correlation_id: Optional[str] = None
     data: Union[
         StandardAgentData,
         AccountBalance,
@@ -56,6 +66,14 @@ class StandardAgentResponse(BaseModel):
         parts = v.split('.')
         if not all(part.isdigit() for part in parts):
             raise ValueError('Version must be in semantic format (e.g., "1.0")')
+        return v
+
+    @field_validator('schema_version')
+    @classmethod
+    def schema_version_must_be_semantic(cls, v):
+        parts = v.split('.')
+        if not all(part.isdigit() for part in parts):
+            raise ValueError('Schema version must be in semantic format (e.g., "1.0")')
         return v
 
     @field_validator('timestamp', mode='before')

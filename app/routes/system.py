@@ -25,10 +25,90 @@ from ..workflows.single_analysis_workflow import manager_metadata
 
 router = APIRouter()
 
+MANAGER_AGENT_TYPE = "manager-agent"
+MANAGER_VERSION = "1.0.0"
+SCHEMA_VERSION = "1.0"
+
 
 def utc_now() -> datetime.datetime:
     """Return current UTC timestamp."""
     return datetime.datetime.now(datetime.UTC)
+
+
+def configured_dry_run() -> bool:
+    """Return the configured dry-run flag with a safe default for older configs."""
+    return bool(getattr(config, "DRY_RUN", True))
+
+
+def build_system_response(
+    *,
+    status_value: str,
+    data: dict,
+    correlation_id: str,
+    metadata: dict | None = None,
+    error: dict | None = None,
+) -> StandardAgentResponse:
+    """Build a standard Manager system response."""
+    return StandardAgentResponse(
+        status=status_value,
+        agent_type=MANAGER_AGENT_TYPE,
+        version=MANAGER_VERSION,
+        schema_version=SCHEMA_VERSION,
+        timestamp=utc_now(),
+        correlation_id=correlation_id,
+        data=data,
+        metadata=metadata or {},
+        error=error,
+    )
+
+
+@router.get("/version", response_model=StandardAgentResponse)
+async def version_check():
+    """Return Manager_Agent and API contract version metadata."""
+    correlation_id = str(uuid.uuid4())
+    return build_system_response(
+        status_value="success",
+        correlation_id=correlation_id,
+        data={
+            "agent_type": MANAGER_AGENT_TYPE,
+            "version": MANAGER_VERSION,
+            "schema_version": SCHEMA_VERSION,
+            "api_contract": "multi-agent-trading-api-contract",
+        },
+        metadata={
+            "required_operational_endpoints": ["/health", "/ready", "/version"],
+        },
+    )
+
+
+@router.get("/ready", response_model=StandardAgentResponse)
+async def readiness_check():
+    """Check whether Manager_Agent is configured to accept orchestration requests."""
+    correlation_id = str(uuid.uuid4())
+    readiness = {
+        "ready": True,
+        "trading_mode": config.TRADING_MODE,
+        "trading_enabled": config.TRADING_ENABLED,
+        "allow_live_trading": config.ALLOW_LIVE_TRADING,
+        "manual_approval_required": config.MANUAL_APPROVAL_REQUIRED,
+        "asset_class": config.ASSET_CLASS,
+        "dependencies": {
+            "technical_agent_url_configured": bool(config.TECHNICAL_AGENT_URL),
+            "fundamental_agent_url_configured": bool(config.FUNDAMENTAL_AGENT_URL),
+            "database_agent_url_configured": bool(config.DATABASE_AGENT_URL),
+            "risk_agent_url_configured": bool(config.RISK_AGENT_URL),
+            "execution_agent_url_configured": bool(config.EXECUTION_AGENT_URL),
+            "learning_agent_url_configured": bool(config.AUTO_LEARNING_AGENT_URL),
+            "scanner_agent_url_configured": bool(config.SCANNER_AGENT_URL),
+            "backtest_agent_enabled": config.BACKTEST_AGENT_ENABLED,
+        },
+    }
+    return build_system_response(
+        status_value="success",
+        correlation_id=correlation_id,
+        data=readiness,
+        metadata=manager_metadata(dry_run=configured_dry_run()),
+    )
 
 
 @router.get("/preflight/live", response_model=StandardAgentResponse)
@@ -39,9 +119,11 @@ async def stock_live_preflight(account_id: Union[int, str] = None, sample_symbol
     result = await run_stock_live_preflight(resolved_account_id, sample_symbol, correlation_id)
     return StandardAgentResponse(
         status="success" if result["approved"] else "error",
-        agent_type="manager-agent",
-        version="1.0.0",
+        agent_type=MANAGER_AGENT_TYPE,
+        version=MANAGER_VERSION,
+        schema_version=SCHEMA_VERSION,
         timestamp=utc_now(),
+        correlation_id=correlation_id,
         data=result,
         metadata=manager_metadata(
             risk_context_loaded=result["checks"].get("database", {}).get("status") == "pass"
@@ -89,9 +171,11 @@ async def health_check():
 
     content = StandardAgentResponse(
         status="success" if is_healthy else "error",
-        agent_type="manager-agent",
-        version="1.0.0",
+        agent_type=MANAGER_AGENT_TYPE,
+        version=MANAGER_VERSION,
+        schema_version=SCHEMA_VERSION,
         timestamp=utc_now(),
+        correlation_id=correlation_id,
         data={"dependencies": downstream_services},
         metadata=manager_metadata(risk_context_loaded=downstream_services["database_agent"]["status"] == "healthy"),
     )
