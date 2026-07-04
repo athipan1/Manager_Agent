@@ -248,7 +248,7 @@ def _enrich_broker_state_with_buckets(
     broker_state: Dict[str, Any],
     bucket_by_symbol: Dict[str, str],
     *,
-    source: str = "selected_ranked_database_snapshot_and_held_position_overrides",
+    source: str = "selected_positions_database_snapshot_and_held_position_overrides",
 ) -> Dict[str, Any]:
     """Attach Manager/Database bucket hints to broker positions and open orders."""
     if not bucket_by_symbol:
