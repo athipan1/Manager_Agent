@@ -296,7 +296,27 @@ jobs:
 
             fi
 
-            echo "Alpaca paper mode configured."
+            echo "ALPACA_API_URL=${ALPACA_API_URL}"
+
+            case "${ALPACA_API_URL}" in
+
+              *paper-api.alpaca.markets*)
+
+                echo "Alpaca paper mode configured."
+
+                ;;
+
+              *)
+
+                echo "Refusing to run: ALPACA_API_URL is not Alpaca Paper."
+
+                echo "Set ALPACA_API_URL to https://paper-api.alpaca.markets"
+
+                exit 1
+
+                ;;
+
+            esac
 
           else
 
@@ -472,11 +492,11 @@ jobs:
 
           min_final_score = float(os.getenv("MIN_FINAL_SCORE", "0.55"))
 
-          dry_run = os.getenv("DRY_RUN", "true").lower() != "false"
+          dry_run = os.getenv("DRY_RUN", "true").strip().lower() != "false"
 
-          broker_mode = os.getenv("BROKER_MODE", "SIMULATOR")
+          broker_mode = os.getenv("BROKER_MODE", "SIMULATOR").strip()
 
-          execution_api_key = os.getenv("EXECUTION_API_KEY", "dev_execution_key")
+          execution_api_key = os.getenv("EXECUTION_API_KEY", "dev_execution_key").strip()
 
           execute_approved_paper_bracket_upgrade = (
 
@@ -844,7 +864,7 @@ jobs:
 
               "flow": "discover_analyze_trade",
 
-              "warning": "DRY_RUN=false with BROKER_MODE=ALPACA sends orders to Alpaca Paper.",
+              "warning": "DRY_RUN=false with BROKER_MODE=ALPACA sends orders to Alpaca Paper only.",
 
               "request": payload,
 
@@ -878,17 +898,7 @@ jobs:
 
           PY
 
-          python scripts/store_order_review_ticket.py \
-
-            --database-url http://localhost:8004 \
-
-            --database-api-key "${DATABASE_AGENT_API_KEY:-dev_database_key}" \
-
-            --account-id 1 \
-
-            --input-json reports/hourly-auto-trading-report.json \
-
-            --output-json reports/order-review-ticket-store-result.json
+          python scripts/store_order_review_ticket.py --database-url http://localhost:8004 --database-api-key "${DATABASE_AGENT_API_KEY:-dev_database_key}" --account-id 1 --input-json reports/hourly-auto-trading-report.json --output-json reports/order-review-ticket-store-result.json
 
           python scripts/render_hourly_portfolio_report.py
 
