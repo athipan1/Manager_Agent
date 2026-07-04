@@ -5,6 +5,7 @@ import pytest
 
 from app.models import DiscoverAnalyzeTradeRequest
 from app.workflows.guarded_discovery_workflow import (
+    _bucket_by_symbol_from_response,
     capture_broker_snapshot,
     run_guarded_discover_analyze_trade_flow,
 )
@@ -65,7 +66,7 @@ def broker_payload():
     }
 
 
-async def fake_capture_broker_snapshot(account_id, correlation_id):
+async def fake_capture_broker_snapshot(account_id, correlation_id, bucket_by_symbol=None):
     return {"status": "captured"}
 
 
@@ -156,3 +157,31 @@ async def test_guarded_discovery_allows_execution_when_database_sync_is_safe(mon
     assert response.data["broker_snapshot_capture"] == {"status": "captured"}
     assert response.data["portfolio_summary"]["database_sync_status"] == "synced"
     assert response.data["portfolio_summary"]["broker_snapshot_capture_status"] == "captured"
+
+
+def test_bucket_hints_include_ranked_candidates_and_bucket_selection():
+    data = {
+        "ranked_candidates": [
+            {"symbol": "ACGL", "score_breakdown": {"strategy_bucket": "value_rebound"}},
+            {"symbol": "ADBE", "score_breakdown": {"strategy_bucket": "core_dividend"}},
+        ],
+        "bucket_selection": {
+            "core_dividend": {"selected": [{"symbol": "CINF"}], "overflow": []},
+            "news_momentum": {"selected": [{"ticker": "AMSC"}], "overflow": []},
+        },
+    }
+
+    bucket_by_symbol = _bucket_by_symbol_from_response(data)
+
+    assert bucket_by_symbol["ACGL"] == "value_rebound"
+    assert bucket_by_symbol["ADBE"] == "core_dividend"
+    assert bucket_by_symbol["CINF"] == "core_dividend"
+    assert bucket_by_symbol["AMSC"] == "news_momentum"
+
+
+def test_bucket_hints_keep_known_held_position_overrides_when_response_has_no_selection():
+    bucket_by_symbol = _bucket_by_symbol_from_response({"selected_positions": []})
+
+    assert bucket_by_symbol["ACGL"] == "value_rebound"
+    assert bucket_by_symbol["ADBE"] == "core_dividend"
+    assert bucket_by_symbol["CINF"] == "core_dividend"

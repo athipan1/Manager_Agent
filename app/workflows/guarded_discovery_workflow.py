@@ -26,9 +26,12 @@ from .discovery_workflow import run_discover_analyze_trade_flow as run_unguarded
 
 VALID_STRATEGY_BUCKETS = {"core_dividend", "value_rebound", "news_momentum"}
 DEFAULT_HELD_POSITION_BUCKET_OVERRIDES = {
-    # CINF is already held in the broker account but can fall out of the current
-    # selected/ranked discovery set. Keep its broker-sync bucket stable so it no
-    # longer reverts to unassigned during hourly backfill.
+    # These positions are already held in the broker account. Keep their
+    # broker-sync buckets stable when a later hourly scan does not select them,
+    # otherwise Database_Agent may correctly sync the row but classify it as
+    # unassigned because the current response carried no bucket hint.
+    "ACGL": "value_rebound",
+    "ADBE": "core_dividend",
     "CINF": "core_dividend",
 }
 
@@ -105,16 +108,55 @@ def _normalized_strategy_bucket(value: Any) -> str:
     return bucket if bucket in VALID_STRATEGY_BUCKETS else ""
 
 
-def _remember_bucket(bucket_by_symbol: Dict[str, str], row: Any, *, overwrite: bool) -> None:
+def _bucket_from_row(item: Dict[str, Any], *, fallback_bucket: str | None = None) -> str:
+    bucket = _normalized_strategy_bucket(item.get("strategy_bucket") or item.get("bucket") or fallback_bucket)
+    if bucket:
+        return bucket
+
+    for nested_name in ("score_breakdown", "analysis", "metadata", "scanner_candidate"):
+        nested = item.get(nested_name)
+        if isinstance(nested, dict):
+            bucket = _normalized_strategy_bucket(nested.get("strategy_bucket") or nested.get("bucket"))
+            if bucket:
+                return bucket
+    return ""
+
+
+def _remember_bucket(
+    bucket_by_symbol: Dict[str, str],
+    row: Any,
+    *,
+    overwrite: bool,
+    fallback_bucket: str | None = None,
+) -> None:
     item = _row_dict(row)
-    symbol = str(item.get("symbol") or "").strip().upper()
-    bucket = _normalized_strategy_bucket(item.get("strategy_bucket") or item.get("bucket"))
+    symbol = str(item.get("symbol") or item.get("ticker") or "").strip().upper()
+    bucket = _bucket_from_row(item, fallback_bucket=fallback_bucket)
     if not symbol or not bucket:
         return
     if overwrite:
         bucket_by_symbol[symbol] = bucket
     else:
         bucket_by_symbol.setdefault(symbol, bucket)
+
+
+def _remember_bucket_selection(bucket_by_symbol: Dict[str, str], bucket_selection: Any) -> None:
+    """Capture bucket hints from allocation bucket_selection.
+
+    `bucket_selection` is keyed by bucket name and may contain selected/overflow
+    rows that do not repeat `strategy_bucket`, so the parent bucket key is used as
+    a safe fallback. Only valid configured bucket names are accepted.
+    """
+    if not isinstance(bucket_selection, dict):
+        return
+
+    for bucket_name, bucket_payload in bucket_selection.items():
+        fallback_bucket = _normalized_strategy_bucket(bucket_name)
+        if not fallback_bucket or not isinstance(bucket_payload, dict):
+            continue
+        for section in ("selected", "overflow"):
+            for row in bucket_payload.get(section) or []:
+                _remember_bucket(bucket_by_symbol, row, overwrite=True, fallback_bucket=fallback_bucket)
 
 
 def _configured_held_position_bucket_overrides() -> Dict[str, str]:
@@ -174,15 +216,25 @@ def _bucket_by_symbol_from_response(data: Dict[str, Any], database_sync: Dict[st
     """Build symbol -> strategy_bucket hints for broker snapshot backfill.
 
     Priority order:
-    1. current Manager discovery output from selected/risk/execution rows,
-    2. the last known bucket already stored in Database_Agent,
-    3. configured held-position overrides,
-    4. otherwise no hint, so Database_Agent may keep the row unassigned.
+    1. current Manager discovery output from selected/skipped/ranked rows,
+    2. current allocation bucket_selection parent buckets,
+    3. the last known bucket already stored in Database_Agent,
+    4. configured held-position overrides,
+    5. otherwise no hint, so Database_Agent may keep the row unassigned.
     """
     bucket_by_symbol: Dict[str, str] = {}
-    for section in ("selected_positions", "risk_approvals", "execution_candidates"):
+    for section in (
+        "selected_positions",
+        "skipped_existing_protected_positions",
+        "risk_approvals",
+        "execution_candidates",
+        "position_analysis_payloads",
+        "ranked_candidates",
+    ):
         for row in data.get(section) or []:
             _remember_bucket(bucket_by_symbol, row, overwrite=True)
+
+    _remember_bucket_selection(bucket_by_symbol, data.get("bucket_selection"))
 
     for symbol, bucket in _bucket_by_symbol_from_database_sync(database_sync or {}).items():
         bucket_by_symbol.setdefault(symbol, bucket)
