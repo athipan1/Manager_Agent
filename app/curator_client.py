@@ -181,24 +181,25 @@ async def best_effort_curator_signal(
     correlation_id: str,
     account_id: str | int = 1,
 ) -> Dict[str, Any]:
-    """Fetch and execute one recommended Curator skill without breaking Manager flow.
-
-    This is intentionally best-effort. If Curator is down, unconfigured, or a
-    skill fails, Manager records diagnostics and continues with its original
-    Technical/Fundamental/Risk/Execution path.
-    """
+    """Fetch and execute one recommended Curator skill without breaking Manager flow."""
     if not CURATOR_AGENT_ENABLED:
         return {"status": "disabled", "reason": "CURATOR_AGENT_ENABLED=false"}
 
     try:
         async with CuratorAgentClient() as client:
-            recommendation = await client.recommend_skills(
-                account_id=account_id,
-                symbol=symbol,
-                analysis=analysis,
-                correlation_id=correlation_id,
-                top_k=3,
-            )
+            recommendation: Dict[str, Any] = {}
+            try:
+                if hasattr(client, "recommend_skills"):
+                    recommendation = await client.recommend_skills(
+                        account_id=account_id,
+                        symbol=symbol,
+                        analysis=analysis,
+                        correlation_id=correlation_id,
+                        top_k=3,
+                    )
+            except Exception as exc:
+                recommendation = {"recommendation_state": "unavailable", "reason": str(exc)}
+
             skills = recommendation.get("recommended_skills") or []
             if not skills:
                 skills = await client.search_approved_skills(f"{symbol} technical signal", correlation_id)
@@ -218,27 +219,35 @@ async def best_effort_curator_signal(
 
             strategy_bucket = _payload_value(analysis, "strategy_bucket")
             market_regime = _payload_value(analysis, "market_regime", "regime")
-            result = await client.execute_skill(
-                skill_id,
-                inputs={
-                    "symbol": symbol,
-                    "analysis": analysis,
-                    "ticker": symbol,
-                    "strategy_bucket": strategy_bucket,
-                    "market_regime": market_regime,
-                },
-                correlation_id=correlation_id,
-                account_id=account_id,
-                symbol=symbol,
-                strategy_bucket=strategy_bucket,
-                market_regime=market_regime,
-                run_id=correlation_id,
-                metadata={
-                    "source_flow": "discover_analyze_trade",
-                    "recommendation_state": recommendation.get("recommendation_state"),
-                    "recommended_skill_score": skill.get("score"),
-                },
-            )
+            inputs = {
+                "symbol": symbol,
+                "analysis": analysis,
+                "ticker": symbol,
+                "strategy_bucket": strategy_bucket,
+                "market_regime": market_regime,
+            }
+            try:
+                result = await client.execute_skill(
+                    skill_id,
+                    inputs=inputs,
+                    correlation_id=correlation_id,
+                    account_id=account_id,
+                    symbol=symbol,
+                    strategy_bucket=strategy_bucket,
+                    market_regime=market_regime,
+                    run_id=correlation_id,
+                    metadata={
+                        "source_flow": "discover_analyze_trade",
+                        "recommendation_state": recommendation.get("recommendation_state"),
+                        "recommended_skill_score": skill.get("score"),
+                    },
+                )
+            except TypeError:
+                result = await client.execute_skill(
+                    skill_id,
+                    inputs=inputs,
+                    correlation_id=correlation_id,
+                )
             return {
                 "status": "success" if result.get("execution_status") == "success" else "failed",
                 "skill_id": skill_id,
