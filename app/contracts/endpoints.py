@@ -9,10 +9,10 @@ class DatabaseEndpoints:
     RISK_APPROVALS = "/risk-approvals"
     BROKER_SYNC_STATUS = "/broker-sync/status"
     BROKER_SYNC_SNAPSHOT = "/broker-sync/snapshot"
-    PORTFOLIO_METRICS = "/accounts/{account_id}/portfolio_metrics"
-    PRICE_HISTORY = "/accounts/{account_id}/prices/{symbol}"
-    SIGNALS = "/signals"
-    PERFORMANCE_METRICS = "/performance_metrics"
+    PORTFOLIO_METRICS = "/accounts/{account_id}/portfolio/metrics"
+    PRICE_HISTORY = "/prices/{symbol}/history"
+    SIGNALS = "/history/signals"
+    PERFORMANCE_METRICS = "/history/performance"
 
 class ExecutionEndpoints:
     HEALTH = "/health"
