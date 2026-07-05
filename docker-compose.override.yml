@@ -1,0 +1,11 @@
+services:
+  backtest-agent:
+    environment:
+      DATABASE_AGENT_URL: ${DATABASE_AGENT_URL:-http://database-agent:8004}
+      DATABASE_AGENT_API_KEY: ${DATABASE_AGENT_API_KEY:-dev_database_key}
+      BACKTEST_SKILL_ID: ${BACKTEST_SKILL_ID:-hourly-sma-crossover}
+      BACKTEST_STRATEGY_ID: ${BACKTEST_STRATEGY_ID:-hourly-sma-crossover}
+      PUBLISH_TO_DATABASE: ${PUBLISH_TO_DATABASE:-true}
+    depends_on:
+      database-agent:
+        condition: service_healthy
