@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 from decimal import Decimal
 from enum import Enum
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 from urllib.parse import quote
 
 from .logger import report_logger
@@ -79,6 +79,19 @@ def json_safe_value(value: Any) -> Any:
     return str(value)
 
 
+def _payload_value(payload: Dict[str, Any], *names: str) -> Optional[Any]:
+    for name in names:
+        value = payload.get(name)
+        if value is not None:
+            return value
+    metadata = payload.get("metadata") if isinstance(payload.get("metadata"), dict) else {}
+    for name in names:
+        value = metadata.get(name)
+        if value is not None:
+            return value
+    return None
+
+
 class CuratorAgentClient(ResilientAgentClient):
     """Client for Curator_Agent signal-only skill endpoints.
 
@@ -106,6 +119,30 @@ class CuratorAgentClient(ResilientAgentClient):
         data = response.get("data") or []
         return data if isinstance(data, list) else []
 
+    async def recommend_skills(
+        self,
+        *,
+        account_id: str | int,
+        symbol: str,
+        analysis: Dict[str, Any],
+        correlation_id: str,
+        top_k: int = 3,
+    ) -> Dict[str, Any]:
+        payload = {
+            "account_id": account_id,
+            "symbol": symbol.upper(),
+            "asset_class": _payload_value(analysis, "asset_class") or "us_equity",
+            "market_regime": _payload_value(analysis, "market_regime", "regime"),
+            "strategy_bucket": _payload_value(analysis, "strategy_bucket"),
+            "timeframe": _payload_value(analysis, "timeframe"),
+            "top_k": top_k,
+        }
+        response = await self._post("/skills/recommend", correlation_id, json_data=json_safe_value(payload))
+        if response.get("status") != "success":
+            raise ValueError(response.get("error") or "Curator recommendation failed")
+        data = response.get("data") or {}
+        return data if isinstance(data, dict) else {}
+
     async def execute_skill(
         self,
         skill_id: str,
@@ -113,10 +150,22 @@ class CuratorAgentClient(ResilientAgentClient):
         inputs: Dict[str, Any],
         correlation_id: str,
         timeout_seconds: float | None = None,
+        account_id: str | int = 1,
+        symbol: Optional[str] = None,
+        strategy_bucket: Optional[str] = None,
+        market_regime: Optional[str] = None,
+        run_id: Optional[str] = None,
+        metadata: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         payload = {
             "inputs": json_safe_value(inputs),
             "timeout_seconds": timeout_seconds if timeout_seconds is not None else CURATOR_SKILL_TIMEOUT_SECONDS,
+            "account_id": account_id,
+            "symbol": symbol,
+            "strategy_bucket": strategy_bucket,
+            "market_regime": market_regime,
+            "run_id": run_id,
+            "metadata": json_safe_value(metadata or {}),
         }
         response = await self._post(f"/skills/{skill_id}/execute", correlation_id, json_data=payload)
         if response.get("status") != "success":
@@ -130,8 +179,9 @@ async def best_effort_curator_signal(
     symbol: str,
     analysis: Dict[str, Any],
     correlation_id: str,
+    account_id: str | int = 1,
 ) -> Dict[str, Any]:
-    """Fetch and execute one approved Curator skill without breaking Manager flow.
+    """Fetch and execute one recommended Curator skill without breaking Manager flow.
 
     This is intentionally best-effort. If Curator is down, unconfigured, or a
     skill fails, Manager records diagnostics and continues with its original
@@ -142,31 +192,59 @@ async def best_effort_curator_signal(
 
     try:
         async with CuratorAgentClient() as client:
-            query = f"{symbol} technical signal"
-            skills = await client.search_approved_skills(query, correlation_id)
+            recommendation = await client.recommend_skills(
+                account_id=account_id,
+                symbol=symbol,
+                analysis=analysis,
+                correlation_id=correlation_id,
+                top_k=3,
+            )
+            skills = recommendation.get("recommended_skills") or []
+            if not skills:
+                skills = await client.search_approved_skills(f"{symbol} technical signal", correlation_id)
             if not skills:
                 skills = await client.search_approved_skills("technical", correlation_id)
             if not skills:
-                return {"status": "no_skill", "reason": "No approved Curator skills found."}
+                return {
+                    "status": "no_skill",
+                    "reason": "No approved or recommended Curator skills found.",
+                    "recommendation": recommendation,
+                }
 
             skill = skills[0]
             skill_id = str(skill.get("skill_id") or "")
             if not skill_id:
-                return {"status": "invalid_skill", "reason": "Approved skill missing skill_id.", "skill": skill}
+                return {"status": "invalid_skill", "reason": "Curator skill missing skill_id.", "skill": skill}
 
+            strategy_bucket = _payload_value(analysis, "strategy_bucket")
+            market_regime = _payload_value(analysis, "market_regime", "regime")
             result = await client.execute_skill(
                 skill_id,
                 inputs={
                     "symbol": symbol,
                     "analysis": analysis,
                     "ticker": symbol,
+                    "strategy_bucket": strategy_bucket,
+                    "market_regime": market_regime,
                 },
                 correlation_id=correlation_id,
+                account_id=account_id,
+                symbol=symbol,
+                strategy_bucket=strategy_bucket,
+                market_regime=market_regime,
+                run_id=correlation_id,
+                metadata={
+                    "source_flow": "discover_analyze_trade",
+                    "recommendation_state": recommendation.get("recommendation_state"),
+                    "recommended_skill_score": skill.get("score"),
+                },
             )
             return {
                 "status": "success" if result.get("execution_status") == "success" else "failed",
                 "skill_id": skill_id,
                 "skill_name": skill.get("name"),
+                "recommendation": recommendation,
+                "selected_skill": skill,
                 "execution": result,
             }
     except (AgentUnavailable, Exception) as exc:
