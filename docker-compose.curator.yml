@@ -51,6 +51,9 @@ services:
       - "8010:8010"
     environment:
       CURATOR_DB_PATH: /data/curator_skills.sqlite3
+      CURATOR_SEED_BACKTEST_SKILL: ${CURATOR_SEED_BACKTEST_SKILL:-true}
+      CURATOR_SEED_BACKTEST_SKILL_ID: ${BACKTEST_SKILL_ID:-hourly-sma-crossover}
+      CURATOR_SEED_BACKTEST_SKILL_APPROVED: ${CURATOR_SEED_BACKTEST_SKILL_APPROVED:-true}
       PYTHONPATH: /app
     volumes:
       - curator_data:/data
