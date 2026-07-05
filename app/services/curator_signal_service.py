@@ -9,10 +9,35 @@ def _symbol_from_payload(payload: Dict[str, Any]) -> str:
     return str(payload.get("ticker") or payload.get("symbol") or "").upper()
 
 
+async def _best_effort_signal_with_optional_account(
+    *,
+    symbol: str,
+    analysis: Dict[str, Any],
+    correlation_id: str,
+    account_id: str | int,
+) -> Dict[str, Any]:
+    try:
+        return await best_effort_curator_signal(
+            symbol=symbol,
+            analysis=analysis,
+            correlation_id=correlation_id,
+            account_id=account_id,
+        )
+    except TypeError as exc:
+        if "account_id" not in str(exc):
+            raise
+        return await best_effort_curator_signal(
+            symbol=symbol,
+            analysis=analysis,
+            correlation_id=correlation_id,
+        )
+
+
 async def enrich_payloads_with_curator_signals(
     *,
     payloads: List[Dict[str, Any]],
     correlation_id: str,
+    account_id: str | int = 1,
 ) -> tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
     """Attach Curator signal metadata to selected payloads without changing decisions.
 
@@ -28,10 +53,11 @@ async def enrich_payloads_with_curator_signals(
             enriched.append(payload)
             continue
 
-        signal = await best_effort_curator_signal(
+        signal = await _best_effort_signal_with_optional_account(
             symbol=symbol,
             analysis=payload,
             correlation_id=correlation_id,
+            account_id=account_id,
         )
         curator_signals.append({"symbol": symbol, **signal})
 
