@@ -23,6 +23,12 @@ jobs:
           repository: athipan1/Backtest_Agent
           path: Backtest_Agent
 
+      - name: Checkout Database_Agent
+        uses: actions/checkout@v4
+        with:
+          repository: athipan1/Database_Agent
+          path: Database_Agent
+
       - name: Validate compose profile
         working-directory: Manager_Agent
         run: docker compose --profile backtest config
