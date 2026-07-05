@@ -13,6 +13,7 @@ async def enrich_payloads_with_curator_signals(
     *,
     payloads: List[Dict[str, Any]],
     correlation_id: str,
+    account_id: str | int = 1,
 ) -> tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
     """Attach Curator signal metadata to selected payloads without changing decisions.
 
@@ -32,6 +33,7 @@ async def enrich_payloads_with_curator_signals(
             symbol=symbol,
             analysis=payload,
             correlation_id=correlation_id,
+            account_id=account_id,
         )
         curator_signals.append({"symbol": symbol, **signal})
 
