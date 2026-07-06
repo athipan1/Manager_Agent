@@ -1,6 +1,6 @@
 import os
 from decimal import Decimal, ROUND_FLOOR
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Union
 
 from . import config
 from .portfolio_allocation import UNASSIGNED, VALUE_REBOUND
@@ -39,6 +39,18 @@ def _as_decimal(value: Any, default: Decimal = Decimal("0")) -> Decimal:
         return Decimal(str(value))
     except Exception:
         return default
+
+
+def _risk_account_id(account_id: Optional[Union[int, str]]) -> int:
+    """Return the account id Risk_Agent expects, falling back safely for legacy callers."""
+    raw_value = account_id if account_id is not None else os.getenv("DEFAULT_ACCOUNT_ID", "1")
+    try:
+        return int(raw_value)
+    except (TypeError, ValueError):
+        try:
+            return int(os.getenv("DEFAULT_ACCOUNT_ID", "1"))
+        except (TypeError, ValueError):
+            return 1
 
 
 def _normalise_action(action: str) -> str:
@@ -165,6 +177,7 @@ def assess_trade(
     requested_quantity: Optional[int] = None,
     session_risk_context: Optional[Dict[str, Any]] = None,
     stock_risk_context: Optional[Dict[str, Any]] = None,
+    account_id: Optional[Union[int, str]] = None,
 ) -> Dict[str, Any]:
     side = _normalise_action(action)
     session_risk_context = session_risk_context or {}
@@ -211,7 +224,7 @@ def assess_trade(
     desired_quantity = max(0, desired_quantity)
 
     payload = {
-        "account_id": os.getenv("DEFAULT_ACCOUNT_ID", "1"),
+        "account_id": _risk_account_id(account_id),
         "symbol": symbol,
         "side": side,
         "entry_price": _as_float(entry_price),
