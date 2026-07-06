@@ -5,7 +5,7 @@ import datetime
 from app.database_client import DatabaseAgentClient
 from app.resilient_client import ResilientAgentClient, AgentUnavailable
 from app.config import DATABASE_AGENT_URL
-from httpx import TimeoutException, Response
+from httpx import TimeoutException, Response, Request
 
 @pytest.fixture
 def mock_config():
@@ -20,10 +20,7 @@ async def test_database_client_sends_api_key_header(mock_config):
     Verify that the DatabaseAgentClient initializes the HTTP client with the correct X-API-KEY header.
     """
     with patch("app.resilient_client.httpx.AsyncClient") as mock_async_client:
-        # This will trigger the __init__ chain and instantiate the mocked client
         client = DatabaseAgentClient()
-
-        # Assert that the underlying httpx client was initialized with the correct header
         mock_async_client.assert_called_once()
         constructor_kwargs = mock_async_client.call_args.kwargs
         assert "headers" in constructor_kwargs
@@ -31,33 +28,23 @@ async def test_database_client_sends_api_key_header(mock_config):
 
 @pytest.mark.asyncio
 async def test_resilient_client_circuit_breaker_opens_after_failures():
-    """
-    Verify that the ResilientAgentClient's circuit breaker opens after the configured
-    number of failures and raises AgentUnavailable when the recovery probe also fails.
-    """
     client = ResilientAgentClient(
         base_url="http://test-agent:8000",
         failure_threshold=2,
         cooldown_period=10
     )
 
-    # Mock the internal httpx client to simulate failures
     with patch.object(client, '_client') as mock_client:
         mock_client.request.side_effect = TimeoutException("Connection failed")
 
-        # First call should fail and trigger the breaker after two low-level attempts.
         with pytest.raises(AgentUnavailable):
             await client._get("/test", "corr-id-1")
 
-        # The next call should run a failing /health recovery probe and stay blocked.
         with pytest.raises(AgentUnavailable):
             await client._get("/test", "corr-id-1")
 
-        # Verify the breaker is open
         assert client._circuit_state == "OPEN"
 
-        # This call should run another /health recovery probe, then fail without sending
-        # the original /test request because the probe also failed.
         with pytest.raises(AgentUnavailable):
             await client._get("/test", "corr-id-2")
 
@@ -79,13 +66,20 @@ async def test_resilient_client_recovers_open_circuit_after_health_probe():
     client._failure_count = 1
     client._last_failure_time = datetime.datetime.now().timestamp()
 
-    health_response = Response(200, json={"status": "success", "data": {"status": "healthy"}})
-    request_response = Response(200, json={"status": "success", "data": {"ok": True}})
+    health_response = Response(
+        200,
+        json={"status": "success", "data": {"status": "healthy"}},
+        request=Request("GET", "http://test-agent:8000/health"),
+    )
+    request_response = Response(
+        200,
+        json={"status": "success", "data": {"ok": True}},
+        request=Request("GET", "http://test-agent:8000/real-request"),
+    )
 
     with patch.object(client, '_client') as mock_client:
         mock_client.headers = {}
         mock_client.request = AsyncMock(side_effect=[health_response, request_response])
-
         response = await client._get("/real-request", "corr-id-recovered")
 
     assert response == {"status": "success", "data": {"ok": True}}
@@ -102,9 +96,6 @@ from app.models import CreateOrderRequest, CreateOrderResponse, OrderSide, Order
 @pytest.mark.asyncio
 @respx.mock
 async def test_database_client_create_order(mock_config):
-    """
-    Verify that the DatabaseAgentClient can successfully create an order.
-    """
     client = DatabaseAgentClient()
     correlation_id = str(uuid4())
     client_order_id = str(uuid4())
