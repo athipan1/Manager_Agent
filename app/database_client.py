@@ -201,6 +201,10 @@ class DatabaseAgentClient(ResilientAgentClient):
     async def create_order(self, account_id: Union[int, str], order_body: CreateOrderRequest, correlation_id: str) -> CreateOrderResponse:
         url = DatabaseEndpoints.ORDERS.format(account_id=account_id)
         order_payload = order_body.model_dump(mode='json')
+        if "trade_id" not in order_payload:
+            client_order_id = order_payload.get("client_order_id")
+            if client_order_id:
+                order_payload["trade_id"] = client_order_id
         response_data = await self._post(url, correlation_id, json_data=order_payload)
         standard_resp = self.validate_standard_response(response_data)
         return _coerce_model(CreateOrderResponse, standard_resp.data)
