@@ -24,6 +24,22 @@ def _reconciliation_ok(response: StandardAgentResponse) -> bool:
     return bool(data.get("ok", False))
 
 
+def _execution_order_response_payload(data):
+    """Extract the order payload from Execution_Agent responses.
+
+    Execution_Agent currently returns data shaped as
+    {"order": {...}, "execution_job": {...}} from /execute, while older
+    clients expected the order object directly. Support both response shapes so
+    Manager can parse the order response without treating a successful submit as
+    a failure.
+    """
+    if hasattr(data, "model_dump"):
+        data = data.model_dump(mode="json")
+    if isinstance(data, dict) and isinstance(data.get("order"), dict):
+        return data["order"]
+    return data
+
+
 def _order_payloads(order_details: list[CreateOrderRequest]) -> list[dict]:
     payload = []
     for order in order_details:
@@ -111,7 +127,8 @@ class ExecutionAgentClient(ResilientAgentClient):
 
             response_data = await self._post(url=endpoint, correlation_id=correlation_id, json_data=payload, extra_headers={"Idempotency-Key": idempotency_key})
             standard_resp = self.validate_standard_response(response_data)
-            response = CreateOrderResponse.model_validate(standard_resp.data)
+            response_payload = _execution_order_response_payload(standard_resp.data)
+            response = CreateOrderResponse.model_validate(response_payload)
             if _is_rejected_status(response.status):
                 alert_service.record_approval_reject(correlation_id=correlation_id, symbol=order_details.symbol, reason=response.reason or f"Execution status {response.status}", metadata={"source": "execution_agent", "order_id": response.order_id})
             return response
