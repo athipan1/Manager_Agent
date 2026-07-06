@@ -74,6 +74,31 @@ class ResilientAgentClient:
         if self._failure_count >= self._failure_threshold:
             self._open_circuit()
 
+    async def _probe_health_and_close_circuit(self, correlation_id: str) -> bool:
+        """Probe /health while the circuit is open and close it when the service recovered.
+
+        This prevents stale circuit state from blocking later execution paths after
+        a separate preflight/sync step has already confirmed the service is healthy.
+        The probe intentionally bypasses the circuit guard but still uses the same
+        client headers and correlation id.
+        """
+        headers = {**self._client.headers, "X-Correlation-ID": correlation_id}
+        try:
+            response = await self._client.request("GET", "/health", headers=headers)
+            response.raise_for_status()
+            self._close_circuit()
+            report_logger.info(
+                f"Circuit breaker recovered for {self.base_url} after successful health probe, "
+                f"correlation_id={correlation_id}"
+            )
+            return True
+        except Exception as exc:
+            report_logger.warning(
+                f"Circuit breaker health probe failed for {self.base_url}: {exc}, "
+                f"correlation_id={correlation_id}"
+            )
+            return False
+
     async def _request(
         self,
         method: str,
@@ -87,9 +112,11 @@ class ResilientAgentClient:
                 self._circuit_state = "HALF-OPEN"
                 report_logger.info(f"Circuit breaker for {self.base_url} is now HALF-OPEN.")
             else:
-                raise AgentUnavailable(
-                    f"Circuit breaker is open for {self.base_url}. correlation_id={correlation_id}"
-                )
+                recovered = await self._probe_health_and_close_circuit(correlation_id)
+                if not recovered:
+                    raise AgentUnavailable(
+                        f"Circuit breaker is open for {self.base_url}. correlation_id={correlation_id}"
+                    )
 
         # Combine headers from the client, the call-site, and extra headers
         combined_headers = {**self._client.headers, **kwargs.pop("headers", {})}

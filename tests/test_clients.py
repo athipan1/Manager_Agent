@@ -5,7 +5,7 @@ import datetime
 from app.database_client import DatabaseAgentClient
 from app.resilient_client import ResilientAgentClient, AgentUnavailable
 from app.config import DATABASE_AGENT_URL
-from httpx import TimeoutException, Response
+from httpx import TimeoutException, Response, Request
 
 @pytest.fixture
 def mock_config():
@@ -20,10 +20,7 @@ async def test_database_client_sends_api_key_header(mock_config):
     Verify that the DatabaseAgentClient initializes the HTTP client with the correct X-API-KEY header.
     """
     with patch("app.resilient_client.httpx.AsyncClient") as mock_async_client:
-        # This will trigger the __init__ chain and instantiate the mocked client
         client = DatabaseAgentClient()
-
-        # Assert that the underlying httpx client was initialized with the correct header
         mock_async_client.assert_called_once()
         constructor_kwargs = mock_async_client.call_args.kwargs
         assert "headers" in constructor_kwargs
@@ -31,34 +28,65 @@ async def test_database_client_sends_api_key_header(mock_config):
 
 @pytest.mark.asyncio
 async def test_resilient_client_circuit_breaker_opens_after_failures():
-    """
-    Verify that the ResilientAgentClient's circuit breaker opens after the configured
-    number of failures and raises AgentUnavailable immediately without sending a request.
-    """
     client = ResilientAgentClient(
         base_url="http://test-agent:8000",
         failure_threshold=2,
         cooldown_period=10
     )
 
-    # Mock the internal httpx client to simulate failures
     with patch.object(client, '_client') as mock_client:
         mock_client.request.side_effect = TimeoutException("Connection failed")
 
-        # First two calls should fail and trigger the breaker
-        for _ in range(2):
-            with pytest.raises(AgentUnavailable):
-                await client._get("/test", "corr-id-1")
+        with pytest.raises(AgentUnavailable):
+            await client._get("/test", "corr-id-1")
 
-        # Verify the breaker is open
+        with pytest.raises(AgentUnavailable):
+            await client._get("/test", "corr-id-1")
+
         assert client._circuit_state == "OPEN"
 
-        # This call should fail immediately without attempting a request
         with pytest.raises(AgentUnavailable):
             await client._get("/test", "corr-id-2")
 
-        # Assert that the request was only called twice (the initial failures)
-        assert mock_client.request.call_count == 2
+        assert [call.args[:2] for call in mock_client.request.call_args_list] == [
+            ("GET", "/test"),
+            ("GET", "/test"),
+            ("GET", "/health"),
+            ("GET", "/health"),
+        ]
+
+@pytest.mark.asyncio
+async def test_resilient_client_recovers_open_circuit_after_health_probe():
+    client = ResilientAgentClient(
+        base_url="http://test-agent:8000",
+        failure_threshold=1,
+        cooldown_period=300,
+    )
+    client._circuit_state = "OPEN"
+    client._failure_count = 1
+    client._last_failure_time = datetime.datetime.now().timestamp()
+
+    health_response = Response(
+        200,
+        json={"status": "success", "data": {"status": "healthy"}},
+        request=Request("GET", "http://test-agent:8000/health"),
+    )
+    request_response = Response(
+        200,
+        json={"status": "success", "data": {"ok": True}},
+        request=Request("GET", "http://test-agent:8000/real-request"),
+    )
+
+    with patch.object(client, '_client') as mock_client:
+        mock_client.headers = {}
+        mock_client.request = AsyncMock(side_effect=[health_response, request_response])
+        response = await client._get("/real-request", "corr-id-recovered")
+
+    assert response == {"status": "success", "data": {"ok": True}}
+    assert client._circuit_state == "CLOSED"
+    assert client._failure_count == 0
+    assert mock_client.request.call_args_list[0].args[:2] == ("GET", "/health")
+    assert mock_client.request.call_args_list[1].args[:2] == ("GET", "/real-request")
 
 from uuid import uuid4
 from decimal import Decimal
@@ -68,9 +96,6 @@ from app.models import CreateOrderRequest, CreateOrderResponse, OrderSide, Order
 @pytest.mark.asyncio
 @respx.mock
 async def test_database_client_create_order(mock_config):
-    """
-    Verify that the DatabaseAgentClient can successfully create an order.
-    """
     client = DatabaseAgentClient()
     correlation_id = str(uuid4())
     client_order_id = str(uuid4())
