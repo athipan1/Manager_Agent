@@ -45,21 +45,28 @@ async def test_resilient_client_circuit_breaker_opens_after_failures():
     with patch.object(client, '_client') as mock_client:
         mock_client.request.side_effect = TimeoutException("Connection failed")
 
-        # First two calls should fail and trigger the breaker
-        for _ in range(2):
-            with pytest.raises(AgentUnavailable):
-                await client._get("/test", "corr-id-1")
+        # First call should fail and trigger the breaker after two low-level attempts.
+        with pytest.raises(AgentUnavailable):
+            await client._get("/test", "corr-id-1")
+
+        # The next call should run a failing /health recovery probe and stay blocked.
+        with pytest.raises(AgentUnavailable):
+            await client._get("/test", "corr-id-1")
 
         # Verify the breaker is open
         assert client._circuit_state == "OPEN"
 
-        # This call should run a /health recovery probe, then fail without sending
+        # This call should run another /health recovery probe, then fail without sending
         # the original /test request because the probe also failed.
         with pytest.raises(AgentUnavailable):
             await client._get("/test", "corr-id-2")
 
-        # Two original failures plus one health probe after the circuit opened.
-        assert mock_client.request.call_count == 3
+        assert [call.args[:2] for call in mock_client.request.call_args_list] == [
+            ("GET", "/test"),
+            ("GET", "/test"),
+            ("GET", "/health"),
+            ("GET", "/health"),
+        ]
 
 @pytest.mark.asyncio
 async def test_resilient_client_recovers_open_circuit_after_health_probe():
