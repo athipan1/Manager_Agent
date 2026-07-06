@@ -33,7 +33,7 @@ async def test_database_client_sends_api_key_header(mock_config):
 async def test_resilient_client_circuit_breaker_opens_after_failures():
     """
     Verify that the ResilientAgentClient's circuit breaker opens after the configured
-    number of failures and raises AgentUnavailable immediately without sending a request.
+    number of failures and raises AgentUnavailable when the recovery probe also fails.
     """
     client = ResilientAgentClient(
         base_url="http://test-agent:8000",
@@ -53,12 +53,39 @@ async def test_resilient_client_circuit_breaker_opens_after_failures():
         # Verify the breaker is open
         assert client._circuit_state == "OPEN"
 
-        # This call should fail immediately without attempting a request
+        # This call should run a /health recovery probe, then fail without sending
+        # the original /test request because the probe also failed.
         with pytest.raises(AgentUnavailable):
             await client._get("/test", "corr-id-2")
 
-        # Assert that the request was only called twice (the initial failures)
-        assert mock_client.request.call_count == 2
+        # Two original failures plus one health probe after the circuit opened.
+        assert mock_client.request.call_count == 3
+
+@pytest.mark.asyncio
+async def test_resilient_client_recovers_open_circuit_after_health_probe():
+    client = ResilientAgentClient(
+        base_url="http://test-agent:8000",
+        failure_threshold=1,
+        cooldown_period=300,
+    )
+    client._circuit_state = "OPEN"
+    client._failure_count = 1
+    client._last_failure_time = datetime.datetime.now().timestamp()
+
+    health_response = Response(200, json={"status": "success", "data": {"status": "healthy"}})
+    request_response = Response(200, json={"status": "success", "data": {"ok": True}})
+
+    with patch.object(client, '_client') as mock_client:
+        mock_client.headers = {}
+        mock_client.request = AsyncMock(side_effect=[health_response, request_response])
+
+        response = await client._get("/real-request", "corr-id-recovered")
+
+    assert response == {"status": "success", "data": {"ok": True}}
+    assert client._circuit_state == "CLOSED"
+    assert client._failure_count == 0
+    assert mock_client.request.call_args_list[0].args[:2] == ("GET", "/health")
+    assert mock_client.request.call_args_list[1].args[:2] == ("GET", "/real-request")
 
 from uuid import uuid4
 from decimal import Decimal
