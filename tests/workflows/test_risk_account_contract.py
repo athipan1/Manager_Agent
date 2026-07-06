@@ -1,6 +1,6 @@
 from decimal import Decimal
 
-from app import risk_manager
+from app import config, risk_manager
 from app.database_client import _coerce_dict
 
 
@@ -22,6 +22,10 @@ def test_assess_trade_uses_request_account_id(monkeypatch):
             },
         }
 
+    monkeypatch.setattr(config, "TRADING_ENABLED", True)
+    monkeypatch.setattr(config, "TRADING_MODE", "PAPER")
+    monkeypatch.setattr(config, "ALLOW_LIVE_TRADING", False)
+    monkeypatch.setattr(config, "DEFAULT_MARGIN_MULTIPLIER", 1)
     monkeypatch.setattr(risk_manager, "evaluate_risk", fake_evaluate_risk)
 
     result = risk_manager.assess_trade(
