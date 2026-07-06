@@ -181,6 +181,7 @@ async def run_single_analysis_flow(
                     context_value=context_value,
                     session_context=session_context,
                     correlation_id=correlation_id,
+                    account_id=account_id,
                 )
                 attach_trade_plan_to_decision(
                     analysis_result=analysis_result,
