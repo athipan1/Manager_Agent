@@ -209,11 +209,11 @@ class DatabaseAgentClient(ResilientAgentClient):
         standard_resp = self.validate_standard_response(response_data)
         return _coerce_model(CreateOrderResponse, standard_resp.data)
 
-    async def execute_order(self, account_id: Union[int, str], order_id: Union[int, str], correlation_id: str) -> Order:
+    async def execute_order(self, account_id: Union[int, str], order_id: Union[int, str], correlation_id: str) -> Dict[str, Any]:
         url = DatabaseEndpoints.EXECUTE_ORDER.format(account_id=account_id, order_id=order_id)
         response_data = await self._post(url, correlation_id, json_data={})
         standard_resp = self.validate_standard_response(response_data)
-        return _coerce_model(Order, standard_resp.data)
+        return _coerce_dict(standard_resp.data)
 
     async def get_trade_history(self, account_id: Union[int, str], correlation_id: str) -> List[Trade]:
         await self._reconcile_broker_before_context(account_id, correlation_id)

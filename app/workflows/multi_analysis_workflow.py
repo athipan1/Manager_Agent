@@ -140,6 +140,7 @@ async def run_multi_analysis_flow(request: MultiAgentRequestBody) -> StandardAge
                 context_value=context_value,
                 session_context=session_context,
                 correlation_id=correlation_id,
+                account_id=account_id,
             )
             approved_decisions = approved_trades(trade_decisions)
             execution_outcomes = await execute_approved_trades(

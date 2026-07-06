@@ -55,6 +55,7 @@ def evaluate_single_trade_risk(
     context_value: Decimal,
     session_context: Dict[str, Any],
     correlation_id: str,
+    account_id: Optional[Union[int, str]] = None,
 ) -> Dict[str, Any]:
     """Evaluate risk for a single symbol analysis result.
 
@@ -97,6 +98,7 @@ def evaluate_single_trade_risk(
         open_orders_exposure=context_value,
         margin_multiplier=Decimal(str(config.DEFAULT_MARGIN_MULTIPLIER)),
         session_risk_context=session_context,
+        account_id=account_id,
     )
     ensure_risk_approval_id(decision, correlation_id)
     return decision
@@ -110,6 +112,7 @@ def evaluate_portfolio_risk(
     context_value: Decimal,
     session_context: Dict[str, Any],
     correlation_id: str,
+    account_id: Optional[Union[int, str]] = None,
 ) -> List[Dict[str, Any]]:
     """Evaluate portfolio risk for multiple analysis results."""
     decisions = assess_portfolio_trades(
@@ -126,6 +129,7 @@ def evaluate_portfolio_risk(
         open_orders_exposure=context_value,
         margin_multiplier=Decimal(str(config.DEFAULT_MARGIN_MULTIPLIER)),
         session_risk_context=session_context,
+        account_id=account_id,
     )
     for decision in decisions:
         ensure_risk_approval_id(decision, correlation_id)
