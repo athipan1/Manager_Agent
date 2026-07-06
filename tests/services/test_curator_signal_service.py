@@ -30,9 +30,11 @@ async def test_enrich_payloads_with_curator_signals_attaches_metadata(monkeypatc
 
     assert enriched[0]["metadata"]["existing"] is True
     assert enriched[0]["metadata"]["curator_signal"]["status"] == "success"
+    assert enriched[0]["metadata"]["curator_account_id"] == "1"
     assert signals == [
         {
             "symbol": "ACGL",
+            "account_id": "1",
             "status": "success",
             "skill_id": "skill-1",
             "execution": {
