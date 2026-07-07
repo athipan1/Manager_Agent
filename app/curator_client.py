@@ -92,6 +92,31 @@ def _payload_value(payload: Dict[str, Any], *names: str) -> Optional[Any]:
     return None
 
 
+def _skill_input_properties(skill: Dict[str, Any]) -> set[str]:
+    input_schema = skill.get("input_schema")
+    if not isinstance(input_schema, dict):
+        return set()
+    properties = input_schema.get("properties")
+    if not isinstance(properties, dict):
+        return set()
+    return {str(name) for name in properties.keys()}
+
+
+def filter_skill_inputs_for_schema(skill: Dict[str, Any], inputs: Dict[str, Any]) -> Dict[str, Any]:
+    """Send only fields accepted by a Curator skill input schema.
+
+    Curator executes registered Python functions with `inputs` expanded as
+    keyword arguments. Passing Manager-only context like `strategy_bucket` to a
+    skill that only declares `symbol`, `ticker`, and `analysis` causes failures
+    such as `unexpected keyword argument`. If a legacy skill has no schema, keep
+    the original inputs for backwards compatibility.
+    """
+    allowed = _skill_input_properties(skill)
+    if not allowed:
+        return dict(inputs)
+    return {key: value for key, value in inputs.items() if key in allowed}
+
+
 class CuratorAgentClient(ResilientAgentClient):
     """Client for Curator_Agent signal-only skill endpoints.
 
@@ -219,35 +244,31 @@ async def best_effort_curator_signal(
 
             strategy_bucket = _payload_value(analysis, "strategy_bucket")
             market_regime = _payload_value(analysis, "market_regime", "regime")
-            inputs = {
+            candidate_inputs = {
                 "symbol": symbol,
                 "analysis": analysis,
                 "ticker": symbol,
                 "strategy_bucket": strategy_bucket,
                 "market_regime": market_regime,
             }
-            try:
-                result = await client.execute_skill(
-                    skill_id,
-                    inputs=inputs,
-                    correlation_id=correlation_id,
-                    account_id=account_id,
-                    symbol=symbol,
-                    strategy_bucket=strategy_bucket,
-                    market_regime=market_regime,
-                    run_id=correlation_id,
-                    metadata={
-                        "source_flow": "discover_analyze_trade",
-                        "recommendation_state": recommendation.get("recommendation_state"),
-                        "recommended_skill_score": skill.get("score"),
-                    },
-                )
-            except TypeError:
-                result = await client.execute_skill(
-                    skill_id,
-                    inputs=inputs,
-                    correlation_id=correlation_id,
-                )
+            inputs = filter_skill_inputs_for_schema(skill, candidate_inputs)
+            result = await client.execute_skill(
+                skill_id,
+                inputs=inputs,
+                correlation_id=correlation_id,
+                account_id=account_id,
+                symbol=symbol,
+                strategy_bucket=strategy_bucket,
+                market_regime=market_regime,
+                run_id=correlation_id,
+                metadata={
+                    "source_flow": "discover_analyze_trade",
+                    "recommendation_state": recommendation.get("recommendation_state"),
+                    "recommended_skill_score": skill.get("score"),
+                    "filtered_input_keys": sorted(inputs.keys()),
+                    "dropped_input_keys": sorted(set(candidate_inputs) - set(inputs)),
+                },
+            )
             return {
                 "status": "success" if result.get("execution_status") == "success" else "failed",
                 "skill_id": skill_id,
