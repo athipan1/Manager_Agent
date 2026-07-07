@@ -38,6 +38,7 @@ CURATOR_AGENT_MAX_RETRIES = _env_int("CURATOR_AGENT_MAX_RETRIES", 1)
 CURATOR_AGENT_FAILURE_THRESHOLD = _env_int("CURATOR_AGENT_FAILURE_THRESHOLD", 2)
 CURATOR_AGENT_COOLDOWN_SECONDS = _env_int("CURATOR_AGENT_COOLDOWN_SECONDS", 30)
 CURATOR_SKILL_TIMEOUT_SECONDS = _env_float("CURATOR_SKILL_TIMEOUT_SECONDS", 1.0)
+_JSON_SCHEMA_NON_INPUT_KEYS = {"type", "properties", "required", "additionalProperties", "$schema", "title", "description"}
 
 
 def json_safe_value(value: Any) -> Any:
@@ -92,29 +93,54 @@ def _payload_value(payload: Dict[str, Any], *names: str) -> Optional[Any]:
     return None
 
 
+def _analysis_score(analysis: Dict[str, Any]) -> Optional[Any]:
+    score = _payload_value(analysis, "final_score", "final_opportunity_score", "candidate_score", "score")
+    if score is not None:
+        return score
+    score_breakdown = analysis.get("score_breakdown") if isinstance(analysis.get("score_breakdown"), dict) else {}
+    for name in ("final_opportunity_score", "final_score", "score"):
+        value = score_breakdown.get(name)
+        if value is not None:
+            return value
+    return None
+
+
 def _skill_input_properties(skill: Dict[str, Any]) -> set[str]:
     input_schema = skill.get("input_schema")
     if not isinstance(input_schema, dict):
         return set()
+
     properties = input_schema.get("properties")
-    if not isinstance(properties, dict):
-        return set()
-    return {str(name) for name in properties.keys()}
+    if isinstance(properties, dict):
+        return {str(name) for name in properties.keys()}
+
+    legacy_names = {str(name) for name in input_schema.keys() if str(name) not in _JSON_SCHEMA_NON_INPUT_KEYS}
+    return legacy_names
+
+
+def _fallback_skill_input_names(skill: Dict[str, Any]) -> set[str]:
+    name = str(skill.get("name") or "").lower()
+    tags = {str(tag).lower() for tag in (skill.get("tags") or []) if tag is not None}
+
+    if "manager advisory" in name:
+        return {"symbol", "analysis", "ticker"}
+    if "backtest" in name or "backtest" in tags or "score" in tags:
+        return {"final_score"}
+    return set()
 
 
 def filter_skill_inputs_for_schema(skill: Dict[str, Any], inputs: Dict[str, Any]) -> Dict[str, Any]:
-    """Send only fields accepted by a Curator skill input schema.
+    """Send only fields accepted by a Curator skill input contract.
 
-    Curator executes registered Python functions with `inputs` expanded as
-    keyword arguments. Passing Manager-only context like `strategy_bucket` to a
-    skill that only declares `symbol`, `ticker`, and `analysis` causes failures
-    such as `unexpected keyword argument`. If a legacy skill has no schema, keep
-    the original inputs for backwards compatibility.
+    Curator expands `inputs` as keyword arguments. Some skills expose proper
+    JSON Schema (`properties`) while older seeded skills expose a legacy mapping
+    such as `{"final_score": "float"}`. If no schema is present in search or
+    recommendation results, use conservative fallbacks by skill name/tags.
     """
-    allowed = _skill_input_properties(skill)
+    allowed = _skill_input_properties(skill) or _fallback_skill_input_names(skill)
     if not allowed:
         return dict(inputs)
-    return {key: value for key, value in inputs.items() if key in allowed}
+    return {key: value for key, value in inputs.items() if key in allowed and value is not None}
 
 
 class CuratorAgentClient(ResilientAgentClient):
@@ -250,6 +276,7 @@ async def best_effort_curator_signal(
                 "ticker": symbol,
                 "strategy_bucket": strategy_bucket,
                 "market_regime": market_regime,
+                "final_score": _analysis_score(analysis),
             }
             inputs = filter_skill_inputs_for_schema(skill, candidate_inputs)
             result = await client.execute_skill(
