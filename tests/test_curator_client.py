@@ -113,7 +113,7 @@ async def test_best_effort_curator_signal_filters_inputs_by_skill_schema(monkeyp
     assert captured["skill_id"] == "skill-analysis-only"
     assert captured["inputs"] == {"analysis": {"ticker": "CINF", "strategy_bucket": "value_rebound"}}
     assert captured["metadata"]["filtered_input_keys"] == ["analysis"]
-    assert captured["metadata"]["dropped_input_keys"] == ["market_regime", "strategy_bucket", "symbol", "ticker"]
+    assert captured["metadata"]["dropped_input_keys"] == ["final_score", "market_regime", "strategy_bucket", "symbol", "ticker"]
 
 
 @pytest.mark.asyncio
