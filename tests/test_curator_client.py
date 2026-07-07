@@ -48,7 +48,7 @@ async def test_best_effort_curator_signal_executes_first_approved_skill(monkeypa
         async def search_approved_skills(self, query, correlation_id):
             return [{"skill_id": "skill-1", "name": "RSI Signal"}]
 
-        async def execute_skill(self, skill_id, *, inputs, correlation_id):
+        async def execute_skill(self, skill_id, *, inputs, correlation_id, **kwargs):
             return {
                 "execution_status": "success",
                 "output": {"signal": "buy", "confidence": 0.7},
@@ -67,6 +67,53 @@ async def test_best_effort_curator_signal_executes_first_approved_skill(monkeypa
     assert result["skill_id"] == "skill-1"
     assert result["skill_name"] == "RSI Signal"
     assert result["execution"]["output"]["signal"] == "buy"
+
+
+@pytest.mark.asyncio
+async def test_best_effort_curator_signal_filters_inputs_by_skill_schema(monkeypatch):
+    monkeypatch.setattr(curator_client, "CURATOR_AGENT_ENABLED", True)
+    captured = {}
+
+    class FakeClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def search_approved_skills(self, query, correlation_id):
+            return [
+                {
+                    "skill_id": "skill-analysis-only",
+                    "name": "Analysis Only Skill",
+                    "input_schema": {
+                        "type": "object",
+                        "properties": {
+                            "analysis": {"type": "object"},
+                        },
+                    },
+                }
+            ]
+
+        async def execute_skill(self, skill_id, *, inputs, correlation_id, **kwargs):
+            captured["skill_id"] = skill_id
+            captured["inputs"] = inputs
+            captured["metadata"] = kwargs.get("metadata") or {}
+            return {"execution_status": "success", "output": {"signal": "hold"}}
+
+    monkeypatch.setattr(curator_client, "CuratorAgentClient", FakeClient)
+
+    result = await curator_client.best_effort_curator_signal(
+        symbol="CINF",
+        analysis={"ticker": "CINF", "strategy_bucket": "value_rebound"},
+        correlation_id="cid-cinf",
+    )
+
+    assert result["status"] == "success"
+    assert captured["skill_id"] == "skill-analysis-only"
+    assert captured["inputs"] == {"analysis": {"ticker": "CINF", "strategy_bucket": "value_rebound"}}
+    assert captured["metadata"]["filtered_input_keys"] == ["analysis"]
+    assert captured["metadata"]["dropped_input_keys"] == ["market_regime", "strategy_bucket", "symbol", "ticker"]
 
 
 @pytest.mark.asyncio
@@ -109,6 +156,36 @@ def test_json_safe_value_sanitizes_models_and_objects():
     assert safe["model"]["nested"]["score"] == 0.62
     assert safe["report_details"] == {"summary": "technical report", "score": 0.63}
     assert sorted(safe["items"], key=str) == [1.2, "x"]
+
+
+def test_filter_skill_inputs_for_schema_keeps_legacy_unspecified_schema():
+    inputs = {"symbol": "CINF", "analysis": {}, "strategy_bucket": "value_rebound"}
+
+    assert curator_client.filter_skill_inputs_for_schema({}, inputs) == inputs
+
+
+def test_filter_skill_inputs_for_schema_drops_undeclared_fields():
+    skill = {
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "symbol": {"type": "string"},
+                "analysis": {"type": "object"},
+            },
+        }
+    }
+    inputs = {
+        "symbol": "CINF",
+        "analysis": {},
+        "ticker": "CINF",
+        "strategy_bucket": "value_rebound",
+        "market_regime": None,
+    }
+
+    assert curator_client.filter_skill_inputs_for_schema(skill, inputs) == {
+        "symbol": "CINF",
+        "analysis": {},
+    }
 
 
 @pytest.mark.asyncio
