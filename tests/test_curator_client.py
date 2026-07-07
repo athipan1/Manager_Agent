@@ -188,6 +188,51 @@ def test_filter_skill_inputs_for_schema_drops_undeclared_fields():
     }
 
 
+def test_filter_skill_inputs_uses_manager_advisory_fallback_when_schema_missing():
+    skill = {"name": "Manager Advisory Score Signal"}
+    inputs = {
+        "symbol": "ADBE",
+        "analysis": {"ticker": "ADBE"},
+        "ticker": "ADBE",
+        "strategy_bucket": "value_rebound",
+        "market_regime": "risk_on",
+    }
+
+    assert curator_client.filter_skill_inputs_for_schema(skill, inputs) == {
+        "symbol": "ADBE",
+        "analysis": {"ticker": "ADBE"},
+        "ticker": "ADBE",
+    }
+
+
+def test_filter_skill_inputs_uses_backtest_fallback_when_schema_missing():
+    skill = {"name": "Hourly Backtest Reference Skill"}
+    inputs = {
+        "symbol": "ACGL",
+        "analysis": {"ticker": "ACGL"},
+        "ticker": "ACGL",
+        "strategy_bucket": "core_dividend",
+        "market_regime": "neutral",
+    }
+
+    assert curator_client.filter_skill_inputs_for_schema(skill, inputs) == {
+        "analysis": {"ticker": "ACGL"},
+    }
+
+
+def test_filter_skill_inputs_uses_backtest_tag_fallback_when_schema_missing():
+    skill = {"name": "Any Backtest Skill", "tags": ["hourly", "backtest"]}
+    inputs = {
+        "symbol": "BKNG",
+        "analysis": {"ticker": "BKNG"},
+        "ticker": "BKNG",
+    }
+
+    assert curator_client.filter_skill_inputs_for_schema(skill, inputs) == {
+        "analysis": {"ticker": "BKNG"},
+    }
+
+
 @pytest.mark.asyncio
 async def test_curator_execute_skill_sanitizes_inputs_before_post(monkeypatch):
     captured = {}
