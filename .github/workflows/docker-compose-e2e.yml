@@ -1,1113 +1,512 @@
 name: Agent Contract E2E
 
 on:
-
   workflow_dispatch:
-
   push:
-
     branches:
-
       - main
-
   pull_request:
-
     branches:
-
       - main
 
 jobs:
-
   agent-contract-e2e:
-
     runs-on: ubuntu-latest
-
     timeout-minutes: 45
-
     env:
-
       BACKTEST_AGENT_ENABLED: "true"
-
       ALPHA_AGENTS_ENABLED: "true"
-
       MARKET_REGIME_AGENT_ENABLED: "true"
-
       PERFORMANCE_AGENT_ENABLED: "true"
-
       PORTFOLIO_AGENT_ENABLED: "true"
-
       PROFIT_AGENT_ENABLED: "true"
-
       RUNTIME_SERVICES: database-agent technical-agent scanner-agent fundamental-agent risk-agent backtest-agent market-regime-agent performance-agent learning-agent execution-agent curator-agent portfolio-agent profit-agent manager-agent db
 
     steps:
-
       - name: Checkout Manager_Agent
-
         uses: actions/checkout@v4
-
         with:
-
           path: Manager_Agent
 
       - name: Checkout Scanner_Agent
-
         uses: actions/checkout@v4
-
         with:
-
           repository: athipan1/Scanner_Agent
-
           path: Scanner_Agent
 
       - name: Checkout Technical_Agent
-
         uses: actions/checkout@v4
-
         with:
-
           repository: athipan1/Technical_Agent
-
           path: Technical_Agent
 
       - name: Checkout Fundamental_Agent
-
         uses: actions/checkout@v4
-
         with:
-
           repository: athipan1/Fundamental_Agent
-
           path: Fundamental_Agent
 
       - name: Checkout Database_Agent
-
         uses: actions/checkout@v4
-
         with:
-
           repository: athipan1/Database_Agent
-
           path: Database_Agent
 
       - name: Checkout Risk_Agent
-
         uses: actions/checkout@v4
-
         with:
-
           repository: athipan1/Risk_Agent
-
           path: Risk_Agent
 
       - name: Checkout Execution_Agent
-
         uses: actions/checkout@v4
-
         with:
-
           repository: athipan1/Execution_Agent
-
           path: Execution_Agent
 
       - name: Checkout Learning_Agent
-
         uses: actions/checkout@v4
-
         with:
-
           repository: athipan1/Learning_Agent
-
           path: Learning_Agent
 
       - name: Checkout Backtest_Agent
-
         uses: actions/checkout@v4
-
         with:
-
           repository: athipan1/Backtest_Agent
-
           path: Backtest_Agent
 
       - name: Checkout Market_Regime_Agent
-
         uses: actions/checkout@v4
-
         with:
-
           repository: athipan1/Market_Regime_Agent
-
           path: Market_Regime_Agent
 
       - name: Checkout Performance_Agent
-
         uses: actions/checkout@v4
-
         with:
-
           repository: athipan1/Performance_Agent
-
           path: Performance_Agent
 
       - name: Checkout Curator_Agent
-
         uses: actions/checkout@v4
-
         with:
-
           repository: athipan1/Curator_Agent
-
           path: Curator_Agent
 
       - name: Checkout Portfolio_Agent
-
         uses: actions/checkout@v4
-
         with:
-
           repository: athipan1/Portfolio_Agent
-
           path: Portfolio_Agent
 
       - name: Checkout Profit_Agent
-
         uses: actions/checkout@v4
-
         with:
-
           repository: athipan1/Profit_Agent
-
           path: Profit_Agent
 
       - name: Show Docker versions
-
         run: |
-
           docker --version
-
           docker compose version
 
       - name: Create compose override for extended agents
-
         working-directory: Manager_Agent
-
         run: |
-
           cat > /tmp/agent-contract-compose.yml <<'YAML'
-
           services:
-
             manager-agent:
-
               environment:
-
                 PORTFOLIO_AGENT_URL: http://portfolio-agent:8012
-
                 PROFIT_AGENT_URL: http://profit-agent:8011
-
                 CURATOR_AGENT_URL: http://curator-agent:8010
-
               depends_on:
-
                 portfolio-agent:
-
                   condition: service_healthy
-
                 profit-agent:
-
                   condition: service_healthy
-
                 curator-agent:
-
                   condition: service_healthy
 
             curator-agent:
-
               build:
-
                 context: ../Curator_Agent
-
                 dockerfile: Dockerfile
-
               image: painaidee/curator-agent:contract-e2e
-
               restart: always
-
               ports:
-
                 - "8010:8010"
-
               healthcheck:
-
                 test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8010/health', timeout=3)\" || exit 1"]
-
                 interval: 10s
-
                 timeout: 5s
-
                 retries: 5
-
                 start_period: 30s
-
               environment:
-
                 PYTHONPATH: /app
-
                 CURATOR_DB_PATH: /data/curator_skills.sqlite3
-
                 CURATOR_REQUIRE_DATABASE_TELEMETRY: "false"
 
             profit-agent:
-
               build:
-
                 context: ../Profit_Agent
-
                 dockerfile: Dockerfile
-
               image: painaidee/profit-agent:contract-e2e
-
               restart: always
-
               ports:
-
                 - "8011:8011"
-
               healthcheck:
-
                 test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8011/health', timeout=3)\" || exit 1"]
-
                 interval: 10s
-
                 timeout: 5s
-
                 retries: 5
-
                 start_period: 30s
-
               environment:
-
                 PYTHONPATH: /app
 
             portfolio-agent:
-
               build:
-
                 context: ../Portfolio_Agent
-
                 dockerfile: Dockerfile
-
               image: painaidee/portfolio-agent:contract-e2e
-
               restart: always
-
               ports:
-
                 - "8012:8012"
-
               healthcheck:
-
                 test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8012/health', timeout=3)\" || exit 1"]
-
                 interval: 10s
-
                 timeout: 5s
-
                 retries: 5
-
                 start_period: 30s
-
               environment:
-
                 PYTHONPATH: /app
-
           YAML
-
           docker compose -f docker-compose.yml -f /tmp/agent-contract-compose.yml --profile backtest config
 
       - name: Build and start extended contract stack
-
         working-directory: Manager_Agent
-
         run: |
-
           set +e
-
           docker compose -f docker-compose.yml -f /tmp/agent-contract-compose.yml --profile backtest up --build -d 2>&1 | tee agent-contract-compose-up.log
-
           status=${PIPESTATUS[0]}
-
           if [ "$status" != "0" ]; then
-
             echo "docker compose up failed with status $status"
-
             docker compose -f docker-compose.yml -f /tmp/agent-contract-compose.yml --profile backtest ps || true
-
             for service in $RUNTIME_SERVICES; do
-
               echo "---- ${service} logs tail ----"
-
               docker compose -f docker-compose.yml -f /tmp/agent-contract-compose.yml --profile backtest logs --tail=160 "$service" || true
-
             done
-
             exit "$status"
-
           fi
 
       - name: Wait for extended stack health
-
         working-directory: Manager_Agent
-
         run: |
-
           for i in {1..72}; do
-
             docker compose -f docker-compose.yml -f /tmp/agent-contract-compose.yml --profile backtest ps
-
             exited=$(docker compose -f docker-compose.yml -f /tmp/agent-contract-compose.yml --profile backtest ps --status exited -q $RUNTIME_SERVICES | wc -l | tr -d ' ')
-
             if [ "$exited" != "0" ]; then
-
               echo "One or more runtime containers exited."
-
               for service in $RUNTIME_SERVICES; do
-
                 echo "---- ${service} logs tail ----"
-
                 docker compose -f docker-compose.yml -f /tmp/agent-contract-compose.yml --profile backtest logs --tail=160 "$service" || true
-
               done
-
               exit 1
-
             fi
 
             manager=$(docker compose -f docker-compose.yml -f /tmp/agent-contract-compose.yml --profile backtest exec -T manager-agent python /app/healthcheck.py >/dev/null && echo ok || echo wait)
-
             fundamental=$(curl -fsS http://localhost:8001/health >/dev/null && echo ok || echo wait)
-
             technical=$(curl -fsS http://localhost:8002/health >/dev/null && echo ok || echo wait)
-
             scanner=$(curl -fsS http://localhost:8003/health >/dev/null && echo ok || echo wait)
-
             database=$(curl -fsS http://localhost:8004/health >/dev/null && echo ok || echo wait)
-
             learning=$(curl -fsS http://localhost:8005/health >/dev/null && echo ok || echo wait)
-
             execution=$(curl -fsS http://localhost:8006/health >/dev/null && echo ok || echo wait)
-
             risk=$(curl -fsS http://localhost:8007/health >/dev/null && echo ok || echo wait)
-
             curator=$(curl -fsS http://localhost:8010/health >/dev/null && echo ok || echo wait)
-
             profit=$(curl -fsS http://localhost:8011/health >/dev/null && echo ok || echo wait)
-
             portfolio=$(curl -fsS http://localhost:8012/health >/dev/null && echo ok || echo wait)
-
             performance=$(curl -fsS http://localhost:8013/health >/dev/null && echo ok || echo wait)
-
             market_regime=$(curl -fsS http://localhost:8014/health >/dev/null && echo ok || echo wait)
-
             backtest=$(curl -fsS http://localhost:8016/health >/dev/null && echo ok || echo wait)
 
             echo "health: manager=$manager fundamental=$fundamental technical=$technical scanner=$scanner database=$database learning=$learning execution=$execution risk=$risk curator=$curator profit=$profit portfolio=$portfolio performance=$performance market_regime=$market_regime backtest=$backtest"
-
             if [ "$manager$fundamental$technical$scanner$database$learning$execution$risk$curator$profit$portfolio$performance$market_regime$backtest" = "okokokokokokokokokokokokokok" ]; then
-
               echo "All extended services are reachable."
-
               exit 0
-
             fi
-
             sleep 5
-
           done
 
           echo "Extended services did not become reachable in time."
-
           docker compose -f docker-compose.yml -f /tmp/agent-contract-compose.yml --profile backtest ps
-
           for service in $RUNTIME_SERVICES; do
-
             echo "---- ${service} logs tail ----"
-
             docker compose -f docker-compose.yml -f /tmp/agent-contract-compose.yml --profile backtest logs --tail=160 "$service" || true
-
           done
-
           exit 1
 
       - name: Run direct API contract checks
-
         run: |
-
           python - <<'PY'
-
           import json
-
           import urllib.error
-
           import urllib.request
-
           from datetime import datetime, timedelta, timezone
 
           def request_json(method, url, payload=None, headers=None, expected_status=None, allowed_statuses=None):
-
               headers = dict(headers or {})
-
               data = None
-
               if payload is not None:
-
                   data = json.dumps(payload).encode("utf-8")
-
                   headers.setdefault("Content-Type", "application/json")
-
               req = urllib.request.Request(url, data=data, headers=headers, method=method)
-
               try:
-
                   with urllib.request.urlopen(req, timeout=30) as response:
-
                       status_code = response.status
-
                       body = response.read().decode("utf-8")
-
               except urllib.error.HTTPError as exc:
-
                   body = exc.read().decode("utf-8")
-
                   raise AssertionError(f"{method} {url} failed with {exc.code}: {body}") from exc
-
               parsed = json.loads(body) if body else {}
-
               if expected_status is not None:
-
                   assert status_code == expected_status, (method, url, status_code, parsed)
-
               allowed = set(allowed_statuses or {"success"})
-
-              assert parsed.get("status") in allowed, (method, url, status_code, parsed)
-
+              if parsed.get("status") not in allowed:
+                  raise AssertionError(json.dumps({"method": method, "url": url, "status_code": status_code, "response": parsed}, indent=2))
               return parsed
 
-          # ------------------------------------------------------------------
-
-          # Risk_Agent direct contract: /risk/check
-
-          # Risk may return status=approved/rejected instead of success.
-
-          # ------------------------------------------------------------------
-
           risk_payload = {
-
               "account_id": 1,
-
               "symbol": "AAPL",
-
               "side": "buy",
-
               "entry_price": 100,
-
               "protection_price": 90,
-
               "requested_quantity": 1,
-
               "equity": 100000,
-
               "current_symbol_exposure": 0,
-
               "current_total_exposure": 0,
-
               "open_orders_exposure": 0,
-
               "margin_multiplier": 1,
-
               "trading_mode": "PAPER",
-
               "asset_class": "stock",
-
               "strategy_bucket": "unassigned",
-
               "daily_realized_pnl": 0,
-
               "weekly_realized_pnl": 0,
-
               "consecutive_losses": 0,
-
               "trades_today": 0,
-
               "symbol_trades_today": 0,
-
               "emergency_halt": False,
-
           }
-
-          risk = request_json(
-
-              "POST",
-
-              "http://localhost:8007/risk/check",
-
-              risk_payload,
-
-              allowed_statuses={"success", "approved", "rejected"},
-
-          )
-
+          risk = request_json("POST", "http://localhost:8007/risk/check", risk_payload, allowed_statuses={"success", "approved", "rejected"})
           risk_data = risk.get("data") or {}
-
           assert isinstance(risk_data.get("approved"), bool), risk
-
           assert "final_quantity" in risk_data, risk
 
-          # ------------------------------------------------------------------
-
-          # Database_Agent direct contract:
-
-          # create risk approval + create order.
-
-          # ------------------------------------------------------------------
-
           expires_at = (datetime.now(timezone.utc) + timedelta(minutes=30)).isoformat()
-
           approval_payload = {
-
               "approval_id": "contract-risk-db-order",
-
               "account_id": 1,
-
               "symbol": "AAPL",
-
               "side": "buy",
-
               "approved_quantity": 1,
-
               "expires_at": expires_at,
-
-              "metadata": {
-
-                  "source": "agent-contract-e2e"
-
-              },
-
+              "metadata": {"source": "agent-contract-e2e"},
           }
-
-          request_json(
-
-              "POST",
-
-              "http://localhost:8004/risk-approvals",
-
-              approval_payload,
-
-              {
-
-                  "X-API-KEY": "dev_database_key"
-
-              },
-
-          )
+          request_json("POST", "http://localhost:8004/risk-approvals", approval_payload, {"X-API-KEY": "dev_database_key"})
 
           db_order_payload = {
-
               "trade_id": "contract-db-order-001",
-
               "client_order_id": "contract-db-order-001",
-
               "account_id": 1,
-
               "symbol": "AAPL",
-
               "side": "buy",
-
               "order_type": "market",
-
               "quantity": 1,
-
               "time_in_force": "GTC",
-
               "strategy_bucket": "unassigned",
-
               "risk_approval_id": "contract-risk-db-order",
-
               "final_quantity": 1,
-
-              "guard_plan": {
-
-                  "trigger_price": 90,
-
-                  "take_profit_price": 120,
-
-              },
-
+              "guard_plan": {"trigger_price": 90, "take_profit_price": 120},
           }
-
-          db_order = request_json(
-
-              "POST",
-
-              "http://localhost:8004/accounts/1/orders",
-
-              db_order_payload,
-
-              {
-
-                  "X-API-KEY": "dev_database_key"
-
-              },
-
-          )
-
+          db_order = request_json("POST", "http://localhost:8004/accounts/1/orders", db_order_payload, {"X-API-KEY": "dev_database_key"})
           db_order_data = db_order.get("data") or {}
-
           assert db_order_data.get("trade_id") == "contract-db-order-001", db_order
-
           assert db_order_data.get("order_id") is not None, db_order
-
           assert db_order_data.get("status") in {"pending", "placed", "executed", "failed", "cancelled", "partially_filled"}, db_order
 
-          # ------------------------------------------------------------------
-
-          # Execution_Agent direct contract:
-
-          # /execute should return nested data.order + data.execution_job.
-
-          # ------------------------------------------------------------------
-
           approval_payload["approval_id"] = "contract-risk-exec-order"
-
-          request_json(
-
-              "POST",
-
-              "http://localhost:8004/risk-approvals",
-
-              approval_payload,
-
-              {
-
-                  "X-API-KEY": "dev_database_key"
-
-              },
-
-          )
-
+          request_json("POST", "http://localhost:8004/risk-approvals", approval_payload, {"X-API-KEY": "dev_database_key"})
           exec_order_payload = dict(db_order_payload)
-
           exec_order_payload["trade_id"] = "contract-exec-order-001"
-
           exec_order_payload["client_order_id"] = "contract-exec-order-001"
-
           exec_order_payload["risk_approval_id"] = "contract-risk-exec-order"
-
-          execution = request_json(
-
-              "POST",
-
-              "http://localhost:8006/execute",
-
-              exec_order_payload,
-
-              {
-
-                  "X-API-KEY": "dev_execution_key",
-
-                  "Idempotency-Key": "contract-exec-order-001",
-
-              },
-
-              expected_status=202,
-
-          )
-
+          execution = request_json("POST", "http://localhost:8006/execute", exec_order_payload, {"X-API-KEY": "dev_execution_key", "Idempotency-Key": "contract-exec-order-001"}, expected_status=202)
           exec_data = execution.get("data") or {}
-
           assert isinstance(exec_data.get("order"), dict), execution
-
           assert isinstance(exec_data.get("execution_job"), dict), execution
-
           exec_order = exec_data.get("order") or {}
-
           exec_job = exec_data.get("execution_job") or {}
-
           assert exec_order.get("trade_id") == "contract-exec-order-001", execution
-
           assert exec_order.get("order_id") is not None, execution
-
           assert exec_job.get("job_id") is not None, execution
 
-          # ------------------------------------------------------------------
-
-          # Technical_Agent direct contract: /analyze
-
-          # ------------------------------------------------------------------
-
-          technical = request_json(
-
-              "POST",
-
-              "http://localhost:8002/analyze",
-
-              {
-
-                  "ticker": "AAPL",
-
-                  "timeframe": "1d",
-
-              },
-
-          )
-
+          technical = request_json("POST", "http://localhost:8002/analyze", {"ticker": "AAPL", "timeframe": "1d"})
           tech_data = technical.get("data") or {}
-
           assert tech_data.get("action") in {"buy", "sell", "hold"}, technical
-
           assert "confidence_score" in tech_data, technical
 
-          # ------------------------------------------------------------------
-
-          # Fundamental_Agent direct contract: /analyze
-
-          # ------------------------------------------------------------------
-
-          fundamental = request_json(
-
-              "POST",
-
-              "http://localhost:8001/analyze",
-
-              {
-
+          fundamental_payload = {
+              "ticker": "AAPL",
+              "style": "growth",
+              "prefetched_data": {
                   "ticker": "AAPL",
-
-                  "style": "growth",
-
+                  "symbol": "AAPL",
+                  "exchange": "NASDAQ",
+                  "sector": "Technology",
+                  "metadata": {
+                      "sector": "Technology",
+                      "exchange": "NASDAQ",
+                      "raw_scores": {
+                          "revenue_3y_cagr": 0.12,
+                          "revenue_cagr": 0.12,
+                          "eps_growth": 0.10,
+                          "fcf_3y_cagr": 0.09,
+                          "free_cash_flow": 90000000000,
+                          "operating_cash_flow": 110000000000,
+                          "roe": 0.35,
+                          "roa": 0.18,
+                          "debt_to_equity": 1.2,
+                          "profit_margins": 0.25,
+                          "pe_ratio": 28,
+                          "peg_ratio": 1.8,
+                          "pb_ratio": 9,
+                          "market_cap": 3000000000000,
+                      },
+                      "growth_metrics": {"revenue_3y_cagr": 0.12, "eps_growth": 0.10, "fcf_3y_cagr": 0.09},
+                  },
+                  "raw_scores": {
+                      "revenue_3y_cagr": 0.12,
+                      "revenue_cagr": 0.12,
+                      "eps_growth": 0.10,
+                      "fcf_3y_cagr": 0.09,
+                      "free_cash_flow": 90000000000,
+                      "operating_cash_flow": 110000000000,
+                      "roe": 0.35,
+                      "roa": 0.18,
+                      "debt_to_equity": 1.2,
+                      "profit_margins": 0.25,
+                      "pe_ratio": 28,
+                      "peg_ratio": 1.8,
+                      "pb_ratio": 9,
+                      "market_cap": 3000000000000,
+                  },
               },
-
-          )
-
+          }
+          fundamental = request_json("POST", "http://localhost:8001/analyze", fundamental_payload)
           fund_data = fundamental.get("data") or {}
-
           assert fund_data.get("action") in {"buy", "sell", "hold"}, fundamental
-
           assert "confidence_score" in fund_data, fundamental
 
-          # ------------------------------------------------------------------
-
-          # Learning_Agent direct contract: /learn
-
-          # ------------------------------------------------------------------
-
           learning_payload = {
-
               "account_id": 1,
-
               "learning_mode": "conservative",
-
               "window_size": 10,
-
               "trade_history": [],
-
               "price_history": {},
-
               "current_policy": {
-
-                  "agent_weights": {
-
-                      "technical": 0.5,
-
-                      "fundamental": 0.5,
-
-                  },
-
-                  "risk": {
-
-                      "risk_per_trade": 0.01,
-
-                      "max_position_pct": 0.2,
-
-                      "stop_loss_pct": 0.03,
-
-                  },
-
-                  "strategy_bias": {
-
-                      "preferred_regime": "neutral",
-
-                  },
-
+                  "agent_weights": {"technical": 0.5, "fundamental": 0.5},
+                  "risk": {"risk_per_trade": 0.01, "max_position_pct": 0.2, "stop_loss_pct": 0.03},
+                  "strategy_bias": {"preferred_regime": "neutral"},
               },
-
-              "execution_result": {
-
-                  "status": "dry_run",
-
-              },
-
+              "execution_result": {"status": "dry_run"},
           }
-
-          learning = request_json(
-
-              "POST",
-
-              "http://localhost:8005/learn",
-
-              learning_payload,
-
-          )
-
+          learning = request_json("POST", "http://localhost:8005/learn", learning_payload)
           learning_data = learning.get("data") or {}
-
           assert learning_data.get("learning_state") is not None, learning
-
           assert "policy_deltas" in learning_data, learning
 
-          # ------------------------------------------------------------------
-
-          # Curator_Agent direct contract: /health + /ready
-
-          # ------------------------------------------------------------------
-
-          curator = request_json(
-
-              "GET",
-
-              "http://localhost:8010/health",
-
-          )
-
+          curator = request_json("GET", "http://localhost:8010/health")
           curator_data = curator.get("data") or {}
-
           assert curator_data.get("status") == "healthy", curator
-
-          curator_ready = request_json(
-
-              "GET",
-
-              "http://localhost:8010/ready",
-
-          )
-
+          curator_ready = request_json("GET", "http://localhost:8010/ready")
           curator_ready_data = curator_ready.get("data") or {}
-
           assert curator_ready_data.get("ready") is True, curator_ready
 
-          # ------------------------------------------------------------------
-
-          # Portfolio_Agent direct contract: /portfolio/exposure
-
-          # ------------------------------------------------------------------
-
           portfolio_payload = {
-
               "equity": 100000,
-
               "cash": 60000,
-
               "positions": [
-
-                  {
-
-                      "symbol": "AAPL",
-
-                      "market_value": 25000,
-
-                      "quantity": 100,
-
-                      "strategy_bucket": "core_dividend",
-
-                      "sector": "Technology",
-
-                  },
-
-                  {
-
-                      "symbol": "MSFT",
-
-                      "market_value": 15000,
-
-                      "quantity": 50,
-
-                      "strategy_bucket": "value_rebound",
-
-                      "sector": "Technology",
-
-                  },
-
+                  {"symbol": "AAPL", "market_value": 25000, "quantity": 100, "strategy_bucket": "core_dividend", "sector": "Technology"},
+                  {"symbol": "MSFT", "market_value": 15000, "quantity": 50, "strategy_bucket": "value_rebound", "sector": "Technology"},
               ],
-
               "mode": "normal",
-
           }
-
-          portfolio = request_json(
-
-              "POST",
-
-              "http://localhost:8012/portfolio/exposure",
-
-              portfolio_payload,
-
-          )
-
+          portfolio = request_json("POST", "http://localhost:8012/portfolio/exposure", portfolio_payload)
           portfolio_data = portfolio.get("data") or {}
-
           assert "bucket_exposure" in portfolio_data, portfolio
-
           assert "position_exposure" in portfolio_data, portfolio
-
           assert "rebalance_required" in portfolio_data, portfolio
 
-          # ------------------------------------------------------------------
-
-          # Profit_Agent direct contract: /profit/plan
-
-          # ------------------------------------------------------------------
-
           profit_payload = {
-
               "position": {
-
                   "symbol": "AAPL",
-
                   "side": "long",
-
                   "quantity": 100,
-
                   "entry_price": 100,
-
                   "current_price": 125,
-
                   "stop_loss": 90,
-
                   "highest_price_since_entry": 130,
-
                   "strategy_bucket": "core_dividend",
-
               }
-
           }
-
-          profit = request_json(
-
-              "POST",
-
-              "http://localhost:8011/profit/plan",
-
-              profit_payload,
-
-          )
-
+          profit = request_json("POST", "http://localhost:8011/profit/plan", profit_payload)
           profit_data = profit.get("data") or {}
-
           assert profit_data.get("symbol") == "AAPL", profit
-
-          assert profit_data.get("primary_action") in {
-
-              "hold",
-
-              "move_stop",
-
-              "partial_exit",
-
-              "exit_all",
-
-              "review",
-
-          }, profit
-
+          assert profit_data.get("primary_action") in {"hold", "move_stop", "partial_exit", "exit_all", "review"}, profit
           assert isinstance(profit_data.get("actions"), list), profit
 
           print("Direct API contract checks passed.")
-
           PY
 
       - name: Run Manager dry-run full flow
-
         working-directory: Manager_Agent
-
         run: |
-
           docker compose -f docker-compose.yml -f /tmp/agent-contract-compose.yml --profile backtest exec -T manager-agent python - <<'PY'
-
           import json
-
           import urllib.request
 
-          payload = {
-
-              "ticker": "AAPL",
-
-              "account_id": 1,
-
-          }
-
+          payload = {"ticker": "AAPL", "account_id": 1}
           request = urllib.request.Request(
-
               "http://localhost:80/dry-run/analyze",
-
               data=json.dumps(payload).encode("utf-8"),
-
-              headers={
-
-                  "Content-Type": "application/json"
-
-              },
-
+              headers={"Content-Type": "application/json"},
               method="POST",
-
           )
-
           with urllib.request.urlopen(request, timeout=40) as response:
-
               body = json.loads(response.read().decode("utf-8"))
-
           assert body.get("status") == "success", body
-
           metadata = body.get("metadata") or {}
-
           assert metadata.get("dry_run") is True, metadata
-
           assert metadata.get("trading_mode") == "PAPER", metadata
-
           print("Manager dry-run full flow passed.")
-
           PY
 
       - name: Show logs on failure
-
         if: failure()
-
         working-directory: Manager_Agent
-
         run: |
-
           docker compose -f docker-compose.yml -f /tmp/agent-contract-compose.yml --profile backtest ps || true
-
           for service in $RUNTIME_SERVICES; do
-
             echo "---- ${service} logs tail ----"
-
             docker compose -f docker-compose.yml -f /tmp/agent-contract-compose.yml --profile backtest logs --tail=180 "$service" || true
-
           done
-
           if [ -f agent-contract-compose-up.log ]; then
-
             tail -220 agent-contract-compose-up.log
-
           fi
 
       - name: Stop extended stack
-
         if: always()
-
         working-directory: Manager_Agent
-
         run: |
-
           docker compose -f docker-compose.yml -f /tmp/agent-contract-compose.yml --profile backtest down -v || true
