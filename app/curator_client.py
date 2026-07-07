@@ -102,16 +102,48 @@ def _skill_input_properties(skill: Dict[str, Any]) -> set[str]:
     return {str(name) for name in properties.keys()}
 
 
+def _skill_name(skill: Dict[str, Any]) -> str:
+    return str(skill.get("name") or skill.get("skill_name") or "").strip().lower()
+
+
+def _skill_tags(skill: Dict[str, Any]) -> set[str]:
+    tags = skill.get("tags") or []
+    if not isinstance(tags, list):
+        return set()
+    return {str(tag).strip().lower() for tag in tags if tag is not None}
+
+
+def _fallback_skill_input_keys(skill: Dict[str, Any]) -> set[str]:
+    """Infer safe Curator input keys when recommendation payload lacks schema.
+
+    Some Curator recommendation/search responses omit `input_schema`, while the
+    runtime still executes registered functions with strict keyword arguments.
+    This fallback covers known production advisory skills from the hourly report
+    without changing legacy behavior for unknown skills.
+    """
+    name = _skill_name(skill)
+    tags = _skill_tags(skill)
+    if name == "manager advisory score signal":
+        return {"symbol", "analysis", "ticker"}
+    if name == "hourly backtest reference skill":
+        return {"analysis"}
+    if "manager" in tags and "advisory" in tags:
+        return {"symbol", "analysis", "ticker"}
+    if "backtest" in tags:
+        return {"analysis"}
+    return set()
+
+
 def filter_skill_inputs_for_schema(skill: Dict[str, Any], inputs: Dict[str, Any]) -> Dict[str, Any]:
     """Send only fields accepted by a Curator skill input schema.
 
     Curator executes registered Python functions with `inputs` expanded as
     keyword arguments. Passing Manager-only context like `strategy_bucket` to a
     skill that only declares `symbol`, `ticker`, and `analysis` causes failures
-    such as `unexpected keyword argument`. If a legacy skill has no schema, keep
-    the original inputs for backwards compatibility.
+    such as `unexpected keyword argument`. If schema is missing, use known-safe
+    fallbacks for approved production skills; otherwise keep legacy behavior.
     """
-    allowed = _skill_input_properties(skill)
+    allowed = _skill_input_properties(skill) or _fallback_skill_input_keys(skill)
     if not allowed:
         return dict(inputs)
     return {key: value for key, value in inputs.items() if key in allowed}
