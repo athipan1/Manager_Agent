@@ -51,10 +51,11 @@ def strategy_bucket_from_decision(decision: Dict[str, Any]) -> str:
     return bucket
 
 
-def validate_strategy_bucket_for_side(bucket: str, side: str) -> str:
+def validate_strategy_bucket_for_side(bucket: str, side: Any) -> str:
     """Block unresolved new exposure while keeping risk-reducing exits possible."""
     normalized_bucket = str(bucket or UNASSIGNED).strip().lower() or UNASSIGNED
-    normalized_side = str(side or "").strip().lower()
+    side_value = getattr(side, "value", side)
+    normalized_side = str(side_value or "").strip().lower()
     if normalized_bucket not in KNOWN_BUCKETS and normalized_bucket != UNASSIGNED:
         raise OrderBuildError(f"unsupported strategy_bucket: {bucket!r}")
     if normalized_side == "buy" and normalized_bucket == UNASSIGNED:
@@ -147,7 +148,7 @@ def order_request_from_trade_plan_decision(
 
     order.strategy_bucket = validate_strategy_bucket_for_side(
         getattr(order, "strategy_bucket", UNASSIGNED),
-        str(getattr(order, "side", "")),
+        getattr(order, "side", ""),
     )
     decision["order_source"] = "trade_plan"
     return order
