@@ -12,6 +12,7 @@ from typing import Any, Callable, Dict, Optional, Union
 from pydantic import ValidationError
 
 from ..contracts import CreateOrderRequest, TradePlan
+from ..strategy_bucket_classifier import KNOWN_BUCKETS, UNASSIGNED
 
 ClientOrderIdFactory = Callable[[], str]
 
@@ -31,26 +32,37 @@ def side_from_action(action: str) -> str:
 
 
 def strategy_bucket_from_decision(decision: Dict[str, Any]) -> str:
-    """Return the best available strategy bucket from a risk decision.
-
-    Older Manager paths placed the bucket under `stock_risk_context`; newer
-    portfolio-first paths can also carry it at the decision root or inside
-    portfolio metadata. Keep all fallbacks so the bucket does not regress to
-    `unassigned` before it reaches Database/Execution.
-    """
+    """Return a normalized controlled bucket from a risk decision."""
     stock_context = decision.get("stock_risk_context") or {}
     portfolio_context = decision.get("portfolio_context") or {}
     metadata = decision.get("metadata") or {}
-    bucket = (
+    raw_bucket = (
         stock_context.get("strategy_bucket")
         or decision.get("strategy_bucket")
         or portfolio_context.get("strategy_bucket")
         or portfolio_context.get("bucket")
         or metadata.get("strategy_bucket")
         or metadata.get("bucket")
-        or "unassigned"
+        or UNASSIGNED
     )
-    return str(bucket or "unassigned")
+    bucket = str(raw_bucket or UNASSIGNED).strip().lower() or UNASSIGNED
+    if bucket not in KNOWN_BUCKETS and bucket != UNASSIGNED:
+        raise OrderBuildError(f"unsupported strategy_bucket: {raw_bucket!r}")
+    return bucket
+
+
+def validate_strategy_bucket_for_side(bucket: str, side: Any) -> str:
+    """Block unresolved new exposure while keeping risk-reducing exits possible."""
+    normalized_bucket = str(bucket or UNASSIGNED).strip().lower() or UNASSIGNED
+    side_value = getattr(side, "value", side)
+    normalized_side = str(side_value or "").strip().lower()
+    if normalized_bucket not in KNOWN_BUCKETS and normalized_bucket != UNASSIGNED:
+        raise OrderBuildError(f"unsupported strategy_bucket: {bucket!r}")
+    if normalized_side == "buy" and normalized_bucket == UNASSIGNED:
+        raise OrderBuildError(
+            "strategy_bucket must be classified before creating a BUY order"
+        )
+    return normalized_bucket
 
 
 def _positive_float(value: Any, field_name: str) -> float:
@@ -71,14 +83,25 @@ def guard_plan_for_execution(decision: Dict[str, Any]) -> Dict[str, Any]:
         guard_plan = {
             "source": "manager_portfolio_default_guard",
             "trigger_price": decision.get("trigger_price") or decision.get("stop_loss"),
-            "take_profit_price": decision.get("take_profit_price") or decision.get("take_profit"),
+            "take_profit_price": decision.get("take_profit_price")
+            or decision.get("take_profit"),
             "risk_amount": float(decision.get("risk_amount") or 0),
         }
 
-    trigger_price = guard_plan.get("trigger_price") or guard_plan.get("stop_price") or guard_plan.get("stop_loss")
-    take_profit_price = guard_plan.get("take_profit_price") or guard_plan.get("take_profit")
-    guard_plan["trigger_price"] = _positive_float(trigger_price, "guard_plan.trigger_price")
-    guard_plan["take_profit_price"] = _positive_float(take_profit_price, "guard_plan.take_profit_price")
+    trigger_price = (
+        guard_plan.get("trigger_price")
+        or guard_plan.get("stop_price")
+        or guard_plan.get("stop_loss")
+    )
+    take_profit_price = guard_plan.get("take_profit_price") or guard_plan.get(
+        "take_profit"
+    )
+    guard_plan["trigger_price"] = _positive_float(
+        trigger_price, "guard_plan.trigger_price"
+    )
+    guard_plan["take_profit_price"] = _positive_float(
+        take_profit_price, "guard_plan.take_profit_price"
+    )
     return guard_plan
 
 
@@ -101,25 +124,32 @@ def _trade_plan_from_decision(decision: Dict[str, Any]) -> Optional[TradePlan]:
     return plan
 
 
-def order_request_from_trade_plan_decision(decision: Dict[str, Any]) -> Optional[CreateOrderRequest]:
-    """Build an execution order from TradePlan when the decision has one.
-
-    Returns None when no TradePlan snapshot is present. If a TradePlan exists but
-    is incomplete or not execution-ready, fail closed and surface the reason.
-    """
+def order_request_from_trade_plan_decision(
+    decision: Dict[str, Any],
+) -> Optional[CreateOrderRequest]:
+    """Build and validate an execution order from a TradePlan snapshot."""
     if not isinstance(decision.get("trade_plan"), dict):
         return None
     plan = _trade_plan_from_decision(decision)
     if plan is None:
-        raise OrderBuildError(decision.get("trade_plan_order_error") or "invalid trade_plan snapshot")
+        raise OrderBuildError(
+            decision.get("trade_plan_order_error") or "invalid trade_plan snapshot"
+        )
     if not plan.risk_approval_id:
-        decision["trade_plan_order_error"] = "risk_approval_id is required before creating an execution order"
+        decision["trade_plan_order_error"] = (
+            "risk_approval_id is required before creating an execution order"
+        )
         raise OrderBuildError(decision["trade_plan_order_error"])
     try:
         order = plan.to_execution_order()
     except Exception as exc:
         decision["trade_plan_order_error"] = str(exc)
         raise OrderBuildError(str(exc)) from exc
+
+    order.strategy_bucket = validate_strategy_bucket_for_side(
+        getattr(order, "strategy_bucket", UNASSIGNED),
+        getattr(order, "side", ""),
+    )
     decision["order_source"] = "trade_plan"
     return order
 
@@ -130,21 +160,23 @@ def order_request_from_decision(
     *,
     client_order_id_factory: ClientOrderIdFactory | None = None,
 ) -> CreateOrderRequest:
-    """Build a `CreateOrderRequest` from an approved risk decision.
-
-    `client_order_id_factory` is injectable to make tests deterministic. In
-    production it defaults to `uuid.uuid4()`.
-    """
+    """Build a fail-closed `CreateOrderRequest` from an approved risk decision."""
     trade_plan_order = order_request_from_trade_plan_decision(decision)
     if trade_plan_order is not None:
         return trade_plan_order
 
-    quantity = int(decision.get("position_size") or decision.get("final_quantity") or 0)
+    quantity = int(
+        decision.get("position_size") or decision.get("final_quantity") or 0
+    )
     if quantity <= 0:
-        raise OrderBuildError("final_quantity or position_size must be greater than zero")
+        raise OrderBuildError(
+            "final_quantity or position_size must be greater than zero"
+        )
     risk_approval_id = decision.get("risk_approval_id")
     if not risk_approval_id:
-        raise OrderBuildError("risk_approval_id is required before creating an execution order")
+        raise OrderBuildError(
+            "risk_approval_id is required before creating an execution order"
+        )
 
     entry_price = _positive_float(decision.get("entry_price"), "entry_price")
     client_order_id = (
@@ -152,16 +184,21 @@ def order_request_from_decision(
         if client_order_id_factory is not None
         else str(uuid.uuid4())
     )
+    side = side_from_action(decision.get("action"))
+    strategy_bucket = validate_strategy_bucket_for_side(
+        strategy_bucket_from_decision(decision),
+        side,
+    )
 
     return CreateOrderRequest(
         symbol=str(decision["symbol"]).upper(),
-        side=side_from_action(decision.get("action")),
+        side=side,
         order_type="market",
         quantity=quantity,
         price=entry_price,
         client_order_id=client_order_id,
         account_id=account_id,
-        strategy_bucket=strategy_bucket_from_decision(decision),
+        strategy_bucket=strategy_bucket,
         risk_approval_id=str(risk_approval_id),
         final_quantity=quantity,
         guard_plan=guard_plan_for_execution(decision),

@@ -6,7 +6,16 @@ from app.workflows.guarded_discovery_workflow import (
 )
 
 
-def test_bucket_backfill_keeps_held_positions_from_becoming_unassigned():
+def test_bucket_backfill_uses_current_selection_and_database_history(monkeypatch):
+    monkeypatch.delenv("MANAGER_POSITION_BUCKET_OVERRIDES_JSON", raising=False)
+    database_sync = {
+        "latest_snapshot": {
+            "positions": [
+                {"symbol": "BKNG", "strategy_bucket": "value_rebound"},
+                {"symbol": "CINF", "strategy_bucket": "core_dividend"},
+            ]
+        }
+    }
     hints = _bucket_by_symbol_from_response(
         {
             "selected_positions": [
@@ -15,13 +24,16 @@ def test_bucket_backfill_keeps_held_positions_from_becoming_unassigned():
             ],
             "risk_approvals": [],
             "execution_candidates": [],
-        }
+        },
+        database_sync,
     )
 
-    assert hints["ADBE"] == "core_dividend"
-    assert hints["ACGL"] == "value_rebound"
-    assert hints["BKNG"] == "value_rebound"
-    assert hints["CINF"] == "core_dividend"
+    assert hints == {
+        "ADBE": "core_dividend",
+        "ACGL": "value_rebound",
+        "BKNG": "value_rebound",
+        "CINF": "core_dividend",
+    }
 
     enriched = _enrich_broker_state_with_buckets(
         {
@@ -48,22 +60,31 @@ def test_bucket_backfill_keeps_held_positions_from_becoming_unassigned():
     assert enriched["open_orders"][2]["strategy_bucket"] == "value_rebound"
     assert enriched["summary"]["bucket_position_matches"] == 4
     assert enriched["summary"]["bucket_order_matches"] == 4
-    assert enriched["bucket_backfill"]["source"] == "selected_positions_database_snapshot_and_held_position_overrides"
+    assert enriched["bucket_backfill"]["source"] == "selected_positions_and_database_snapshot"
 
 
-def test_selected_bucket_stays_authoritative_over_default_override():
+def test_selected_bucket_stays_authoritative_over_database_history(monkeypatch):
+    monkeypatch.delenv("MANAGER_POSITION_BUCKET_OVERRIDES_JSON", raising=False)
     hints = _bucket_by_symbol_from_response(
         {
             "selected_positions": [
                 {"symbol": "CINF", "strategy_bucket": "value_rebound"},
             ]
-        }
+        },
+        {
+            "latest_snapshot": {
+                "positions": [
+                    {"symbol": "CINF", "strategy_bucket": "core_dividend"},
+                ]
+            }
+        },
     )
 
     assert hints["CINF"] == "value_rebound"
 
 
-def test_database_snapshot_bucket_is_preserved_when_symbol_is_not_selected():
+def test_database_snapshot_bucket_is_preserved_when_symbol_is_not_selected(monkeypatch):
+    monkeypatch.delenv("MANAGER_POSITION_BUCKET_OVERRIDES_JSON", raising=False)
     database_sync = {
         "latest_snapshot": {
             "positions": [
@@ -93,7 +114,8 @@ def test_database_snapshot_bucket_is_preserved_when_symbol_is_not_selected():
     assert hints["CINF"] == "core_dividend"
 
 
-def test_current_selection_overrides_previous_database_bucket():
+def test_current_selection_overrides_previous_database_bucket(monkeypatch):
+    monkeypatch.delenv("MANAGER_POSITION_BUCKET_OVERRIDES_JSON", raising=False)
     database_sync = {
         "latest_snapshot": {
             "positions": [
@@ -131,7 +153,8 @@ def test_database_sync_extracts_buckets_from_database_fallback_shape():
     assert hints == {"ADBE": "core_dividend", "ACGL": "value_rebound"}
 
 
-def test_preflight_bucket_hints_use_defaults_when_database_has_no_valid_bucket():
+def test_preflight_does_not_invent_buckets_when_database_has_no_valid_bucket(monkeypatch):
+    monkeypatch.delenv("MANAGER_POSITION_BUCKET_OVERRIDES_JSON", raising=False)
     hints = _preflight_bucket_by_symbol_from_database_sync(
         {
             "latest_snapshot": {
@@ -146,15 +169,14 @@ def test_preflight_bucket_hints_use_defaults_when_database_has_no_valid_bucket()
         }
     )
 
-    assert hints == {
-        "ACGL": "value_rebound",
-        "ADBE": "core_dividend",
-        "BKNG": "value_rebound",
-        "CINF": "core_dividend",
-    }
+    assert hints == {}
 
 
-def test_preflight_database_bucket_wins_over_default_bucket():
+def test_preflight_database_bucket_wins_over_operator_migration_seed(monkeypatch):
+    monkeypatch.setenv(
+        "MANAGER_POSITION_BUCKET_OVERRIDES_JSON",
+        '{"BKNG":"value_rebound","LEGACY":"core_dividend"}',
+    )
     hints = _preflight_bucket_by_symbol_from_database_sync(
         {
             "latest_snapshot": {
@@ -166,3 +188,4 @@ def test_preflight_database_bucket_wins_over_default_bucket():
     )
 
     assert hints["BKNG"] == "core_dividend"
+    assert hints["LEGACY"] == "core_dividend"

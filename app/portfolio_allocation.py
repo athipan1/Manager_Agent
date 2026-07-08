@@ -2,14 +2,19 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from decimal import Decimal, ROUND_DOWN
-from typing import Any, Dict, Iterable, List, Mapping, Optional
+from typing import Any, Dict, List, Mapping, Optional
 
-
-CORE_DIVIDEND = "core_dividend"
-VALUE_REBOUND = "value_rebound"
-NEWS_MOMENTUM = "news_momentum"
-UNASSIGNED = "unassigned"
-KNOWN_BUCKETS = {CORE_DIVIDEND, VALUE_REBOUND, NEWS_MOMENTUM}
+from .strategy_bucket_classifier import (
+    AUTO_CLASSIFY_THRESHOLD,
+    CLASSIFIER_VERSION,
+    CORE_DIVIDEND,
+    KNOWN_BUCKETS,
+    NEWS_MOMENTUM,
+    StrategyBucketClassification,
+    UNASSIGNED,
+    VALUE_REBOUND,
+    classify_candidate_strategy_bucket,
+)
 
 
 @dataclass(frozen=True)
@@ -59,125 +64,26 @@ def _decimal(value: Any, default: Decimal = Decimal("0")) -> Decimal:
         return default
 
 
-def _nested_get(mapping: Mapping[str, Any], path: Iterable[str], default: Any = None) -> Any:
-    current: Any = mapping
-    for key in path:
-        if not isinstance(current, Mapping):
-            return default
-        current = current.get(key)
-    return default if current is None else current
+def classify_strategy_bucket_decision(item: Mapping[str, Any]) -> StrategyBucketClassification:
+    """Return Manager's governed strategy-bucket classification decision.
 
-
-def _analysis_details(analysis: Mapping[str, Any]) -> Mapping[str, Any]:
-    details = analysis.get("details") or {}
-    return details if isinstance(details, Mapping) else {}
-
-
-def _fundamental_scores(analysis: Mapping[str, Any]) -> Mapping[str, Any]:
-    details = _analysis_details(analysis)
-    fundamental = details.get("fundamental_analysis") or details.get("fundamental") or {}
-    if hasattr(fundamental, "model_dump"):
-        fundamental = fundamental.model_dump(mode="json")
-    if not isinstance(fundamental, Mapping):
-        return {}
-    return fundamental
-
-
-def _scanner_metadata(item: Mapping[str, Any]) -> Mapping[str, Any]:
-    scanner = item.get("scanner_candidate") or {}
-    if hasattr(scanner, "model_dump"):
-        scanner = scanner.model_dump(mode="json")
-    if isinstance(scanner, Mapping):
-        metadata = scanner.get("metadata") or {}
-        return metadata if isinstance(metadata, Mapping) else {}
-    return {}
-
-
-def _raw_scores(item: Mapping[str, Any]) -> Mapping[str, Any]:
-    scanner = item.get("scanner_candidate") or {}
-    if hasattr(scanner, "model_dump"):
-        scanner = scanner.model_dump(mode="json")
-    if isinstance(scanner, Mapping):
-        raw_scores = scanner.get("raw_scores") or {}
-        return raw_scores if isinstance(raw_scores, Mapping) else {}
-    return {}
-
-
-def _scanner_primary_bucket_hint(item: Mapping[str, Any]) -> Optional[str]:
-    metadata = _scanner_metadata(item)
-    hint = str(metadata.get("primary_strategy_bucket_hint") or "").strip().lower()
-    if hint in KNOWN_BUCKETS:
-        return hint
-
-    hints = metadata.get("strategy_bucket_hints") or []
-    if isinstance(hints, list):
-        for value in hints:
-            candidate = str(value or "").strip().lower()
-            if candidate in KNOWN_BUCKETS:
-                return candidate
-    return None
+    The classifier is intentionally fail-closed. Missing, invalid, low-confidence,
+    or conflicting evidence returns ``unassigned`` and therefore cannot enter a
+    new-buy allocation path.
+    """
+    return classify_candidate_strategy_bucket(item)
 
 
 def classify_strategy_bucket(item: Mapping[str, Any]) -> str:
-    """
-    Classify a ranked candidate into one of the user's 3 allocation buckets.
+    """Backward-compatible bucket-only view of the governed classifier."""
+    return classify_strategy_bucket_decision(item).bucket
 
-    Scanner can now provide non-binding strategy bucket hints. Manager trusts a
-    valid explicit Scanner hint first, then falls back to deterministic local
-    heuristics for backward compatibility with older Scanner payloads.
-    """
-    explicit_hint = _scanner_primary_bucket_hint(item)
-    if explicit_hint:
-        return explicit_hint
 
-    analysis = item.get("analysis") or {}
-    if hasattr(analysis, "model_dump"):
-        analysis = analysis.model_dump(mode="json")
-    analysis = analysis if isinstance(analysis, Mapping) else {}
-
-    score_breakdown = item.get("score_breakdown") or {}
-    score = _decimal(score_breakdown.get("final_opportunity_score"))
-    metadata = _scanner_metadata(item)
-    raw_scores = _raw_scores(item)
-    fundamental = _fundamental_scores(analysis)
-
-    tags = item.get("tags") or metadata.get("tags") or []
-    tag_text = " ".join(str(tag).lower() for tag in tags) if isinstance(tags, list) else str(tags).lower()
-    sector = str(metadata.get("sector") or fundamental.get("sector") or "").lower()
-
-    dividend_yield = _decimal(
-        raw_scores.get("dividend_yield")
-        or fundamental.get("dividend_yield")
-        or _nested_get(fundamental, ["metrics", "dividend_yield"])
-    )
-    quality_score = _decimal(raw_scores.get("quality_score") or fundamental.get("quality_score"))
-    pe_ratio = _decimal(raw_scores.get("pe_ratio") or fundamental.get("pe_ratio"), Decimal("999"))
-    pb_ratio = _decimal(raw_scores.get("pb_ratio") or fundamental.get("pb_ratio"), Decimal("999"))
-    growth_score = _decimal(raw_scores.get("growth_score") or fundamental.get("growth_score"))
-
-    news_hints = ("news", "catalyst", "momentum", "volume", "breakout", "trend")
-    value_hints = ("value", "cheap", "undervalued", "rebound", "discount", "valuation")
-    core_hints = ("dividend", "quality", "defensive", "blue-chip", "stable", "cash-flow")
-
-    if any(hint in tag_text for hint in news_hints):
-        return NEWS_MOMENTUM
-    if any(hint in tag_text for hint in value_hints):
-        return VALUE_REBOUND
-    if any(hint in tag_text for hint in core_hints):
-        return CORE_DIVIDEND
-
-    if dividend_yield > Decimal("0") or sector in {"utilities", "consumer defensive", "healthcare", "financial services"}:
-        return CORE_DIVIDEND
-    if quality_score >= Decimal("70") and score >= Decimal("0.55"):
-        return CORE_DIVIDEND
-    if pe_ratio > Decimal("0") and pe_ratio <= Decimal("15"):
-        return VALUE_REBOUND
-    if pb_ratio > Decimal("0") and pb_ratio <= Decimal("1.5"):
-        return VALUE_REBOUND
-    if growth_score >= Decimal("70") and score >= Decimal("0.62"):
-        return NEWS_MOMENTUM
-
-    return VALUE_REBOUND
+def _classification_payload(item: Mapping[str, Any]) -> Dict[str, Any]:
+    existing = item.get("strategy_bucket_classification")
+    if isinstance(existing, Mapping):
+        return dict(existing)
+    return classify_strategy_bucket_decision(item).as_dict()
 
 
 def build_strategy_allocation_plan(
@@ -202,10 +108,34 @@ def build_strategy_allocation_plan(
             "candidates": [],
         }
 
+    quarantine: List[Dict[str, Any]] = []
+
     for item in ranked_candidates:
-        bucket_name = classify_strategy_bucket(item)
-        if bucket_name not in buckets:
-            bucket_name = VALUE_REBOUND
+        classification = _classification_payload(item)
+        bucket_name = str(classification.get("bucket") or UNASSIGNED)
+        confidence = float(classification.get("confidence") or 0.0)
+        status = str(classification.get("status") or "unassigned")
+
+        if (
+            bucket_name not in buckets
+            or bucket_name not in KNOWN_BUCKETS
+            or status != "classified"
+            or confidence < AUTO_CLASSIFY_THRESHOLD
+        ):
+            quarantine.append(
+                {
+                    "symbol": item.get("symbol"),
+                    "strategy_bucket": UNASSIGNED,
+                    "proposed_bucket": classification.get("proposed_bucket"),
+                    "bucket_confidence": confidence,
+                    "classification_status": status,
+                    "classification_reasons": list(classification.get("reasons") or []),
+                    "classifier_version": classification.get("classifier_version") or CLASSIFIER_VERSION,
+                    "blocked_reason": "strategy_bucket_not_auto_approved",
+                }
+            )
+            continue
+
         policy = policies[bucket_name]
         score = _decimal((item.get("score_breakdown") or {}).get("final_opportunity_score"))
         if score < policy.min_final_score:
@@ -217,6 +147,11 @@ def build_strategy_allocation_plan(
             {
                 "symbol": item.get("symbol"),
                 "bucket": bucket_name,
+                "strategy_bucket": bucket_name,
+                "bucket_confidence": confidence,
+                "classification_status": status,
+                "classification_reasons": list(classification.get("reasons") or []),
+                "classifier_version": classification.get("classifier_version") or CLASSIFIER_VERSION,
                 "final_opportunity_score": float(score),
                 "suggested_max_value": buckets[bucket_name]["max_symbol_value"],
                 "suggested_equal_weight_value": float(
@@ -231,5 +166,9 @@ def build_strategy_allocation_plan(
         "portfolio_value": float(portfolio_value),
         "total_target_weight": float(total_target_weight),
         "is_weight_balanced": total_target_weight == Decimal("1.00"),
+        "classifier_version": CLASSIFIER_VERSION,
+        "auto_classify_threshold": AUTO_CLASSIFY_THRESHOLD,
         "buckets": buckets,
+        "quarantine": quarantine,
+        "quarantine_count": len(quarantine),
     }

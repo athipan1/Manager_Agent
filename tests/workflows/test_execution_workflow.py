@@ -20,11 +20,20 @@ class FakeCreateOrderResponse:
 
 
 class FakeExecutionClient:
-    def __init__(self, *, create_status="PENDING", validation_approved=True, batch_created=None, validation_sequence=None):
+    def __init__(
+        self,
+        *,
+        create_status="PENDING",
+        validation_approved=True,
+        batch_created=None,
+        validation_sequence=None,
+    ):
         self.create_status = create_status
         self.validation_approved = validation_approved
         self.validation_sequence = list(validation_sequence or [])
-        self.batch_created = batch_created if batch_created is not None else [{"order_id": "order-1"}]
+        self.batch_created = (
+            batch_created if batch_created is not None else [{"order_id": "order-1"}]
+        )
         self.created_orders = []
         self.validated_batches = []
         self.executed_batches = []
@@ -47,7 +56,10 @@ class FakeExecutionClient:
 
     async def execute_order_batch(self, order_requests, correlation_id):
         self.executed_batches.append((order_requests, correlation_id))
-        return {"status": "success", "data": {"created": self.batch_created, "failed": []}}
+        return {
+            "status": "success",
+            "data": {"created": self.batch_created, "failed": []},
+        }
 
 
 class FakeDbClient:
@@ -67,16 +79,20 @@ def execution_ready_decision(
     position_size=2,
     entry_price=100,
     risk_approval_id=None,
+    strategy_bucket="core_dividend",
     **overrides,
 ):
     exit_side = "sell" if action in {"buy", "strong_buy"} else "buy"
     stop_price = entry_price * 0.95 if exit_side == "sell" else entry_price * 1.05
-    take_profit_price = entry_price * 1.10 if exit_side == "sell" else entry_price * 0.90
+    take_profit_price = (
+        entry_price * 1.10 if exit_side == "sell" else entry_price * 0.90
+    )
     decision = {
         "symbol": symbol,
         "action": action,
         "position_size": position_size,
         "entry_price": entry_price,
+        "strategy_bucket": strategy_bucket,
         "guard_plan": {
             "source": "risk",
             "symbol": symbol,
@@ -93,7 +109,10 @@ def execution_ready_decision(
 
 
 def test_ensure_risk_approval_id_prefers_risk_agent_response():
-    decision = {"symbol": "AAPL", "risk_agent_response": {"data": {"approval_id": "risk-api-1"}}}
+    decision = {
+        "symbol": "AAPL",
+        "risk_agent_response": {"data": {"approval_id": "risk-api-1"}},
+    }
 
     assert ensure_risk_approval_id(decision, "cid") == "risk-api-1"
     assert decision["risk_approval_id"] == "risk-api-1"
@@ -111,7 +130,9 @@ async def test_execute_trade_submits_order_in_paper_without_db_client():
     exec_client = FakeExecutionClient(create_status="PENDING")
     decision = execution_ready_decision()
 
-    result = await execute_trade(exec_client, decision, account_id=1, correlation_id="cid")
+    result = await execute_trade(
+        exec_client, decision, account_id=1, correlation_id="cid"
+    )
 
     assert result["status"] == "submitted"
     assert result["risk_approval_id"] == "risk-cid-AAPL"
@@ -119,6 +140,7 @@ async def test_execute_trade_submits_order_in_paper_without_db_client():
     order_request, correlation_id = exec_client.created_orders[0]
     assert order_request.symbol == "AAPL"
     assert order_request.quantity == 2
+    assert order_request.strategy_bucket == "core_dividend"
     assert order_request.guard_plan["trigger_price"] == 95.0
     assert order_request.guard_plan["take_profit_price"] == 110.00000000000001
     assert correlation_id == "cid"
@@ -130,7 +152,9 @@ async def test_execute_trade_fails_closed_in_live_without_db_client(monkeypatch)
     exec_client = FakeExecutionClient(create_status="PENDING")
     decision = execution_ready_decision()
 
-    result = await execute_trade(exec_client, decision, account_id=1, correlation_id="cid")
+    result = await execute_trade(
+        exec_client, decision, account_id=1, correlation_id="cid"
+    )
 
     assert result["status"] == "failed"
     assert "Database client is required" in result["reason"]
@@ -142,7 +166,9 @@ async def test_execute_trade_rejects_non_pending_execution_status():
     exec_client = FakeExecutionClient(create_status="FAILED")
     decision = execution_ready_decision()
 
-    result = await execute_trade(exec_client, decision, account_id=1, correlation_id="cid")
+    result = await execute_trade(
+        exec_client, decision, account_id=1, correlation_id="cid"
+    )
 
     assert result["status"] == "rejected"
     assert result["reason"] == "Execution Agent returned status: FAILED"
@@ -150,7 +176,10 @@ async def test_execute_trade_rejects_non_pending_execution_status():
 
 @pytest.mark.asyncio
 async def test_execute_portfolio_batch_validates_and_executes_orders(monkeypatch):
-    exec_client = FakeExecutionClient(validation_approved=True, batch_created=[{"order_id": "order-1"}])
+    exec_client = FakeExecutionClient(
+        validation_approved=True,
+        batch_created=[{"order_id": "order-1"}],
+    )
 
     async def fake_persist_risk_approval(**kwargs):
         return f"risk-{kwargs['trade_decision']['symbol']}"
@@ -161,8 +190,20 @@ async def test_execute_portfolio_batch_validates_and_executes_orders(monkeypatch
     )
 
     decisions = [
-        execution_ready_decision(symbol="AAPL", action="buy", position_size=1, entry_price=100),
-        execution_ready_decision(symbol="MSFT", action="sell", position_size=2, entry_price=200),
+        execution_ready_decision(
+            symbol="AAPL",
+            action="buy",
+            position_size=1,
+            entry_price=100,
+            strategy_bucket="core_dividend",
+        ),
+        execution_ready_decision(
+            symbol="MSFT",
+            action="sell",
+            position_size=2,
+            entry_price=200,
+            strategy_bucket="unassigned",
+        ),
     ]
 
     result = await execute_portfolio_batch(
@@ -209,8 +250,24 @@ async def test_execute_portfolio_batch_retries_after_open_order_conflict(monkeyp
     )
 
     decisions = [
-        execution_ready_decision(symbol="ADBE", action="buy", position_size=5, entry_price=196, quantity=5, final_quantity=5),
-        execution_ready_decision(symbol="ACGL", action="buy", position_size=10, entry_price=90, quantity=10, final_quantity=10),
+        execution_ready_decision(
+            symbol="ADBE",
+            action="buy",
+            position_size=5,
+            entry_price=196,
+            quantity=5,
+            final_quantity=5,
+            strategy_bucket="core_dividend",
+        ),
+        execution_ready_decision(
+            symbol="ACGL",
+            action="buy",
+            position_size=10,
+            entry_price=90,
+            quantity=10,
+            final_quantity=10,
+            strategy_bucket="value_rebound",
+        ),
     ]
 
     result = await execute_portfolio_batch(
@@ -223,9 +280,16 @@ async def test_execute_portfolio_batch_retries_after_open_order_conflict(monkeyp
 
     assert result["status"] == "submitted"
     assert len(exec_client.validated_batches) == 2
-    assert [order.symbol for order in exec_client.validated_batches[0][0]] == ["ADBE", "ACGL"]
-    assert [order.symbol for order in exec_client.validated_batches[1][0]] == ["ACGL"]
-    assert [order.symbol for order in exec_client.executed_batches[0][0]] == ["ACGL"]
+    assert [order.symbol for order in exec_client.validated_batches[0][0]] == [
+        "ADBE",
+        "ACGL",
+    ]
+    assert [order.symbol for order in exec_client.validated_batches[1][0]] == [
+        "ACGL"
+    ]
+    assert [order.symbol for order in exec_client.executed_batches[0][0]] == [
+        "ACGL"
+    ]
     assert result["skipped_open_order_conflicts"] == [
         {
             "symbol": "ADBE",
@@ -235,7 +299,10 @@ async def test_execute_portfolio_batch_retries_after_open_order_conflict(monkeyp
             "final_quantity": 5,
         }
     ]
-    assert result["validation"]["initial_validation"]["errors"][0]["code"] == "SYMBOL_ALREADY_HAS_OPEN_ORDER"
+    assert (
+        result["validation"]["initial_validation"]["errors"][0]["code"]
+        == "SYMBOL_ALREADY_HAS_OPEN_ORDER"
+    )
 
 
 @pytest.mark.asyncio
@@ -252,7 +319,14 @@ async def test_execute_portfolio_batch_rejects_when_validation_rejects(monkeypat
 
     result = await execute_portfolio_batch(
         exec_client=exec_client,
-        decisions=[execution_ready_decision(symbol="AAPL", action="buy", position_size=1, entry_price=100)],
+        decisions=[
+            execution_ready_decision(
+                symbol="AAPL",
+                action="buy",
+                position_size=1,
+                entry_price=100,
+            )
+        ],
         account_id=1,
         correlation_id="cid",
         db_client=FakeDbClient(),
@@ -277,7 +351,14 @@ async def test_execute_portfolio_batch_skips_zero_position_size(monkeypatch):
 
     result = await execute_portfolio_batch(
         exec_client=exec_client,
-        decisions=[execution_ready_decision(symbol="AAPL", action="buy", position_size=0, entry_price=100)],
+        decisions=[
+            execution_ready_decision(
+                symbol="AAPL",
+                action="buy",
+                position_size=0,
+                entry_price=100,
+            )
+        ],
         account_id=1,
         correlation_id="cid",
         db_client=FakeDbClient(),
