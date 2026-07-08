@@ -10,6 +10,7 @@ from .discover_allocation import (
     ranked_response_rows,
     select_candidates_by_bucket,
 )
+from .portfolio_allocation import UNASSIGNED
 
 
 def _selected_symbols(bucket_selection: Dict[str, Any]) -> List[str]:
@@ -38,12 +39,7 @@ def build_selected_positions(
     allocation_plan: Dict[str, Any],
     bucket_selection: Dict[str, Any],
 ) -> List[Dict[str, Any]]:
-    """Build the portfolio-first selected_positions contract for Manager.
-
-    This is the new source of truth for discover-analyze-trade. It converts the
-    bucket selection output into position-level metadata that downstream agents
-    can consume for portfolio allocation mode.
-    """
+    """Build selected positions from candidates that passed classification gate."""
     ranked_by_symbol = {str(item.get("symbol") or "").upper(): item for item in ranked}
     selected_positions: List[Dict[str, Any]] = []
 
@@ -52,6 +48,8 @@ def build_selected_positions(
         if not item:
             continue
         bucket = item.get("strategy_bucket") or (item.get("score_breakdown") or {}).get("strategy_bucket")
+        if not bucket or bucket == UNASSIGNED:
+            continue
         bucket_plan = ((allocation_plan.get("buckets") or {}).get(bucket) or {})
         candidate_meta = _bucket_candidate(allocation_plan, symbol, bucket)
         target_weight = bucket_plan.get("target_weight") or 0
@@ -60,6 +58,11 @@ def build_selected_positions(
                 "symbol": symbol,
                 "bucket": bucket,
                 "strategy_bucket": bucket,
+                "bucket_confidence": item.get("bucket_confidence"),
+                "bucket_classification_status": item.get("bucket_classification_status"),
+                "bucket_classification_reasons": item.get("bucket_classification_reasons") or [],
+                "bucket_classifier_version": item.get("bucket_classifier_version"),
+                "strategy_bucket_classification": item.get("strategy_bucket_classification") or {},
                 "target_weight": target_weight,
                 "allocation_pct": float(target_weight) * 100,
                 "target_value": bucket_plan.get("target_value"),
@@ -79,11 +82,7 @@ def build_position_analysis_payloads(
     ranked: List[Dict[str, Any]],
     selected_positions: List[Dict[str, Any]],
 ) -> List[Dict[str, Any]]:
-    """Attach portfolio allocation metadata to each selected analysis result.
-
-    Manager should pass these payloads into portfolio validation instead of
-    handing downstream agents a single winner symbol.
-    """
+    """Attach allocation and classifier evidence to downstream Risk payloads."""
     ranked_by_symbol = {str(item.get("symbol") or "").upper(): item for item in ranked}
     payloads: List[Dict[str, Any]] = []
 
@@ -96,9 +95,18 @@ def build_position_analysis_payloads(
         analysis["scanner_candidate"] = item.get("scanner_candidate")
         analysis["score_breakdown"] = item.get("score_breakdown")
         analysis["strategy_bucket"] = position.get("strategy_bucket") or position.get("bucket")
+        analysis["strategy_bucket_classification"] = position.get("strategy_bucket_classification") or {}
+        analysis["bucket_confidence"] = position.get("bucket_confidence")
+        analysis["bucket_classification_status"] = position.get("bucket_classification_status")
+        analysis["bucket_classification_reasons"] = position.get("bucket_classification_reasons") or []
+        analysis["bucket_classifier_version"] = position.get("bucket_classifier_version")
         analysis["portfolio_context"] = {
             "bucket": position.get("bucket"),
             "strategy_bucket": position.get("strategy_bucket"),
+            "bucket_confidence": position.get("bucket_confidence"),
+            "bucket_classification_status": position.get("bucket_classification_status"),
+            "bucket_classification_reasons": position.get("bucket_classification_reasons") or [],
+            "bucket_classifier_version": position.get("bucket_classifier_version"),
             "target_weight": position.get("target_weight"),
             "allocation_pct": position.get("allocation_pct"),
             "target_value": position.get("target_value"),
@@ -115,18 +123,7 @@ def build_discover_allocation_report(
     portfolio_value: Any,
     min_final_score: float,
 ) -> Dict[str, Any]:
-    """Build the allocation view for /discover-analyze-trade.
-
-    Portfolio-first fields:
-    - allocation_plan: 50/30/20 policy by bucket
-    - bucket_selection: eligible selected rows per bucket
-    - selected_positions: multi-position portfolio contract
-    - position_analysis_payloads: selected analysis rows with allocation metadata
-    - ranked_candidates: full explainability rows
-
-    winner remains only as a backward-compatible legacy field while Manager's
-    primary response migrates to selected_positions/allocation_plan.
-    """
+    """Build allocation, classification gate, and legacy winner views."""
     enriched_ranked = enrich_ranked_candidates_with_buckets(ranked)
     allocation_plan = build_discover_allocation_plan(enriched_ranked, Decimal(str(portfolio_value or 0)))
     bucket_selection = select_candidates_by_bucket(enriched_ranked, min_final_score=min_final_score)
@@ -135,9 +132,20 @@ def build_discover_allocation_report(
         allocation_plan=allocation_plan,
         bucket_selection=bucket_selection,
     )
+    quarantined_candidates = [
+        row
+        for row in ranked_response_rows(enriched_ranked)
+        if row.get("strategy_bucket") == UNASSIGNED
+    ]
     return {
         "allocation_plan": allocation_plan,
         "bucket_selection": bucket_selection,
+        "classification_gate": {
+            "approved_count": len(selected_positions),
+            "quarantine_count": len(quarantined_candidates),
+            "quarantined_symbols": [row.get("symbol") for row in quarantined_candidates],
+            "quarantined_candidates": quarantined_candidates,
+        },
         "selected_positions": selected_positions,
         "position_analysis_payloads": build_position_analysis_payloads(
             ranked=enriched_ranked,
