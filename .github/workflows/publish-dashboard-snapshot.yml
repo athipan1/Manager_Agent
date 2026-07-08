@@ -1,0 +1,76 @@
+name: Publish Dashboard Snapshot
+
+on:
+  workflow_run:
+    workflows: ["Hourly Auto Trading"]
+    types: [completed]
+  workflow_dispatch:
+
+permissions:
+  actions: read
+  contents: write
+
+concurrency:
+  group: publish-dashboard-snapshot
+  cancel-in-progress: true
+
+jobs:
+  publish-dashboard-snapshot:
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Manager_Agent
+        uses: actions/checkout@v4
+
+      - name: Download latest hourly trading artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p reports
+          if [ "${{ github.event_name }}" = "workflow_run" ]; then
+            gh run download "${{ github.event.workflow_run.id }}" \
+              --name hourly-auto-trading-report \
+              --dir reports
+          else
+            latest_run_id=$(gh run list \
+              --workflow "Hourly Auto Trading" \
+              --branch main \
+              --status success \
+              --limit 1 \
+              --json databaseId \
+              --jq '.[0].databaseId')
+            if [ -z "$latest_run_id" ] || [ "$latest_run_id" = "null" ]; then
+              echo "No successful Hourly Auto Trading run found."
+              exit 1
+            fi
+            gh run download "$latest_run_id" \
+              --name hourly-auto-trading-report \
+              --dir reports
+          fi
+
+      - name: Export frontend-safe snapshot JSON
+        run: |
+          mkdir -p docs/dashboard
+          python scripts/export_dashboard_snapshot.py \
+            --input reports/hourly-auto-trading-report.json \
+            --output docs/dashboard/latest-dashboard-snapshot.json
+          cp docs/dashboard/latest-dashboard-snapshot.json reports/latest-dashboard-snapshot.json
+
+      - name: Commit public dashboard snapshot
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add docs/dashboard/latest-dashboard-snapshot.json
+          if git diff --cached --quiet; then
+            echo "No dashboard snapshot changes to publish."
+            exit 0
+          fi
+          git commit -m "chore: publish latest dashboard snapshot [skip ci]"
+          git push
+
+      - name: Upload dashboard snapshot artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: latest-dashboard-snapshot
+          path: reports/latest-dashboard-snapshot.json
+          if-no-files-found: error
