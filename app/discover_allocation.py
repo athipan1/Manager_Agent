@@ -1,15 +1,17 @@
 from __future__ import annotations
 
 from decimal import Decimal
-from typing import Any, Dict, Iterable, List, Mapping, Optional
+from typing import Any, Dict, List, Mapping, Optional
 
 from .portfolio_allocation import (
     CORE_DIVIDEND,
     NEWS_MOMENTUM,
+    UNASSIGNED,
     VALUE_REBOUND,
     build_strategy_allocation_plan,
-    classify_strategy_bucket,
+    classify_strategy_bucket_decision,
 )
+from .strategy_bucket_classifier import AUTO_CLASSIFY_THRESHOLD, CLASSIFIER_VERSION
 
 
 BUCKET_PRIORITY = (CORE_DIVIDEND, VALUE_REBOUND, NEWS_MOMENTUM)
@@ -36,11 +38,25 @@ def _verdict(item: Mapping[str, Any]) -> str:
     return "hold"
 
 
+def _classification(item: Mapping[str, Any]) -> Dict[str, Any]:
+    existing = item.get("strategy_bucket_classification")
+    if isinstance(existing, Mapping):
+        return dict(existing)
+    return classify_strategy_bucket_decision(item).as_dict()
+
+
 def _candidate_row(item: Mapping[str, Any]) -> Dict[str, Any]:
     analysis = item.get("analysis") or {}
+    classification = _classification(item)
     return {
         "symbol": item.get("symbol"),
-        "strategy_bucket": item.get("strategy_bucket") or (item.get("score_breakdown") or {}).get("strategy_bucket"),
+        "strategy_bucket": item.get("strategy_bucket") or UNASSIGNED,
+        "bucket_confidence": float(classification.get("confidence") or 0.0),
+        "bucket_classification_status": classification.get("status") or "unassigned",
+        "bucket_classification_reasons": list(classification.get("reasons") or []),
+        "bucket_classifier_version": classification.get("classifier_version") or CLASSIFIER_VERSION,
+        "proposed_strategy_bucket": classification.get("proposed_bucket"),
+        "allows_new_entry": bool(classification.get("allows_new_entry")),
         "final_verdict": analysis.get("final_verdict") if isinstance(analysis, Mapping) else None,
         "analysis_status": analysis.get("status") if isinstance(analysis, Mapping) else None,
         "score_breakdown": item.get("score_breakdown"),
@@ -50,11 +66,22 @@ def _candidate_row(item: Mapping[str, Any]) -> Dict[str, Any]:
 def enrich_ranked_candidates_with_buckets(ranked: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     enriched: List[Dict[str, Any]] = []
     for item in ranked:
-        bucket = classify_strategy_bucket(item)
+        classification = _classification(item)
+        bucket = str(classification.get("bucket") or UNASSIGNED)
         next_item = dict(item)
         next_item["strategy_bucket"] = bucket
+        next_item["bucket_confidence"] = float(classification.get("confidence") or 0.0)
+        next_item["bucket_classification_status"] = classification.get("status") or "unassigned"
+        next_item["bucket_classification_reasons"] = list(classification.get("reasons") or [])
+        next_item["bucket_classifier_version"] = classification.get("classifier_version") or CLASSIFIER_VERSION
+        next_item["proposed_strategy_bucket"] = classification.get("proposed_bucket")
+        next_item["strategy_bucket_classification"] = classification
+
         score_breakdown = dict(next_item.get("score_breakdown") or {})
         score_breakdown["strategy_bucket"] = bucket
+        score_breakdown["bucket_confidence"] = next_item["bucket_confidence"]
+        score_breakdown["bucket_classification_status"] = next_item["bucket_classification_status"]
+        score_breakdown["bucket_classifier_version"] = next_item["bucket_classifier_version"]
         next_item["score_breakdown"] = score_breakdown
         enriched.append(next_item)
     return enriched
@@ -65,16 +92,26 @@ def build_discover_allocation_plan(ranked: List[Dict[str, Any]], portfolio_value
     return build_strategy_allocation_plan(enriched, portfolio_value)
 
 
+def _eligible_for_new_entry(item: Mapping[str, Any], threshold: Decimal) -> bool:
+    return (
+        item.get("strategy_bucket") in BUCKET_PRIORITY
+        and str(item.get("bucket_classification_status") or "") == "classified"
+        and float(item.get("bucket_confidence") or 0.0) >= AUTO_CLASSIFY_THRESHOLD
+        and _score(item) >= threshold
+        and _verdict(item) in {"buy", "strong_buy"}
+    )
+
+
 def select_candidates_by_bucket(
     ranked: List[Dict[str, Any]],
     *,
     min_final_score: float = 0.55,
     bucket_limits: Optional[Dict[str, int]] = None,
 ) -> Dict[str, Any]:
-    """Select top eligible candidates per strategy bucket.
+    """Select only high-confidence classified candidates per strategy bucket.
 
-    This is selection-only. It does not approve, size, or submit orders.
-    Defaults: core_dividend=2, value_rebound=2, news_momentum=1.
+    Missing, invalid, low-confidence, and conflicting classifications remain in
+    the ranked/quarantine output but are never forwarded to Risk for a new BUY.
     """
     limits = {**DEFAULT_BUCKET_SELECTION_LIMITS, **(bucket_limits or {})}
     threshold = Decimal(str(min_final_score))
@@ -83,10 +120,9 @@ def select_candidates_by_bucket(
 
     for bucket in BUCKET_PRIORITY:
         eligible = [
-            item for item in enriched
-            if item.get("strategy_bucket") == bucket
-            and _score(item) >= threshold
-            and _verdict(item) in {"buy", "strong_buy"}
+            item
+            for item in enriched
+            if item.get("strategy_bucket") == bucket and _eligible_for_new_entry(item, threshold)
         ]
         eligible = sorted(eligible, key=_score, reverse=True)
         limit = max(0, int(limits.get(bucket, 0)))
@@ -99,10 +135,15 @@ def select_candidates_by_bucket(
             "overflow": [_candidate_row(item) for item in eligible[limit:]],
         }
 
+    quarantined = [item for item in enriched if item.get("strategy_bucket") == UNASSIGNED]
     selected["summary"] = {
         "total_selected": sum(selected[bucket]["selected_count"] for bucket in BUCKET_PRIORITY),
         "limits": {bucket: selected[bucket]["limit"] for bucket in BUCKET_PRIORITY},
         "min_final_score": min_final_score,
+        "auto_classify_threshold": AUTO_CLASSIFY_THRESHOLD,
+        "classifier_version": CLASSIFIER_VERSION,
+        "quarantine_count": len(quarantined),
+        "quarantined_symbols": [item.get("symbol") for item in quarantined],
     }
     return selected
 
@@ -113,13 +154,7 @@ def choose_bucket_aware_winner(
     *,
     min_final_score: float = 0.55,
 ) -> Dict[str, Any]:
-    """
-    Pick a single winner while respecting the 50/30/20 bucket structure.
-
-    We still return one winner for the current execution path, but selection becomes
-    bucket-aware: choose the best eligible candidate from the highest-priority bucket
-    that has candidates. This prepares the flow for future multi-bucket execution.
-    """
+    """Return a legacy winner only when it passes the classification gate."""
     enriched = enrich_ranked_candidates_with_buckets(ranked)
     by_symbol = {item.get("symbol"): item for item in enriched}
     plan = allocation_plan or build_strategy_allocation_plan(enriched, Decimal("0"))
@@ -129,14 +164,14 @@ def choose_bucket_aware_winner(
         bucket_candidates = (((plan.get("buckets") or {}).get(bucket) or {}).get("candidates") or [])
         symbols = [candidate.get("symbol") for candidate in bucket_candidates]
         candidates = [by_symbol[symbol] for symbol in symbols if symbol in by_symbol]
-        candidates = [item for item in candidates if _score(item) >= threshold and _verdict(item) in {"buy", "strong_buy"}]
+        candidates = [item for item in candidates if _eligible_for_new_entry(item, threshold)]
         if candidates:
             return sorted(candidates, key=_score, reverse=True)[0]
 
-    eligible = [item for item in enriched if _score(item) >= threshold and _verdict(item) in {"buy", "strong_buy"}]
+    eligible = [item for item in enriched if _eligible_for_new_entry(item, threshold)]
     if eligible:
         return sorted(eligible, key=_score, reverse=True)[0]
-    return enriched[0]
+    return {}
 
 
 def ranked_response_rows(ranked: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
