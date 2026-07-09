@@ -72,11 +72,82 @@ def _decimal(value: Any, default: Decimal = Decimal("0")) -> Decimal:
         return default
 
 
+def _resolve_quality_value_overlap(
+    decision: StrategyBucketClassification,
+) -> StrategyBucketClassification:
+    """Resolve value-vs-core overlap when Core has no income evidence.
+
+    A high-quality, cash-generative company may also be clearly undervalued.
+    Quality alone must not force an income/core classification when the
+    candidate has no dividend, defensive-sector, or explicit core tag evidence.
+    """
+    if (
+        decision.status != "conflict"
+        or decision.proposed_bucket != VALUE_REBOUND
+        or set(decision.conflict_buckets)
+        != {CORE_DIVIDEND, VALUE_REBOUND}
+    ):
+        return decision
+
+    reasons = tuple(str(reason) for reason in decision.reasons)
+    has_income_core_evidence = any(
+        reason.startswith("dividend_yield:")
+        or reason.startswith("defensive_sector:")
+        or (
+            reason.startswith("tag_evidence:")
+            and any(
+                token in reason
+                for token in (
+                    "dividend",
+                    "defensive",
+                    "blue-chip",
+                    "stable",
+                )
+            )
+        )
+        for reason in reasons
+    )
+    has_strong_value_evidence = any(
+        reason.startswith("low_pe_ratio:")
+        or reason.startswith("low_pb_ratio:")
+        or reason.startswith("valuation_score:")
+        or reason == "scanner_primary_hint:value_rebound"
+        for reason in reasons
+    )
+    if has_income_core_evidence or not has_strong_value_evidence:
+        return decision
+
+    value_reasons = tuple(
+        reason
+        for reason in reasons
+        if reason.startswith("low_pe_ratio:")
+        or reason.startswith("low_pb_ratio:")
+        or reason.startswith("valuation_score:")
+        or reason == "scanner_primary_hint:value_rebound"
+    )
+    return StrategyBucketClassification(
+        bucket=VALUE_REBOUND,
+        confidence=decision.confidence,
+        reasons=(
+            "value_evidence_overrides_quality_only_core_overlap",
+            *value_reasons,
+        ),
+        classifier_version=decision.classifier_version,
+        status="classified",
+        proposed_bucket=VALUE_REBOUND,
+        source="manager_classifier_overlap_resolution",
+        conflict_buckets=(),
+        evidence_gate_passed=decision.evidence_gate_passed,
+        evidence_summary=decision.evidence_summary,
+    )
+
+
 def classify_strategy_bucket_decision(
     item: Mapping[str, Any],
 ) -> StrategyBucketClassification:
     """Return Manager's governed classification and evidence decision."""
-    return classify_candidate_strategy_bucket(item)
+    decision = classify_candidate_strategy_bucket(item)
+    return _resolve_quality_value_overlap(decision)
 
 
 def classify_strategy_bucket(item: Mapping[str, Any]) -> str:
