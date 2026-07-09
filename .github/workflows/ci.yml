@@ -26,5 +26,21 @@ jobs:
         pip install -r requirements.txt
 
     - name: Run tests with pytest
+      id: pytest
+      continue-on-error: true
       run: |
-        PYTHONPATH=. python -m pytest --maxfail=1 --disable-warnings -q
+        PYTHONPATH=. python -m pytest --maxfail=5 --disable-warnings -q > pytest-results.txt 2>&1
+
+    - name: Upload pytest results
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: manager-pytest-results
+        path: pytest-results.txt
+        if-no-files-found: error
+
+    - name: Fail when pytest fails
+      if: steps.pytest.outcome == 'failure'
+      run: |
+        cat pytest-results.txt
+        exit 1
