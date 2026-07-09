@@ -20,6 +20,7 @@ _CANDIDATE_FIELDS = [
     "tags",
     "reasons",
     "raw_scores",
+    "bucket_hint",
     "metadata",
 ]
 
@@ -52,8 +53,12 @@ def scanner_candidate_score(candidate: Any) -> float:
         data.get("candidate_score"),
         data.get("confidence_score"),
         data.get("fundamental_score"),
-        raw_scores.get("fundamental_score") if isinstance(raw_scores, dict) else None,
-        raw_scores.get("quality_score") if isinstance(raw_scores, dict) else None,
+        raw_scores.get("fundamental_score")
+        if isinstance(raw_scores, dict)
+        else None,
+        raw_scores.get("quality_score")
+        if isinstance(raw_scores, dict)
+        else None,
     ]
 
     for value in score_candidates:
@@ -62,8 +67,15 @@ def scanner_candidate_score(candidate: Any) -> float:
             return score
 
     try:
-        rank = int(data.get("discovery_rank") or metadata.get("discovery_rank"))
-        return max(0.1, min(1.0, 1.0 - ((rank - 1) * 0.08))) if rank > 0 else 0.0
+        rank = int(
+            data.get("discovery_rank")
+            or metadata.get("discovery_rank")
+        )
+        return (
+            max(0.1, min(1.0, 1.0 - ((rank - 1) * 0.08)))
+            if rank > 0
+            else 0.0
+        )
     except (TypeError, ValueError):
         return 0.0
 
@@ -77,13 +89,19 @@ def scanner_candidate_metadata(candidate: Any) -> Dict[str, Any]:
         "confidence_score": data.get("confidence_score"),
         "fundamental_score": data.get("fundamental_score"),
         "technical_score": data.get("technical_score"),
-        "discovery_rank": data.get("discovery_rank") or metadata.get("discovery_rank"),
+        "discovery_rank": (
+            data.get("discovery_rank")
+            or metadata.get("discovery_rank")
+        ),
         "recommendation": data.get("recommendation"),
         "recommendation_hint": data.get("recommendation_hint"),
         "exchange": data.get("exchange") or metadata.get("exchange"),
         "screener": data.get("screener") or metadata.get("screener"),
         "tags": data.get("tags") or metadata.get("tags"),
         "reasons": data.get("reasons") or metadata.get("reasons"),
-        "raw_scores": data.get("raw_scores") or metadata.get("raw_scores"),
+        "raw_scores": (
+            data.get("raw_scores") or metadata.get("raw_scores")
+        ),
+        "bucket_hint": data.get("bucket_hint"),
         "metadata": metadata,
     }
