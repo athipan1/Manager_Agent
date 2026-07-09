@@ -1,25 +1,25 @@
 {
   "schemaVersion": "dashboard-snapshot.v1",
-  "generatedAt": "2026-07-09T12:19:00.634695+00:00",
+  "generatedAt": "2026-07-09T16:12:33.267813+00:00",
   "mode": "ALPACA_PAPER",
   "brokerMode": "ALPACA",
   "flow": "discover_analyze_trade",
   "account": {
     "cash": 57435.4,
-    "equity": 103439.42,
-    "buyingPower": 358552.86,
+    "equity": 104107.56,
+    "buyingPower": 360423.63,
     "status": "ACTIVE",
     "mode": "ALPACA_PAPER",
-    "lastSyncedAt": "2026-07-09T12:19:00.634695+00:00"
+    "lastSyncedAt": "2026-07-09T16:12:33.267813+00:00"
   },
   "positions": [
     {
       "symbol": "ACGL",
       "quantity": 151.0,
       "averageCost": 99.961457,
-      "currentPrice": 102.01,
-      "marketValue": 15403.51,
-      "unrealizedPnL": 309.329993,
+      "currentPrice": 101.355,
+      "marketValue": 15304.605,
+      "unrealizedPnL": 210.424993,
       "bucket": "unassigned",
       "protection": {
         "status": "bracket_protected",
@@ -32,9 +32,9 @@
       "symbol": "ADBE",
       "quantity": 102.0,
       "averageCost": 210.697745,
-      "currentPrice": 213.1,
-      "marketValue": 21736.2,
-      "unrealizedPnL": 245.03001,
+      "currentPrice": 220.61,
+      "marketValue": 22502.22,
+      "unrealizedPnL": 1011.05001,
       "bucket": "unassigned",
       "protection": {
         "status": "bracket_protected",
@@ -47,9 +47,9 @@
       "symbol": "BKNG",
       "quantity": 51.0,
       "averageCost": 182.09,
-      "currentPrice": 173.81,
-      "marketValue": 8864.31,
-      "unrealizedPnL": -422.28,
+      "currentPrice": 173.83,
+      "marketValue": 8865.33,
+      "unrealizedPnL": -421.26,
       "bucket": "unassigned",
       "protection": {
         "status": "unprotected",
@@ -81,12 +81,20 @@
       "stopLoss": true
     }
   ],
-  "curatorSignals": [],
+  "curatorSignals": [
+    {
+      "symbol": "ADBE",
+      "status": "success",
+      "skill": "Hourly Backtest Reference Skill",
+      "signal": "score passed threshold",
+      "confidence": 0.6285
+    }
+  ],
   "summary": {
     "positionCount": 3,
     "openOrderCount": 2,
-    "curatorSignalCount": 0,
-    "executionStatus": "not_attempted",
-    "executionReason": "No selected positions passed portfolio selection."
+    "curatorSignalCount": 1,
+    "executionStatus": "rejected",
+    "executionReason": "Risk rejected every selected portfolio position."
   }
 }
