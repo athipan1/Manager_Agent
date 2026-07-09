@@ -18,6 +18,7 @@ from ..stock_risk_context import (
     current_sector_exposure,
     sector_from_analysis,
 )
+from .exposure_service import current_position_snapshot
 
 
 CAPACITY_POLICY_VERSION = "manager-pre-risk-capacity-v1"
@@ -342,7 +343,7 @@ def apply_pre_risk_capacity_selection(
     ranked: list[Dict[str, Any]],
     allocation_plan: Dict[str, Any],
     bucket_selection: Dict[str, Any],
-    positions: Iterable[Any],
+    positions: Iterable[Any] | None,
     portfolio_value: Any,
     minimum_incremental_value: Any = DEFAULT_MIN_INCREMENTAL_VALUE,
 ) -> Dict[str, Any]:
@@ -357,7 +358,12 @@ def apply_pre_risk_capacity_selection(
     min_increment = max(
         Decimal("0"), _decimal(minimum_incremental_value)
     )
-    positions = list(positions or [])
+    explicit_positions = list(positions or [])
+    positions = (
+        explicit_positions
+        if explicit_positions
+        else current_position_snapshot()
+    )
     ranked_by_symbol = {
         str(item.get("symbol") or "").upper(): item
         for item in ranked or []
@@ -409,6 +415,9 @@ def apply_pre_risk_capacity_selection(
             next_row = dict(row)
             next_row["pre_risk_capacity"] = decision
             if decision["accepted"]:
+                is_promoted = (
+                    decision["symbol"] not in original_selected_symbols
+                )
                 next_row["target_value"] = decision[
                     "capacity_adjusted_target_value"
                 ]
@@ -419,6 +428,7 @@ def apply_pre_risk_capacity_selection(
                     "allowed_incremental_value"
                 ]
                 next_row["capacity_policy_version"] = policy["version"]
+                next_row["capacity_fallback_promoted"] = is_promoted
                 accepted_rows.append(next_row)
 
                 increment = _decimal(
@@ -443,7 +453,7 @@ def apply_pre_risk_capacity_selection(
                         )
                         + increment
                     )
-                if symbol not in original_selected_symbols:
+                if is_promoted:
                     promoted.append(next_row)
             else:
                 skip_row = {
@@ -461,8 +471,7 @@ def apply_pre_risk_capacity_selection(
         payload["capacity_promoted_count"] = sum(
             1
             for row in accepted_rows
-            if str(row.get("symbol") or "").upper()
-            not in original_selected_symbols
+            if row.get("capacity_fallback_promoted")
         )
         adjusted[bucket] = payload
 
@@ -494,6 +503,10 @@ def apply_pre_risk_capacity_selection(
         "diagnostics": diagnostics,
         "skipped": skipped,
         "promoted": promoted,
+        "position_snapshot_count": len(positions),
+        "position_snapshot_source": (
+            "explicit" if explicit_positions else "request_context"
+        ),
         "policy": {
             "version": policy["version"],
             "max_single_stock_pct": float(
