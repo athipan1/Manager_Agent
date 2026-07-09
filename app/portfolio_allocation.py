@@ -34,7 +34,10 @@ DEFAULT_BUCKET_POLICIES: Dict[str, StrategyBucketPolicy] = {
         max_symbol_weight=Decimal("0.10"),
         min_final_score=Decimal("0.55"),
         max_positions=8,
-        description="หุ้นพื้นฐานดี ปลอดภัย มีปันผล หรือคุณภาพสูง ถือเป็นแกนหลักของพอร์ต",
+        description=(
+            "หุ้นพื้นฐานดี ปลอดภัย มีปันผล หรือคุณภาพสูง "
+            "ถือเป็นแกนหลักของพอร์ต"
+        ),
     ),
     VALUE_REBOUND: StrategyBucketPolicy(
         name=VALUE_REBOUND,
@@ -42,7 +45,9 @@ DEFAULT_BUCKET_POLICIES: Dict[str, StrategyBucketPolicy] = {
         max_symbol_weight=Decimal("0.07"),
         min_final_score=Decimal("0.58"),
         max_positions=6,
-        description="หุ้นราคาถูกหรือ valuation น่าสนใจ เพื่อรอขายทำกำไร",
+        description=(
+            "หุ้นราคาถูกหรือ valuation น่าสนใจ เพื่อรอขายทำกำไร"
+        ),
     ),
     NEWS_MOMENTUM: StrategyBucketPolicy(
         name=NEWS_MOMENTUM,
@@ -50,7 +55,10 @@ DEFAULT_BUCKET_POLICIES: Dict[str, StrategyBucketPolicy] = {
         max_symbol_weight=Decimal("0.03"),
         min_final_score=Decimal("0.62"),
         max_positions=5,
-        description="หุ้นเทรดตามข่าว momentum หรือ catalyst ระยะสั้น จำกัดน้ำหนักต่อไม้ต่ำสุด",
+        description=(
+            "หุ้นเทรดตามข่าว momentum หรือ catalyst ระยะสั้น "
+            "จำกัดน้ำหนักต่อไม้ต่ำสุด"
+        ),
     ),
 }
 
@@ -64,14 +72,82 @@ def _decimal(value: Any, default: Decimal = Decimal("0")) -> Decimal:
         return default
 
 
-def classify_strategy_bucket_decision(item: Mapping[str, Any]) -> StrategyBucketClassification:
-    """Return Manager's governed strategy-bucket classification decision.
+def _resolve_quality_value_overlap(
+    decision: StrategyBucketClassification,
+) -> StrategyBucketClassification:
+    """Resolve value-vs-core overlap when Core has no income evidence.
 
-    The classifier is intentionally fail-closed. Missing, invalid, low-confidence,
-    or conflicting evidence returns ``unassigned`` and therefore cannot enter a
-    new-buy allocation path.
+    A high-quality, cash-generative company may also be clearly undervalued.
+    Quality alone must not force an income/core classification when the
+    candidate has no dividend, defensive-sector, or explicit core tag evidence.
     """
-    return classify_candidate_strategy_bucket(item)
+    if (
+        decision.status != "conflict"
+        or decision.proposed_bucket != VALUE_REBOUND
+        or set(decision.conflict_buckets)
+        != {CORE_DIVIDEND, VALUE_REBOUND}
+    ):
+        return decision
+
+    reasons = tuple(str(reason) for reason in decision.reasons)
+    has_income_core_evidence = any(
+        reason.startswith("dividend_yield:")
+        or reason.startswith("defensive_sector:")
+        or (
+            reason.startswith("tag_evidence:")
+            and any(
+                token in reason
+                for token in (
+                    "dividend",
+                    "defensive",
+                    "blue-chip",
+                    "stable",
+                )
+            )
+        )
+        for reason in reasons
+    )
+    has_strong_value_evidence = any(
+        reason.startswith("low_pe_ratio:")
+        or reason.startswith("low_pb_ratio:")
+        or reason.startswith("valuation_score:")
+        or reason == "scanner_primary_hint:value_rebound"
+        for reason in reasons
+    )
+    if has_income_core_evidence or not has_strong_value_evidence:
+        return decision
+
+    value_reasons = tuple(
+        reason
+        for reason in reasons
+        if reason.startswith("low_pe_ratio:")
+        or reason.startswith("low_pb_ratio:")
+        or reason.startswith("valuation_score:")
+        or reason == "scanner_primary_hint:value_rebound"
+    )
+    return StrategyBucketClassification(
+        bucket=VALUE_REBOUND,
+        confidence=decision.confidence,
+        reasons=(
+            "value_evidence_overrides_quality_only_core_overlap",
+            *value_reasons,
+        ),
+        classifier_version=decision.classifier_version,
+        status="classified",
+        proposed_bucket=VALUE_REBOUND,
+        source="manager_classifier_overlap_resolution",
+        conflict_buckets=(),
+        evidence_gate_passed=decision.evidence_gate_passed,
+        evidence_summary=decision.evidence_summary,
+    )
+
+
+def classify_strategy_bucket_decision(
+    item: Mapping[str, Any],
+) -> StrategyBucketClassification:
+    """Return Manager's governed classification and evidence decision."""
+    decision = classify_candidate_strategy_bucket(item)
+    return _resolve_quality_value_overlap(decision)
 
 
 def classify_strategy_bucket(item: Mapping[str, Any]) -> str:
@@ -96,53 +172,110 @@ def build_strategy_allocation_plan(
 
     buckets: Dict[str, Dict[str, Any]] = {}
     for name, policy in policies.items():
-        target_value = (portfolio_value * policy.target_weight).quantize(Decimal("0.01"), rounding=ROUND_DOWN)
+        target_value = (
+            portfolio_value * policy.target_weight
+        ).quantize(Decimal("0.01"), rounding=ROUND_DOWN)
         buckets[name] = {
             "target_weight": float(policy.target_weight),
             "target_value": float(target_value),
             "max_symbol_weight": float(policy.max_symbol_weight),
-            "max_symbol_value": float((portfolio_value * policy.max_symbol_weight).quantize(Decimal("0.01"), rounding=ROUND_DOWN)),
+            "max_symbol_value": float(
+                (
+                    portfolio_value * policy.max_symbol_weight
+                ).quantize(Decimal("0.01"), rounding=ROUND_DOWN)
+            ),
             "min_final_score": float(policy.min_final_score),
             "max_positions": policy.max_positions,
             "description": policy.description,
             "candidates": [],
         }
-
     quarantine: List[Dict[str, Any]] = []
 
     for item in ranked_candidates:
         classification = _classification_payload(item)
-        bucket_name = str(classification.get("bucket") or UNASSIGNED)
+        bucket_name = str(
+            classification.get("bucket") or UNASSIGNED
+        )
         confidence = float(classification.get("confidence") or 0.0)
-        status = str(classification.get("status") or "unassigned")
+        status = str(
+            classification.get("status") or "unassigned"
+        )
+        evidence_gate_passed = bool(
+            classification.get("evidence_gate_passed", True)
+        )
+        evidence_summary = dict(
+            classification.get("evidence_summary") or {}
+        )
 
         if (
             bucket_name not in buckets
             or bucket_name not in KNOWN_BUCKETS
             or status != "classified"
             or confidence < AUTO_CLASSIFY_THRESHOLD
+            or not evidence_gate_passed
         ):
             quarantine.append(
                 {
                     "symbol": item.get("symbol"),
                     "strategy_bucket": UNASSIGNED,
-                    "proposed_bucket": classification.get("proposed_bucket"),
+                    "proposed_bucket": classification.get(
+                        "proposed_bucket"
+                    ),
                     "bucket_confidence": confidence,
                     "classification_status": status,
-                    "classification_reasons": list(classification.get("reasons") or []),
-                    "classifier_version": classification.get("classifier_version") or CLASSIFIER_VERSION,
-                    "blocked_reason": "strategy_bucket_not_auto_approved",
+                    "classification_reasons": list(
+                        classification.get("reasons") or []
+                    ),
+                    "classifier_version": (
+                        classification.get("classifier_version")
+                        or CLASSIFIER_VERSION
+                    ),
+                    "evidence_gate_passed": evidence_gate_passed,
+                    "evidence_versions": evidence_summary.get(
+                        "evidence_versions"
+                    )
+                    or {},
+                    "evidence_statuses": evidence_summary.get(
+                        "evidence_statuses"
+                    )
+                    or {},
+                    "evidence_blocking_issues": evidence_summary.get(
+                        "blocking_issues"
+                    )
+                    or [],
+                    "source_conflicts": evidence_summary.get(
+                        "source_conflicts"
+                    )
+                    or [],
+                    "blocked_reason": (
+                        "analysis_evidence_gate_failed"
+                        if not evidence_gate_passed
+                        else "strategy_bucket_not_auto_approved"
+                    ),
                 }
             )
             continue
 
         policy = policies[bucket_name]
-        score = _decimal((item.get("score_breakdown") or {}).get("final_opportunity_score"))
+        score = _decimal(
+            (item.get("score_breakdown") or {}).get(
+                "final_opportunity_score"
+            )
+        )
         if score < policy.min_final_score:
             continue
-        if len(buckets[bucket_name]["candidates"]) >= policy.max_positions:
+        if (
+            len(buckets[bucket_name]["candidates"])
+            >= policy.max_positions
+        ):
             continue
-        candidate_count = max(1, min(policy.max_positions, len(buckets[bucket_name]["candidates"]) + 1))
+        candidate_count = max(
+            1,
+            min(
+                policy.max_positions,
+                len(buckets[bucket_name]["candidates"]) + 1,
+            ),
+        )
         buckets[bucket_name]["candidates"].append(
             {
                 "symbol": item.get("symbol"),
@@ -150,23 +283,52 @@ def build_strategy_allocation_plan(
                 "strategy_bucket": bucket_name,
                 "bucket_confidence": confidence,
                 "classification_status": status,
-                "classification_reasons": list(classification.get("reasons") or []),
-                "classifier_version": classification.get("classifier_version") or CLASSIFIER_VERSION,
+                "classification_reasons": list(
+                    classification.get("reasons") or []
+                ),
+                "classifier_version": (
+                    classification.get("classifier_version")
+                    or CLASSIFIER_VERSION
+                ),
+                "evidence_gate_passed": evidence_gate_passed,
+                "evidence_versions": evidence_summary.get(
+                    "evidence_versions"
+                )
+                or {},
+                "evidence_statuses": evidence_summary.get(
+                    "evidence_statuses"
+                )
+                or {},
                 "final_opportunity_score": float(score),
-                "suggested_max_value": buckets[bucket_name]["max_symbol_value"],
+                "suggested_max_value": buckets[bucket_name][
+                    "max_symbol_value"
+                ],
                 "suggested_equal_weight_value": float(
-                    (Decimal(str(buckets[bucket_name]["target_value"])) / Decimal(candidate_count)).quantize(Decimal("0.01"), rounding=ROUND_DOWN)
+                    (
+                        Decimal(
+                            str(buckets[bucket_name]["target_value"])
+                        )
+                        / Decimal(candidate_count)
+                    ).quantize(
+                        Decimal("0.01"),
+                        rounding=ROUND_DOWN,
+                    )
                 ),
             }
         )
 
-    total_target_weight = sum(policy.target_weight for policy in policies.values())
+    total_target_weight = sum(
+        policy.target_weight for policy in policies.values()
+    )
     return {
         "policy_name": "core_satellite_50_30_20",
         "portfolio_value": float(portfolio_value),
         "total_target_weight": float(total_target_weight),
-        "is_weight_balanced": total_target_weight == Decimal("1.00"),
+        "is_weight_balanced": (
+            total_target_weight == Decimal("1.00")
+        ),
         "classifier_version": CLASSIFIER_VERSION,
+        "evidence_contract": "manager-analysis-evidence-v1",
         "auto_classify_threshold": AUTO_CLASSIFY_THRESHOLD,
         "buckets": buckets,
         "quarantine": quarantine,
