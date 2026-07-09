@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from decimal import Decimal, ROUND_DOWN
 from typing import Any, Dict, List, Mapping, Optional
 
-from .strategy_bucket_classifier import (
+from .scanner_policy_classifier import (
     AUTO_CLASSIFY_THRESHOLD,
     CLASSIFIER_VERSION,
     CORE_DIVIDEND,
