@@ -1,55 +1,55 @@
 {
   "schemaVersion": "dashboard-snapshot.v1",
-  "generatedAt": "2026-07-10T12:12:47.979379+00:00",
+  "generatedAt": "2026-07-10T14:32:35.447818+00:00",
   "mode": "ALPACA_PAPER",
   "brokerMode": "ALPACA",
   "flow": "discover_analyze_trade",
   "account": {
-    "cash": 57435.4,
-    "equity": 104381.39,
-    "buyingPower": 346416.85,
+    "cash": 42211.68,
+    "equity": 104707.9,
+    "buyingPower": 343836.14,
     "status": "ACTIVE",
     "mode": "ALPACA_PAPER",
-    "lastSyncedAt": "2026-07-10T12:12:47.979379+00:00"
+    "lastSyncedAt": "2026-07-10T14:32:35.447818+00:00"
   },
   "positions": [
     {
       "symbol": "ACGL",
       "quantity": 151.0,
       "averageCost": 99.961457,
-      "currentPrice": 100.1625,
-      "marketValue": 15124.5375,
-      "unrealizedPnL": 30.357493,
+      "currentPrice": 100.5,
+      "marketValue": 15175.5,
+      "unrealizedPnL": 81.319993,
       "bucket": "unassigned",
       "protection": {
-        "status": "bracket_protected",
-        "hasStopLoss": true,
+        "status": "partially_protected",
+        "hasStopLoss": false,
         "hasTakeProfit": true,
-        "hasBracket": true
+        "hasBracket": false
       }
     },
     {
       "symbol": "ADBE",
       "quantity": 102.0,
       "averageCost": 210.697745,
-      "currentPrice": 224.2,
-      "marketValue": 22868.4,
-      "unrealizedPnL": 1377.23001,
+      "currentPrice": 224.735,
+      "marketValue": 22922.97,
+      "unrealizedPnL": 1431.80001,
       "bucket": "unassigned",
       "protection": {
-        "status": "bracket_protected",
-        "hasStopLoss": true,
+        "status": "partially_protected",
+        "hasStopLoss": false,
         "hasTakeProfit": true,
-        "hasBracket": true
+        "hasBracket": false
       }
     },
     {
       "symbol": "BKNG",
       "quantity": 51.0,
       "averageCost": 182.09,
-      "currentPrice": 175.55,
-      "marketValue": 8953.05,
-      "unrealizedPnL": -333.54,
+      "currentPrice": 179.63,
+      "marketValue": 9161.13,
+      "unrealizedPnL": -125.46,
       "bucket": "unassigned",
       "protection": {
         "status": "unprotected",
@@ -57,17 +57,32 @@
         "hasTakeProfit": false,
         "hasBracket": false
       }
+    },
+    {
+      "symbol": "CINF",
+      "quantity": 86.0,
+      "averageCost": 177.02,
+      "currentPrice": 177.17,
+      "marketValue": 15236.62,
+      "unrealizedPnL": 12.9,
+      "bucket": "unassigned",
+      "protection": {
+        "status": "partially_protected",
+        "hasStopLoss": false,
+        "hasTakeProfit": true,
+        "hasBracket": false
+      }
     }
   ],
   "openOrders": [
     {
       "symbol": "CINF",
-      "side": "buy",
+      "side": "sell",
       "quantity": 86.0,
       "orderClass": "bracket",
-      "type": "market",
+      "type": "limit",
       "status": "new",
-      "takeProfit": 0.0,
+      "takeProfit": 193.46,
       "stopLoss": true
     },
     {
@@ -91,20 +106,12 @@
       "stopLoss": true
     }
   ],
-  "curatorSignals": [
-    {
-      "symbol": "CINF",
-      "status": "success",
-      "skill": "Hourly Backtest Reference Skill",
-      "signal": "score passed threshold",
-      "confidence": 0.6221
-    }
-  ],
+  "curatorSignals": [],
   "summary": {
-    "positionCount": 3,
+    "positionCount": 4,
     "openOrderCount": 3,
-    "curatorSignalCount": 1,
-    "executionStatus": "submitted",
-    "executionReason": null
+    "curatorSignalCount": 0,
+    "executionStatus": "not_attempted",
+    "executionReason": "No selected positions passed portfolio selection."
   }
 }
