@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from decimal import Decimal
-from typing import Any, Dict, List
+from typing import Any, Dict, Iterable, List, Mapping
 
 from .discover_allocation import (
     build_discover_allocation_plan,
@@ -11,17 +11,32 @@ from .discover_allocation import (
     select_candidates_by_bucket,
 )
 from .portfolio_allocation import UNASSIGNED
+from .services.pre_risk_capacity_service import (
+    DEFAULT_MIN_INCREMENTAL_VALUE,
+    apply_pre_risk_capacity_selection,
+)
 
 
-def _selected_symbols(bucket_selection: Dict[str, Any]) -> List[str]:
-    symbols: List[str] = []
+def _selected_rows(bucket_selection: Dict[str, Any]) -> List[Dict[str, Any]]:
+    rows: List[Dict[str, Any]] = []
     for bucket_name, bucket_data in bucket_selection.items():
         if bucket_name == "summary" or not isinstance(bucket_data, dict):
             continue
         for row in bucket_data.get("selected") or []:
-            symbol = row.get("symbol")
-            if symbol and symbol not in symbols:
-                symbols.append(symbol)
+            if not isinstance(row, Mapping):
+                continue
+            next_row = dict(row)
+            next_row.setdefault("strategy_bucket", bucket_name)
+            rows.append(next_row)
+    return rows
+
+
+def _selected_symbols(bucket_selection: Dict[str, Any]) -> List[str]:
+    symbols: List[str] = []
+    for row in _selected_rows(bucket_selection):
+        symbol = row.get("symbol")
+        if symbol and symbol not in symbols:
+            symbols.append(symbol)
     return symbols
 
 
@@ -41,21 +56,67 @@ def _bucket_candidate(
     return {}
 
 
+def _positive_float(value: Any) -> float | None:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return number if number > 0 else None
+
+
+def _per_symbol_target_value(
+    *,
+    selected_row: Mapping[str, Any],
+    candidate_meta: Mapping[str, Any],
+    bucket_plan: Mapping[str, Any],
+) -> float | None:
+    """Return final symbol target, never the whole bucket target.
+
+    `bucket_plan.target_value` represents the total 50/30/20 bucket allocation
+    and must not be sent to Risk_Agent as one symbol's rebalance target.
+    """
+    explicit = _positive_float(
+        selected_row.get("capacity_adjusted_target_value")
+        or selected_row.get("target_value")
+    )
+    if explicit is not None:
+        return explicit
+
+    candidates = [
+        value
+        for value in (
+            _positive_float(
+                candidate_meta.get("suggested_equal_weight_value")
+            ),
+            _positive_float(candidate_meta.get("suggested_max_value")),
+            _positive_float(bucket_plan.get("max_symbol_value")),
+        )
+        if value is not None
+    ]
+    return min(candidates) if candidates else None
+
+
 def build_selected_positions(
     *,
     ranked: List[Dict[str, Any]],
     allocation_plan: Dict[str, Any],
     bucket_selection: Dict[str, Any],
 ) -> List[Dict[str, Any]]:
-    """Build positions that passed classification and evidence gates."""
+    """Build positions that passed classification, evidence and capacity gates."""
     ranked_by_symbol = {
         str(item.get("symbol") or "").upper(): item
         for item in ranked
+    }
+    selected_rows = {
+        str(row.get("symbol") or "").upper(): row
+        for row in _selected_rows(bucket_selection)
+        if row.get("symbol")
     }
     selected_positions: List[Dict[str, Any]] = []
 
     for symbol in _selected_symbols(bucket_selection):
         item = ranked_by_symbol.get(str(symbol).upper())
+        selected_row = selected_rows.get(str(symbol).upper(), {})
         if not item:
             continue
         bucket = item.get("strategy_bucket") or (
@@ -73,6 +134,11 @@ def build_selected_positions(
         )
         target_weight = bucket_plan.get("target_weight") or 0
         evidence_summary = dict(item.get("evidence_summary") or {})
+        target_value = _per_symbol_target_value(
+            selected_row=selected_row,
+            candidate_meta=candidate_meta,
+            bucket_plan=bucket_plan,
+        )
         selected_positions.append(
             {
                 "symbol": symbol,
@@ -112,13 +178,30 @@ def build_selected_positions(
                 or [],
                 "target_weight": target_weight,
                 "allocation_pct": float(target_weight) * 100,
-                "target_value": bucket_plan.get("target_value"),
+                "bucket_target_value": bucket_plan.get("target_value"),
+                "target_value": target_value,
                 "suggested_max_value": candidate_meta.get(
                     "suggested_max_value"
                 )
                 or bucket_plan.get("max_symbol_value"),
                 "suggested_equal_weight_value": candidate_meta.get(
                     "suggested_equal_weight_value"
+                ),
+                "capacity_adjusted_target_value": selected_row.get(
+                    "capacity_adjusted_target_value"
+                ),
+                "capacity_incremental_value": selected_row.get(
+                    "capacity_incremental_value"
+                ),
+                "capacity_policy_version": selected_row.get(
+                    "capacity_policy_version"
+                ),
+                "pre_risk_capacity": selected_row.get(
+                    "pre_risk_capacity"
+                )
+                or {},
+                "capacity_fallback_promoted": bool(
+                    selected_row.get("capacity_fallback_promoted")
                 ),
                 "final_verdict": (item.get("analysis") or {}).get(
                     "final_verdict"
@@ -138,7 +221,7 @@ def build_position_analysis_payloads(
     ranked: List[Dict[str, Any]],
     selected_positions: List[Dict[str, Any]],
 ) -> List[Dict[str, Any]]:
-    """Attach allocation, classifier, and evidence context for Risk."""
+    """Attach allocation, classifier, evidence and capacity context for Risk."""
     ranked_by_symbol = {
         str(item.get("symbol") or "").upper(): item
         for item in ranked
@@ -228,6 +311,9 @@ def build_position_analysis_payloads(
             or [],
             "target_weight": position.get("target_weight"),
             "allocation_pct": position.get("allocation_pct"),
+            "bucket_target_value": position.get(
+                "bucket_target_value"
+            ),
             "target_value": position.get("target_value"),
             "suggested_max_value": position.get(
                 "suggested_max_value"
@@ -235,6 +321,22 @@ def build_position_analysis_payloads(
             "suggested_equal_weight_value": position.get(
                 "suggested_equal_weight_value"
             ),
+            "capacity_adjusted_target_value": position.get(
+                "capacity_adjusted_target_value"
+            ),
+            "capacity_incremental_value": position.get(
+                "capacity_incremental_value"
+            ),
+            "capacity_policy_version": position.get(
+                "capacity_policy_version"
+            ),
+            "capacity_fallback_promoted": position.get(
+                "capacity_fallback_promoted"
+            ),
+            "pre_risk_capacity": position.get(
+                "pre_risk_capacity"
+            )
+            or {},
         }
         payloads.append(analysis)
     return payloads
@@ -245,8 +347,10 @@ def build_discover_allocation_report(
     ranked: List[Dict[str, Any]],
     portfolio_value: Any,
     min_final_score: float,
+    positions: Iterable[Any] | None = None,
+    minimum_incremental_value: Any = DEFAULT_MIN_INCREMENTAL_VALUE,
 ) -> Dict[str, Any]:
-    """Build allocation, classification/evidence gates, and winner views."""
+    """Build governed allocation, capacity selection, and winner views."""
     enriched_ranked = enrich_ranked_candidates_with_buckets(ranked)
     allocation_plan = build_discover_allocation_plan(
         enriched_ranked,
@@ -256,6 +360,15 @@ def build_discover_allocation_report(
         enriched_ranked,
         min_final_score=min_final_score,
     )
+    capacity_selection = apply_pre_risk_capacity_selection(
+        ranked=enriched_ranked,
+        allocation_plan=allocation_plan,
+        bucket_selection=bucket_selection,
+        positions=list(positions or []),
+        portfolio_value=portfolio_value,
+        minimum_incremental_value=minimum_incremental_value,
+    )
+    bucket_selection = capacity_selection["bucket_selection"]
     selected_positions = build_selected_positions(
         ranked=enriched_ranked,
         allocation_plan=allocation_plan,
@@ -278,15 +391,22 @@ def build_discover_allocation_report(
             ],
             "quarantined_candidates": quarantined_candidates,
         },
+        "pre_risk_capacity": capacity_selection,
+        "pre_risk_capacity_skips": capacity_selection.get("skipped")
+        or [],
+        "pre_risk_capacity_promotions": capacity_selection.get(
+            "promoted"
+        )
+        or [],
         "selected_positions": selected_positions,
         "position_analysis_payloads": build_position_analysis_payloads(
             ranked=enriched_ranked,
             selected_positions=selected_positions,
         ),
-        "winner": choose_bucket_aware_winner(
-            enriched_ranked,
-            allocation_plan,
-            min_final_score=min_final_score,
+        "winner": (
+            ranked_response_rows(enriched_ranked)[0]
+            if selected_positions
+            else {}
         ),
         "ranked_candidates": ranked_response_rows(enriched_ranked),
     }

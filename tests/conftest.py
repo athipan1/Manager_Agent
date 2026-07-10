@@ -1,6 +1,7 @@
 import pytest
 
 import app.services.serialization_service as serialization_service
+from app.services.exposure_service import clear_position_snapshot
 
 
 @pytest.fixture(autouse=True)
@@ -13,3 +14,10 @@ def normalize_simple_namespace_agent_responses(monkeypatch):
         return original(resp)
 
     monkeypatch.setattr(serialization_service, "response_to_dict", to_dict)
+
+
+@pytest.fixture(autouse=True)
+def isolate_position_snapshot_context():
+    clear_position_snapshot()
+    yield
+    clear_position_snapshot()
