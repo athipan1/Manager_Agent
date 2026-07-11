@@ -1,6 +1,8 @@
 from scripts.store_order_review_ticket import (
     attach_audit_to_report,
+    attach_protection_preview_to_report,
     build_payload,
+    fetch_protection_reconciliation_preview,
     render_audit_summary_markdown,
     store_order_review_ticket,
     ticket_from_report,
@@ -63,11 +65,73 @@ def sample_audit_summary_response():
     }
 
 
+def sample_protection_preview():
+    return {
+        "status": "success",
+        "data": {
+            "mode": "reconciliation_preview_only",
+            "safety": "read_only_no_orders_submitted_no_orders_cancelled",
+            "summary": {
+                "ready_for_manual_review_count": 0,
+                "blocked_count": 4,
+                "orders_submitted": False,
+                "orders_cancelled": False,
+            },
+            "plans": [
+                {
+                    "symbol": "BKNG",
+                    "preview_status": "blocked_missing_risk_proposal",
+                }
+            ],
+        },
+    }
+
+
 def test_ticket_from_report_unwraps_execution_response():
     ticket = ticket_from_report(sample_report())
 
     assert ticket["ticket_id"] == "order-review-abc123"
     assert ticket["execution_enabled"] is False
+
+
+def test_fetch_protection_reconciliation_preview_is_read_only(monkeypatch):
+    calls = []
+
+    def fake_post_json(base_url, path, payload, api_key=None, timeout=30):
+        calls.append((base_url, path, payload, api_key, timeout))
+        return sample_protection_preview()
+
+    monkeypatch.setattr("scripts.store_order_review_ticket.post_json", fake_post_json)
+
+    result = fetch_protection_reconciliation_preview(
+        "http://execution-agent:8006",
+        "execution-key",
+    )
+
+    assert result["status"] == "success"
+    assert calls == [
+        (
+            "http://execution-agent:8006",
+            "/broker/protection-reconciliation/preview",
+            {"risk_proposals": []},
+            "execution-key",
+            60,
+        )
+    ]
+
+
+def test_attach_protection_preview_to_report_adds_safe_summary():
+    updated = attach_protection_preview_to_report(
+        sample_report(),
+        sample_protection_preview(),
+    )
+
+    assert updated["protection_reconciliation_preview"]["status"] == "success"
+    status = updated["protection_reconciliation_status"]
+    assert status["blocked_count"] == 4
+    assert status["orders_submitted"] is False
+    assert status["orders_cancelled"] is False
+    assert status["safety"] == "preview_only_no_broker_mutation"
 
 
 def test_build_payload_maps_ticket_summary_and_safety_fields():
