@@ -1,6 +1,6 @@
 {
   "schemaVersion": "dashboard-snapshot.v1",
-  "generatedAt": "2026-07-11T09:41:24.425319+00:00",
+  "generatedAt": "2026-07-11T10:17:13.181734+00:00",
   "mode": "ALPACA_PAPER",
   "brokerMode": "ALPACA",
   "flow": "discover_analyze_trade",
@@ -10,7 +10,7 @@
     "buyingPower": 344091.15,
     "status": "ACTIVE",
     "mode": "ALPACA_PAPER",
-    "lastSyncedAt": "2026-07-11T09:41:24.425319+00:00"
+    "lastSyncedAt": "2026-07-11T10:17:13.181734+00:00"
   },
   "positions": [
     {
@@ -52,10 +52,10 @@
       "unrealizedPnL": -188.7,
       "bucket": "unassigned",
       "protection": {
-        "status": "unprotected",
-        "hasStopLoss": false,
-        "hasTakeProfit": false,
-        "hasBracket": false
+        "status": "bracket_protected",
+        "hasStopLoss": true,
+        "hasTakeProfit": true,
+        "hasBracket": true
       }
     },
     {
@@ -76,12 +76,22 @@
   ],
   "openOrders": [
     {
+      "symbol": "BKNG",
+      "side": "sell",
+      "quantity": 51.0,
+      "orderClass": "oco",
+      "type": "limit",
+      "status": "accepted",
+      "takeProfit": 192.67,
+      "stopLoss": false
+    },
+    {
       "symbol": "CINF",
       "side": "sell",
       "quantity": 86.0,
       "orderClass": "bracket",
       "type": "limit",
-      "status": "new",
+      "status": "pending_cancel",
       "takeProfit": 193.46,
       "stopLoss": true
     },
@@ -91,7 +101,7 @@
       "quantity": 36.0,
       "orderClass": "bracket",
       "type": "limit",
-      "status": "new",
+      "status": "pending_cancel",
       "takeProfit": 262.02,
       "stopLoss": true
     },
@@ -101,7 +111,7 @@
       "quantity": 54.0,
       "orderClass": "bracket",
       "type": "limit",
-      "status": "new",
+      "status": "pending_cancel",
       "takeProfit": 112.84,
       "stopLoss": true
     }
@@ -109,7 +119,7 @@
   "curatorSignals": [],
   "summary": {
     "positionCount": 4,
-    "openOrderCount": 3,
+    "openOrderCount": 4,
     "curatorSignalCount": 0,
     "executionStatus": "not_attempted",
     "executionReason": "No selected positions passed portfolio selection."
