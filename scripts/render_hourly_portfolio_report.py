@@ -15,14 +15,14 @@ def render_order_review_approval_ticket(
     if not ticket_response:
         return
 
-    ticket = unwrap_data(ticket_response) or {}
+    ticket = _legacy.unwrap_data(ticket_response) or {}
     if not isinstance(ticket, dict):
         return
 
-    summary = _dict(ticket.get("summary"))
-    ready = _list(ticket.get("ready_for_manual_approval"))
-    no_action = _list(ticket.get("no_action_required"))
-    blocked = _list(ticket.get("blocked"))
+    summary = _legacy._dict(ticket.get("summary"))
+    ready = _legacy._list(ticket.get("ready_for_manual_approval"))
+    no_action = _legacy._list(ticket.get("no_action_required"))
+    blocked = _legacy._list(ticket.get("blocked"))
     if not summary and not ready and not no_action and not blocked:
         return
 
@@ -76,8 +76,8 @@ def render_order_review_approval_ticket(
         )
         lines.append("|---|---:|---|---:|---:|---:|---|---:|")
         for row in ready:
-            row = _dict(row)
-            actions = _list(row.get("proposed_actions"))
+            row = _legacy._dict(row)
+            actions = _legacy._list(row.get("proposed_actions"))
             status = row.get("approval_status", "manual_approval_required")
             lines.append(
                 f"| {row.get('symbol', '-')} | {row.get('position_qty', '-')} | "
@@ -85,7 +85,7 @@ def render_order_review_approval_ticket(
                 f"{row.get('stop_price', '-')} | "
                 f"{row.get('take_profit_price', '-')} | "
                 f"{row.get('reward_risk_ratio', '-')} | "
-                f"{_status_icon(status)} `{status}` | {len(actions)} |"
+                f"{_legacy._status_icon(status)} `{status}` | {len(actions)} |"
             )
         lines.append("")
 
@@ -94,10 +94,11 @@ def render_order_review_approval_ticket(
         lines.append("| Symbol | Status | Reason | Recommended Next Step |")
         lines.append("|---|---|---|---|")
         for row in no_action:
-            row = _dict(row)
+            row = _legacy._dict(row)
             status = row.get("preview_status", "no_action_required")
             lines.append(
-                f"| {row.get('symbol', '-')} | {_status_icon(status)} `{status}` | "
+                f"| {row.get('symbol', '-')} | "
+                f"{_legacy._status_icon(status)} `{status}` | "
                 f"{row.get('reason', '-')} | "
                 f"{row.get('recommended_next_step', '-')} |"
             )
@@ -108,10 +109,11 @@ def render_order_review_approval_ticket(
         lines.append("| Symbol | Status | Reason | Recommended Next Step |")
         lines.append("|---|---|---|---|")
         for row in blocked:
-            row = _dict(row)
+            row = _legacy._dict(row)
             status = row.get("preview_status", "-")
             lines.append(
-                f"| {row.get('symbol', '-')} | {_status_icon(status)} `{status}` | "
+                f"| {row.get('symbol', '-')} | "
+                f"{_legacy._status_icon(status)} `{status}` | "
                 f"{row.get('reason', '-')} | "
                 f"{row.get('recommended_next_step', '-')} |"
             )
