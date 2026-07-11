@@ -103,6 +103,58 @@ def attach_protection_preview_to_report(
     return updated
 
 
+def render_protection_reconciliation_markdown(preview_response: Dict[str, Any]) -> str:
+    preview = unwrap_data(preview_response) or {}
+    if not isinstance(preview, dict):
+        preview = {}
+    summary = preview.get("summary") or {}
+    if not isinstance(summary, dict):
+        summary = {}
+    plans = preview.get("plans") or []
+    if not isinstance(plans, list):
+        plans = []
+
+    lines = [
+        "# Protection Reconciliation Preview",
+        "",
+        f"- Status: `{preview_response.get('status', '-') if isinstance(preview_response, dict) else '-'}`",
+        f"- Mode: `{preview.get('mode', '-')}`",
+        f"- Safety: `{preview.get('safety', 'preview_only_no_broker_mutation')}`",
+        f"- Eligible Positions: `{summary.get('eligible_position_count', 0)}`",
+        f"- Ready For Manual Review: `{summary.get('ready_for_manual_review_count', 0)}`",
+        f"- Blocked: `{summary.get('blocked_count', 0)}`",
+        f"- Orders Submitted: `{summary.get('orders_submitted', False)}`",
+        f"- Orders Cancelled: `{summary.get('orders_cancelled', False)}`",
+        "",
+    ]
+    if plans:
+        lines.extend(
+            [
+                "| Symbol | Current Status | Preview Status | Quantity | Stop | Take Profit | Reason | Next Step |",
+                "|---|---|---|---:|---:|---:|---|---|",
+            ]
+        )
+        for plan in plans:
+            if not isinstance(plan, dict):
+                continue
+            lines.append(
+                f"| {plan.get('symbol', '-')} | {plan.get('current_status', '-')} | "
+                f"{plan.get('preview_status', '-')} | {plan.get('position_qty', '-')} | "
+                f"{plan.get('stop_price', '-')} | {plan.get('take_profit_price', '-')} | "
+                f"{plan.get('reason', '-')} | {plan.get('recommended_next_step', '-')} |"
+            )
+        lines.append("")
+    lines.extend(
+        [
+            "## Safety",
+            "This file is generated from a read-only preview. It does not cancel, replace, or submit broker orders.",
+            "Approved Risk proposals and a separate explicit Paper execution confirmation are required before mutation.",
+            "",
+        ]
+    )
+    return "\n".join(lines)
+
+
 def ticket_from_report(report: Dict[str, Any]) -> Dict[str, Any]:
     ticket_response = report.get("order_review_approval_ticket") or {}
     ticket = unwrap_data(ticket_response) or {}
@@ -272,6 +324,11 @@ def main() -> int:
     )
     args.output_json.parent.mkdir(parents=True, exist_ok=True)
     args.output_json.write_text(json.dumps(result, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
+    protection_markdown_path = args.output_json.parent / "protection-reconciliation-preview.md"
+    protection_markdown_path.write_text(
+        render_protection_reconciliation_markdown(protection_preview),
+        encoding="utf-8",
+    )
     updated_report = attach_audit_to_report(report, result)
     args.input_json.write_text(json.dumps(updated_report, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
     audit_summary = result.get("audit_summary")
