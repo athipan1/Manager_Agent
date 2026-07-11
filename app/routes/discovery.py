@@ -6,12 +6,20 @@ from fastapi import APIRouter
 
 from ..contracts import StandardAgentResponse
 from ..models import DiscoverAnalyzeTradeRequest
-from ..workflows.guarded_discovery_workflow import run_guarded_discover_analyze_trade_flow as run_discover_analyze_trade_flow
+from ..workflows.gated_guarded_discovery_workflow import (
+    run_gated_guarded_discover_analyze_trade_flow
+    as run_discover_analyze_trade_flow,
+)
 
 router = APIRouter()
 
 
-@router.post("/discover-analyze-trade", response_model=StandardAgentResponse)
-async def discover_analyze_trade_endpoint(request: DiscoverAnalyzeTradeRequest):
-    """Discover, analyze, allocate, risk-check, and optionally execute trades."""
+@router.post(
+    "/discover-analyze-trade",
+    response_model=StandardAgentResponse,
+)
+async def discover_analyze_trade_endpoint(
+    request: DiscoverAnalyzeTradeRequest,
+):
+    """Discover, gate exposure, risk-check and optionally execute trades."""
     return await run_discover_analyze_trade_flow(request)
