@@ -73,7 +73,22 @@ def _broker_position_to_position(position: Dict[str, Any]) -> Position:
 
 
 def _broker_account_to_balance(account: Dict[str, Any]) -> AccountBalance:
-    value = account.get("equity") or account.get("portfolio_value") or account.get("buying_power") or account.get("cash") or 0
+    """Return spendable broker cash, never total account equity.
+
+    Alpaca equity already includes the market value of open positions. Putting
+    equity into ``cash_balance`` makes portfolio allocation add positions twice
+    and lets Risk size orders against money that is not actually available.
+    Cash is therefore authoritative whenever the broker provides it. Older
+    broker payloads that omit cash retain a fail-compatible equity fallback.
+    """
+    value = account.get("cash")
+    if value in (None, ""):
+        value = (
+            account.get("equity")
+            or account.get("portfolio_value")
+            or account.get("buying_power")
+            or 0
+        )
     return AccountBalance(cash_balance=Decimal(str(value)))
 
 
@@ -139,13 +154,13 @@ class DatabaseAgentClient(ResilientAgentClient):
             broker_equity = _as_decimal(broker_account.get("equity") or broker_account.get("portfolio_value"))
             if broker_equity > Decimal("0"):
                 report_logger.info(
-                    f"Using broker equity for trade balance context. account={account_id}, "
+                    f"Using broker cash for trade sizing context while preserving broker equity in the reconciled snapshot. account={account_id}, "
                     f"db_cash={db_cash}, broker_cash={broker_cash}, broker_equity={broker_equity}, "
                     f"correlation_id={correlation_id}"
                 )
                 return broker_balance
             if broker_cash and db_cash != broker_cash:
-                report_logger.warning(f"Database balance looks stale for account {account_id}; using broker account value for trade context. db_cash={db_cash}, broker_cash={broker_cash}, correlation_id={correlation_id}")
+                report_logger.warning(f"Database balance looks stale for account {account_id}; using broker cash for trade context. db_cash={db_cash}, broker_cash={broker_cash}, correlation_id={correlation_id}")
                 return broker_balance
         return db_balance
 
