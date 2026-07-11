@@ -5,6 +5,8 @@ on:
     workflows: ["Hourly Auto Trading"]
     types: [completed]
     branches: [main]
+  schedule:
+    - cron: '15 * * * 1-5'
   workflow_dispatch:
     inputs:
       execute_paper:
@@ -27,6 +29,7 @@ jobs:
   reconcile-paper-protection:
     if: >-
       github.event_name == 'workflow_dispatch' ||
+      github.event_name == 'schedule' ||
       github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
     timeout-minutes: 35
@@ -40,7 +43,7 @@ jobs:
       ALPACA_SECRET_KEY: ${{ secrets.ALPACA_SECRET_KEY }}
       ALPACA_API_URL: ${{ secrets.ALPACA_API_URL || 'https://paper-api.alpaca.markets' }}
       EXECUTION_API_KEY: dev_execution_key
-      EXECUTE_PAPER_PROTECTION_RECONCILIATION: ${{ github.event_name == 'workflow_run' && 'true' || github.event.inputs.execute_paper || 'false' }}
+      EXECUTE_PAPER_PROTECTION_RECONCILIATION: ${{ github.event_name == 'workflow_run' && 'true' || github.event_name == 'schedule' && 'true' || github.event.inputs.execute_paper || 'false' }}
       PROTECTION_REWARD_RISK_RATIO: ${{ github.event.inputs.reward_risk_ratio || '2.0' }}
 
     steps:
