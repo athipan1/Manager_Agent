@@ -7,6 +7,93 @@ except ModuleNotFoundError:
     from render_hourly_portfolio_report_legacy import *  # type: ignore # noqa: F401,F403
     import render_hourly_portfolio_report_legacy as _legacy  # type: ignore
 
+from app.services.curator_observability import summarize_curator_signals
+
+
+_legacy_render_curator_signals = _legacy.render_curator_signals
+
+
+def _percent(value: Any) -> str:
+    try:
+        return f"{float(value) * 100:.1f}%"
+    except (TypeError, ValueError):
+        return "-"
+
+
+def render_curator_signals(lines: List[str], data: Dict[str, Any]) -> None:
+    curator_signals = _legacy._list(data.get("curator_signals"))
+    if not curator_signals:
+        return
+
+    summary = data.get("curator_ensemble_summary")
+    if not isinstance(summary, dict):
+        summary = summarize_curator_signals(curator_signals)
+    if summary.get("mode") != "shadow_ensemble":
+        _legacy_render_curator_signals(lines, data)
+        return
+
+    counts = _legacy._dict(summary.get("signal_counts"))
+    rows = _legacy._list(summary.get("rows"))
+    lines.append("## Curator Shadow Ensemble")
+    lines.append("- Deployment Mode: `advisory`")
+    lines.append(f"- Observations: `{summary.get('ensemble_observations', 0)}`")
+    lines.append(
+        f"- Available / Unavailable: `{summary.get('available', 0)}` / "
+        f"`{summary.get('unavailable', 0)}`"
+    )
+    lines.append(f"- Availability Rate: `{_percent(summary.get('availability_rate'))}`")
+    lines.append(
+        f"- Contract Valid / Invalid: `{summary.get('contract_valid', 0)}` / "
+        f"`{summary.get('contract_invalid', 0)}`"
+    )
+    lines.append(
+        f"- Contract Valid Rate: `{_percent(summary.get('contract_valid_rate'))}`"
+    )
+    lines.append(f"- Unsafe Contracts: `{summary.get('unsafe_contract_count', 0)}`")
+    lines.append(
+        f"- BUY / HOLD / SELL: `{counts.get('buy', 0)}` / "
+        f"`{counts.get('hold', 0)}` / `{counts.get('sell', 0)}`"
+    )
+    lines.append(f"- Average Agreement: `{_percent(summary.get('average_agreement'))}`")
+    lines.append(
+        f"- Would Pass Required Gate: "
+        f"`{summary.get('would_pass_required_gate', 0)}`"
+    )
+    lines.append(
+        f"- Would Be Blocked: `{summary.get('would_be_blocked', 0)}`"
+    )
+    lines.append(
+        f"- Required Mode Readiness: "
+        f"`{'eligible' if summary.get('required_mode_eligible') else 'not_ready'}`"
+    )
+    lines.append(
+        f"- Observation Progress: `{summary.get('ensemble_observations', 0)}` / "
+        f"`{summary.get('observation_target', 50)}`"
+    )
+    lines.append("- Safety: `Risk_Agent remains mandatory; direct execution forbidden`")
+    lines.append("")
+
+    lines.append(
+        "| Symbol | Status | Signal | Agreement | Contract | Would Pass | "
+        "Skills | Rejection Codes |"
+    )
+    lines.append("|---|---|---|---:|---|---|---:|---|")
+    for row in rows:
+        row = _legacy._dict(row)
+        codes = row.get("rejection_codes") or []
+        code_text = ", ".join(str(code) for code in codes) if codes else "-"
+        contract = row.get("contract_valid")
+        contract_text = "valid" if contract is True else "invalid" if contract is False else "-"
+        pass_gate = row.get("would_pass_required_gate")
+        pass_text = "yes" if pass_gate is True else "no" if pass_gate is False else "-"
+        lines.append(
+            f"| {row.get('symbol', '-')} | {row.get('status', '-')} | "
+            f"{row.get('signal', '-')} | {_percent(row.get('agreement'))} | "
+            f"{contract_text} | {pass_text} | "
+            f"{row.get('selected_skill_count', 0)} | {code_text} |"
+        )
+    lines.append("")
+
 
 def render_order_review_approval_ticket(
     lines: List[str],
@@ -143,6 +230,7 @@ def render_order_review_approval_ticket(
         lines.append("")
 
 
+_legacy.render_curator_signals = render_curator_signals
 _legacy.render_order_review_approval_ticket = render_order_review_approval_ticket
 
 
