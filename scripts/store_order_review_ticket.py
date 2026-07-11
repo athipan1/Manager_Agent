@@ -68,6 +68,41 @@ def get_json(base_url: str, path: str, params: Optional[Dict[str, Any]] = None, 
         return {"status": "error", "error": str(exc)}
 
 
+def fetch_protection_reconciliation_preview(
+    execution_url: str,
+    execution_api_key: str | None,
+) -> Dict[str, Any]:
+    """Capture the latest broker-backed reconciliation plan without mutations."""
+    return post_json(
+        execution_url,
+        "/broker/protection-reconciliation/preview",
+        {"risk_proposals": []},
+        api_key=execution_api_key,
+        timeout=60,
+    )
+
+
+def attach_protection_preview_to_report(
+    report: Dict[str, Any],
+    preview: Dict[str, Any],
+) -> Dict[str, Any]:
+    updated = dict(report)
+    updated["protection_reconciliation_preview"] = preview
+    preview_data = unwrap_data(preview) or {}
+    summary = preview_data.get("summary") if isinstance(preview_data, dict) else {}
+    if not isinstance(summary, dict):
+        summary = {}
+    updated["protection_reconciliation_status"] = {
+        "status": preview.get("status") if isinstance(preview, dict) else "error",
+        "ready_for_manual_review_count": summary.get("ready_for_manual_review_count", 0),
+        "blocked_count": summary.get("blocked_count", 0),
+        "orders_submitted": summary.get("orders_submitted", False),
+        "orders_cancelled": summary.get("orders_cancelled", False),
+        "safety": "preview_only_no_broker_mutation",
+    }
+    return updated
+
+
 def ticket_from_report(report: Dict[str, Any]) -> Dict[str, Any]:
     ticket_response = report.get("order_review_approval_ticket") or {}
     ticket = unwrap_data(ticket_response) or {}
@@ -211,6 +246,8 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Store the hourly order review ticket in Database_Agent audit history.")
     parser.add_argument("--database-url", default=os.getenv("DATABASE_AGENT_URL", "http://localhost:8004"))
     parser.add_argument("--database-api-key", default=os.getenv("DATABASE_AGENT_API_KEY", "dev_database_key"))
+    parser.add_argument("--execution-url", default=os.getenv("EXECUTION_AGENT_URL", "http://localhost:8006"))
+    parser.add_argument("--execution-api-key", default=os.getenv("EXECUTION_API_KEY", "dev_execution_key"))
     parser.add_argument("--account-id", default=os.getenv("DEFAULT_ACCOUNT_ID", "1"))
     parser.add_argument("--source", default="manager-agent-hourly-workflow")
     parser.add_argument("--input-json", type=Path, required=True)
@@ -221,6 +258,11 @@ def parse_args() -> argparse.Namespace:
 def main() -> int:
     args = parse_args()
     report = json.loads(args.input_json.read_text(encoding="utf-8"))
+    protection_preview = fetch_protection_reconciliation_preview(
+        args.execution_url,
+        args.execution_api_key,
+    )
+    report = attach_protection_preview_to_report(report, protection_preview)
     result = store_order_review_ticket(
         report,
         args.database_url,
