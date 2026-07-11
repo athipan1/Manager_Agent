@@ -22,6 +22,13 @@ def _agreement(value: Any) -> float | None:
     return result if 0.0 <= result <= 1.0 else None
 
 
+def _integer(value: Any, default: int = 0) -> int:
+    try:
+        return max(0, int(value))
+    except (TypeError, ValueError):
+        return default
+
+
 def normalize_curator_observation(signal: Dict[str, Any]) -> Dict[str, Any]:
     """Normalize legacy and shadow-ensemble Curator results for telemetry/reporting."""
     row = _dict(signal)
@@ -68,7 +75,7 @@ def normalize_curator_observation(signal: Dict[str, Any]) -> Dict[str, Any]:
         "contract_valid": contract_valid,
         "would_pass_required_gate": would_pass,
         "rejection_codes": rejection_codes,
-        "selected_skill_count": len(_list(ensemble.get("selected_skills"))),
+        "selected_skill_count": _integer(ensemble.get("selected_skill_count")),
         "execution_count": len(_list(ensemble.get("executions"))),
         "minimum_agreement": gate.get("minimum_agreement"),
     }
