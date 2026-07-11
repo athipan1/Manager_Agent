@@ -28,6 +28,13 @@ services:
       curator-agent:
         condition: service_healthy
 
+  database-agent:
+    environment:
+      # Canonical deployment seed for broker holdings that predate the current
+      # ephemeral workflow database. Override this variable with additional
+      # SYMBOL=bucket pairs as holdings are migrated.
+      STRATEGY_BUCKET_ASSIGNMENTS_JSON: ${STRATEGY_BUCKET_ASSIGNMENTS_JSON:-CINF=value_rebound}
+
   performance-agent: !override
     image: python:3.11-slim
     restart: always
