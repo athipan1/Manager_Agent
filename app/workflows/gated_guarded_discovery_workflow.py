@@ -7,6 +7,7 @@ from typing import Any, Dict
 
 from ..contracts import StandardAgentResponse
 from ..models import DiscoverAnalyzeTradeRequest
+from ..services.curator_observability import summarize_curator_signals
 from ..services.database_sync_gate import (
     database_sync_allows_automation,
     database_sync_summary,
@@ -98,6 +99,39 @@ def database_snapshot_age_seconds(
     )
 
 
+def _attach_curator_observability(
+    response: StandardAgentResponse,
+) -> StandardAgentResponse:
+    if not isinstance(response.data, dict):
+        return response
+
+    summary = summarize_curator_signals(response.data.get("curator_signals") or [])
+    response.data["curator_ensemble_summary"] = summary
+
+    portfolio_summary = response.data.get("portfolio_summary")
+    if isinstance(portfolio_summary, dict):
+        portfolio_summary["curator_ensemble_observations"] = summary.get(
+            "ensemble_observations",
+            0,
+        )
+        portfolio_summary["curator_ensemble_available"] = summary.get(
+            "available",
+            0,
+        )
+        portfolio_summary["curator_ensemble_would_pass_required_gate"] = (
+            summary.get("would_pass_required_gate", 0)
+        )
+        portfolio_summary["curator_ensemble_would_be_blocked"] = summary.get(
+            "would_be_blocked",
+            0,
+        )
+        portfolio_summary["curator_required_mode_eligible"] = summary.get(
+            "required_mode_eligible",
+            False,
+        )
+    return response
+
+
 async def run_gated_guarded_discover_analyze_trade_flow(
     request: DiscoverAnalyzeTradeRequest,
 ) -> StandardAgentResponse:
@@ -138,11 +172,12 @@ async def run_gated_guarded_discover_analyze_trade_flow(
             database_sync_ok=False,
             snapshot_age_seconds=snapshot_age_seconds,
         )
-        return _with_blocked_execution(
+        blocked_response = _with_blocked_execution(
             response,
             database_sync,
             snapshot_capture,
         )
+        return _attach_curator_observability(blocked_response)
 
     response = await run_gated_discover_analyze_trade_flow(
         request,
@@ -200,4 +235,4 @@ async def run_gated_guarded_discover_analyze_trade_flow(
                 snapshot_age_seconds
             )
 
-    return response
+    return _attach_curator_observability(response)
