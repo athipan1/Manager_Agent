@@ -1,0 +1,146 @@
+name: Paper Protection Reconciliation
+
+on:
+  workflow_run:
+    workflows: ["Hourly Auto Trading"]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      execute_paper:
+        description: "Cancel incomplete Paper protection and submit full-position OCO replacements"
+        required: false
+        default: "false"
+      reward_risk_ratio:
+        description: "Reward/risk ratio used by Risk_Agent protection proposals"
+        required: false
+        default: "2.0"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: paper-protection-reconciliation
+  cancel-in-progress: false
+
+jobs:
+  reconcile-paper-protection:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    env:
+      TRADING_ENABLED: "true"
+      TRADING_MODE: PAPER
+      ALLOW_LIVE_TRADING: "false"
+      DRY_RUN: "false"
+      BROKER_MODE: ALPACA
+      ALPACA_API_KEY_ID: ${{ secrets.ALPACA_API_KEY_ID }}
+      ALPACA_SECRET_KEY: ${{ secrets.ALPACA_SECRET_KEY }}
+      ALPACA_API_URL: ${{ secrets.ALPACA_API_URL || 'https://paper-api.alpaca.markets' }}
+      EXECUTION_API_KEY: dev_execution_key
+      EXECUTE_PAPER_PROTECTION_RECONCILIATION: ${{ github.event_name == 'workflow_run' && 'true' || github.event.inputs.execute_paper || 'false' }}
+      PROTECTION_REWARD_RISK_RATIO: ${{ github.event.inputs.reward_risk_ratio || '2.0' }}
+
+    steps:
+      - name: Checkout Manager_Agent
+        uses: actions/checkout@v4
+        with:
+          path: Manager_Agent
+
+      - name: Checkout Database_Agent
+        uses: actions/checkout@v4
+        with:
+          repository: athipan1/Database_Agent
+          ref: main
+          path: Database_Agent
+          fetch-depth: 1
+
+      - name: Checkout Risk_Agent
+        uses: actions/checkout@v4
+        with:
+          repository: athipan1/Risk_Agent
+          ref: main
+          path: Risk_Agent
+          fetch-depth: 1
+
+      - name: Checkout Execution_Agent
+        uses: actions/checkout@v4
+        with:
+          repository: athipan1/Execution_Agent
+          ref: main
+          path: Execution_Agent
+          fetch-depth: 1
+
+      - name: Validate Alpaca Paper configuration
+        run: |
+          set -euo pipefail
+          test -n "${ALPACA_API_KEY_ID}" || { echo "Missing ALPACA_API_KEY_ID"; exit 1; }
+          test -n "${ALPACA_SECRET_KEY}" || { echo "Missing ALPACA_SECRET_KEY"; exit 1; }
+          case "${ALPACA_API_URL}" in
+            *paper-api.alpaca.markets*) echo "Alpaca Paper endpoint confirmed." ;;
+            *) echo "Refusing protection mutation outside Alpaca Paper: ${ALPACA_API_URL}"; exit 1 ;;
+          esac
+          echo "Execute Paper reconciliation: ${EXECUTE_PAPER_PROTECTION_RECONCILIATION}"
+
+      - name: Build focused protection stack
+        working-directory: Manager_Agent
+        run: |
+          docker compose -f docker-compose.yml up --build -d \
+            db database-agent risk-agent execution-agent
+
+      - name: Wait for protection services
+        working-directory: Manager_Agent
+        run: |
+          set -euo pipefail
+          compose="docker compose -f docker-compose.yml"
+          for i in {1..60}; do
+            database=$(curl -fsS http://localhost:8004/health >/dev/null && echo ok || echo wait)
+            risk=$(curl -fsS http://localhost:8007/health >/dev/null && echo ok || echo wait)
+            execution=$(curl -fsS http://localhost:8006/health >/dev/null && echo ok || echo wait)
+            echo "health database=${database} risk=${risk} execution=${execution}"
+            if [ "${database}${risk}${execution}" = "okokok" ]; then
+              exit 0
+            fi
+            if [ "$($compose ps --status exited -q database-agent risk-agent execution-agent | wc -l | tr -d ' ')" != "0" ]; then
+              $compose ps
+              $compose logs --tail=200 database-agent risk-agent execution-agent
+              exit 1
+            fi
+            sleep 5
+          done
+          $compose ps
+          $compose logs --tail=200 database-agent risk-agent execution-agent
+          exit 1
+
+      - name: Reconcile and verify Paper protection
+        working-directory: Manager_Agent
+        env:
+          EXECUTION_AGENT_URL: http://localhost:8006
+          RISK_AGENT_URL: http://localhost:8007
+          PROTECTION_REPORT_PATH: reports/paper-protection-reconciliation.json
+        run: |
+          mkdir -p reports
+          python scripts/reconcile_paper_protection.py
+
+      - name: Upload protection reconciliation report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: paper-protection-reconciliation
+          path: Manager_Agent/reports/paper-protection-reconciliation.*
+          if-no-files-found: warn
+
+      - name: Show focused stack logs on failure
+        if: failure()
+        working-directory: Manager_Agent
+        run: |
+          docker compose -f docker-compose.yml ps || true
+          docker compose -f docker-compose.yml logs --tail=300 database-agent risk-agent execution-agent || true
+
+      - name: Stop focused protection stack
+        if: always()
+        working-directory: Manager_Agent
+        run: |
+          docker compose -f docker-compose.yml down -v --remove-orphans || true
