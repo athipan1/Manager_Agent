@@ -1,0 +1,17 @@
+{
+  "schema_version": "strategy-bucket-assignments.v1",
+  "account_id": 1,
+  "source": "manager-strategy-bucket-v3-held-position-migration",
+  "reason": "Restore confirmed strategy ownership for pre-existing Alpaca Paper holdings after ephemeral database cold starts.",
+  "assignments": {
+    "ACGL": "value_rebound",
+    "ADBE": "value_rebound",
+    "BKNG": "value_rebound",
+    "CINF": "value_rebound"
+  },
+  "safety": {
+    "environment": "ALPACA_PAPER",
+    "live_trading_authorized": false,
+    "manual_review_required_for_changes": true
+  }
+}

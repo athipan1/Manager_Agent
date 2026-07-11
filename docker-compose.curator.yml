@@ -30,10 +30,10 @@ services:
 
   database-agent:
     environment:
-      # Canonical deployment seed for broker holdings that predate the current
-      # ephemeral workflow database. Override this variable with additional
-      # SYMBOL=bucket pairs as holdings are migrated.
-      STRATEGY_BUCKET_ASSIGNMENTS_JSON: ${STRATEGY_BUCKET_ASSIGNMENTS_JSON:-CINF=value_rebound}
+      # Canonical deployment seed for confirmed Alpaca Paper holdings that
+      # predate the ephemeral workflow database. Keep this in sync with
+      # config/strategy_bucket_assignments.v1.json. Operators may override it.
+      STRATEGY_BUCKET_ASSIGNMENTS_JSON: ${STRATEGY_BUCKET_ASSIGNMENTS_JSON:-ACGL=value_rebound,ADBE=value_rebound,BKNG=value_rebound,CINF=value_rebound}
 
   performance-agent: !override
     image: python:3.11-slim
