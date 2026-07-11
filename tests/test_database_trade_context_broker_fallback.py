@@ -1,6 +1,6 @@
 import pytest
 
-from app.database_client import DatabaseAgentClient
+from app.database_client import DatabaseAgentClient, _broker_account_to_balance
 
 
 def standard(data):
@@ -55,6 +55,24 @@ class FakeDatabaseClient(DatabaseAgentClient):
         raise AssertionError(f"Unexpected GET {url}")
 
 
+def test_broker_account_balance_prefers_cash_over_equity():
+    balance = _broker_account_to_balance(
+        {
+            "cash": "42211.67",
+            "equity": "104798.98",
+            "portfolio_value": "104798.98",
+        }
+    )
+
+    assert str(balance.cash_balance) == "42211.67"
+
+
+def test_broker_account_balance_falls_back_when_cash_is_missing():
+    balance = _broker_account_to_balance({"equity": "104798.98"})
+
+    assert str(balance.cash_balance) == "104798.98"
+
+
 @pytest.mark.asyncio
 async def test_get_positions_returns_broker_positions_when_database_is_empty(monkeypatch):
     monkeypatch.setattr("app.execution_client.ExecutionAgentClient", FakeExecutionClient)
@@ -72,12 +90,12 @@ async def test_get_positions_returns_broker_positions_when_database_is_empty(mon
 
 
 @pytest.mark.asyncio
-async def test_get_account_balance_uses_broker_equity_when_database_cash_is_stale(monkeypatch):
+async def test_get_account_balance_uses_broker_cash_when_database_cash_is_stale(monkeypatch):
     monkeypatch.setattr("app.execution_client.ExecutionAgentClient", FakeExecutionClient)
     FakeExecutionClient.calls = []
     client = FakeDatabaseClient()
 
     balance = await client.get_account_balance(1, "corr-1")
 
-    assert str(balance.cash_balance) == "102016.81"
+    assert str(balance.cash_balance) == "-100223.4"
     assert FakeExecutionClient.calls == [{"account_id": "1", "push_to_database": True}]
