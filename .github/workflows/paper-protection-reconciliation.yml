@@ -114,7 +114,18 @@ jobs:
           $compose logs --tail=200 database-agent risk-agent execution-agent
           exit 1
 
+      - name: Check Paper protection reconciliation window
+        id: protection_window
+        working-directory: Manager_Agent
+        env:
+          EXECUTION_AGENT_URL: http://localhost:8006
+          PROTECTION_REPORT_PATH: reports/paper-protection-reconciliation.json
+        run: |
+          mkdir -p reports
+          python scripts/check_paper_protection_window.py
+
       - name: Reconcile and verify Paper protection
+        if: steps.protection_window.outputs.deferred != 'true'
         working-directory: Manager_Agent
         env:
           EXECUTION_AGENT_URL: http://localhost:8006
