@@ -8,6 +8,9 @@ from typing import Any, Dict
 from ..contracts import StandardAgentResponse
 from ..models import DiscoverAnalyzeTradeRequest
 from ..services.curator_observability import summarize_curator_signals
+from ..services.curator_required_mode_readiness import (
+    evaluate_curator_required_mode_readiness,
+)
 from ..services.database_sync_gate import (
     database_sync_allows_automation,
     database_sync_summary,
@@ -109,7 +112,12 @@ def _attach_curator_observability(
         response.data.get("curator_signals") or [],
         cumulative_readiness=response.data.get("curator_observation_readiness"),
     )
+    readiness_evaluation = evaluate_curator_required_mode_readiness(summary)
     response.data["curator_ensemble_summary"] = summary
+    response.data["curator_required_mode_readiness"] = readiness_evaluation
+    response.data["operator_alerts"] = list(response.data.get("operator_alerts") or [])
+    if readiness_evaluation.get("eligible"):
+        response.data["operator_alerts"].append(readiness_evaluation["alert"])
 
     portfolio_summary = response.data.get("portfolio_summary")
     if isinstance(portfolio_summary, dict):
@@ -128,9 +136,17 @@ def _attach_curator_observability(
             "would_be_blocked",
             0,
         )
-        portfolio_summary["curator_required_mode_eligible"] = summary.get(
-            "required_mode_eligible",
+        portfolio_summary["curator_required_mode_eligible"] = readiness_evaluation.get(
+            "eligible",
             False,
+        )
+        portfolio_summary["curator_required_mode_status"] = readiness_evaluation.get(
+            "status",
+            "not_ready",
+        )
+        portfolio_summary["curator_required_mode_blockers"] = readiness_evaluation.get(
+            "blockers",
+            [],
         )
         portfolio_summary["curator_readiness_source"] = summary.get(
             "readiness_source",
