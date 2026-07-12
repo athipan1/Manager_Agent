@@ -46,6 +46,14 @@ on:
 
         default: "true"
 
+      backtest_enabled:
+
+        description: "Run Backtest_Agent with Alpaca Market Data and publish the result to the in-stack Database_Agent"
+
+        required: false
+
+        default: "true"
+
       manual_review_gate_symbols:
 
         description: "Comma-separated symbols to validate through manual review gate"
@@ -94,6 +102,8 @@ jobs:
 
       CURATOR_AGENT_ENABLED: ${{ github.event.inputs.curator_enabled || 'true' }}
 
+      BACKTEST_ENABLED: ${{ github.event.inputs.backtest_enabled || 'true' }}
+
       CURATOR_AGENT_URL: http://curator-agent:8010
 
       CURATOR_SKILL_TIMEOUT_SECONDS: "1.0"
@@ -111,6 +121,34 @@ jobs:
       EXECUTION_API_KEY: ${{ secrets.EXECUTION_API_KEY || 'dev_execution_key' }}
 
       DATABASE_AGENT_API_KEY: ${{ secrets.DATABASE_AGENT_API_KEY || 'dev_database_key' }}
+
+      BACKTEST_SYMBOL: ${{ vars.BACKTEST_SYMBOL || 'AAPL' }}
+
+      BACKTEST_SKILL_ID: ${{ vars.BACKTEST_SKILL_ID || 'hourly-sma-crossover' }}
+
+      BACKTEST_STRATEGY_ID: ${{ vars.BACKTEST_STRATEGY_ID || 'hourly-sma-crossover' }}
+
+      BACKTEST_TIMEFRAME: ${{ vars.BACKTEST_TIMEFRAME || '1d' }}
+
+      BACKTEST_MINIMUM_BARS: ${{ vars.BACKTEST_MINIMUM_BARS || '252' }}
+
+      BACKTEST_BAR_LIMIT: ${{ vars.BACKTEST_BAR_LIMIT || '10000' }}
+
+      BACKTEST_INITIAL_EQUITY: ${{ vars.BACKTEST_INITIAL_EQUITY || '100000' }}
+
+      BACKTEST_STRATEGY: ${{ vars.BACKTEST_STRATEGY || 'sma_crossover' }}
+
+      BACKTEST_FAST_WINDOW: ${{ vars.BACKTEST_FAST_WINDOW || '2' }}
+
+      BACKTEST_SLOW_WINDOW: ${{ vars.BACKTEST_SLOW_WINDOW || '3' }}
+
+      BACKTEST_FEE_BPS: ${{ vars.BACKTEST_FEE_BPS || '10' }}
+
+      BACKTEST_SLIPPAGE_BPS: ${{ vars.BACKTEST_SLIPPAGE_BPS || '5' }}
+
+      ALPACA_DATA_API_URL: ${{ vars.ALPACA_DATA_API_URL || 'https://data.alpaca.markets' }}
+
+      ALPACA_DATA_FEED: ${{ vars.ALPACA_DATA_FEED || 'iex' }}
 
     steps:
 
@@ -175,6 +213,20 @@ jobs:
           ref: main
 
           path: Database_Agent
+
+          fetch-depth: 1
+
+      - name: Checkout Backtest_Agent
+
+        uses: actions/checkout@v4
+
+        with:
+
+          repository: athipan1/Backtest_Agent
+
+          ref: main
+
+          path: Backtest_Agent
 
           fetch-depth: 1
 
@@ -262,6 +314,8 @@ jobs:
 
           echo "Database_Agent=$(git -C Database_Agent rev-parse HEAD)"
 
+          echo "Backtest_Agent=$(git -C Backtest_Agent rev-parse HEAD)"
+
           echo "Learning_Agent=$(git -C Learning_Agent rev-parse HEAD)"
 
           echo "Execution_Agent=$(git -C Execution_Agent rev-parse HEAD)"
@@ -277,6 +331,8 @@ jobs:
           echo "BROKER_MODE=${BROKER_MODE}"
 
           echo "CURATOR_AGENT_ENABLED=${CURATOR_AGENT_ENABLED}"
+
+          echo "BACKTEST_ENABLED=${BACKTEST_ENABLED}"
 
           echo "MANUAL_REVIEW_GATE_SYMBOLS=${MANUAL_REVIEW_GATE_SYMBOLS}"
 
@@ -463,6 +519,78 @@ jobs:
         run: |
 
           python scripts/seed_curator_advisory_skill.py
+
+      - name: Run Backtest and publish to in-stack Database Agent
+
+        if: env.BACKTEST_ENABLED == 'true'
+
+        working-directory: Manager_Agent
+
+        env:
+
+          DATABASE_AGENT_URL: http://localhost:8004
+
+          PUBLISH_TO_DATABASE: "true"
+
+          BACKTEST_ACCOUNT_ID: "1"
+
+        run: |
+
+          if [ -z "${ALPACA_API_KEY_ID}" ] || [ -z "${ALPACA_SECRET_KEY}" ]; then
+
+            echo "Missing GitHub Secrets: ALPACA_API_KEY_ID or ALPACA_SECRET_KEY"
+
+            exit 1
+
+          fi
+
+          python -m pip install --disable-pip-version-check -r ../Backtest_Agent/requirements.txt
+
+          python ../Backtest_Agent/scripts/run_hourly_backtest.py
+
+          python - <<'PY'
+
+          import json
+
+          from pathlib import Path
+
+          report_path = Path("reports/hourly-backtest-result.json")
+
+          if not report_path.exists():
+
+              raise SystemExit("Backtest report was not created.")
+
+          report = json.loads(report_path.read_text(encoding="utf-8"))
+
+          if report.get("published") is not True or report.get("publish_status") != "success":
+
+              raise SystemExit(
+
+                  "Backtest result was not stored in Database_Agent: "
+
+                  f"published={report.get('published')} publish_status={report.get('publish_status')}"
+
+              )
+
+          database_response = report.get("database_response") or {}
+
+          if database_response.get("status") != "success":
+
+              raise SystemExit(f"Database_Agent rejected Backtest result: {database_response}")
+
+          result = report.get("result") or {}
+
+          print(
+
+              "Backtest stored successfully: "
+
+              f"strategy={result.get('strategy')} symbols={result.get('symbols')} "
+
+              f"trade_count={(result.get('metrics') or {}).get('trade_count')}"
+
+          )
+
+          PY
 
       - name: Run hourly portfolio discovery, risk checks, execution, and broker snapshot
 
