@@ -25,6 +25,7 @@ from ..resilient_client import AgentUnavailable
 from ..scanner_client import ScannerAgentClient
 from ..services.audit_service import audit_trade_decision, persist_signal
 from ..services.context_service import fetch_context_value, fetch_session_risk_contexts
+from ..services.curator_observation_persistence import persist_curator_observations
 from ..services.curator_signal_service import enrich_payloads_with_curator_signals
 from ..services.exposure_aware_trade_gate import filter_candidates_with_exposure_gate
 from ..services.exposure_service import total_position_exposure
@@ -204,6 +205,12 @@ async def run_gated_discover_analyze_trade_flow(
             ) = await enrich_payloads_with_curator_signals(
                 payloads=position_analysis_payloads,
                 correlation_id=correlation_id,
+            )
+            curator_observation_persistence = await persist_curator_observations(
+                db_client=db_client,
+                account_id=account_id,
+                correlation_id=correlation_id,
+                curator_signals=curator_signals,
             )
 
             (
@@ -418,6 +425,12 @@ async def run_gated_discover_analyze_trade_flow(
                     execution_result=execution_result,
                 )
 
+        cumulative_readiness = curator_observation_persistence.get("readiness")
+        readiness_eligible = (
+            cumulative_readiness.get("required_mode_eligible")
+            if isinstance(cumulative_readiness, dict)
+            else False
+        )
         data = {
             "report_id": correlation_id,
             "flow": "discover_analyze_trade",
@@ -435,6 +448,8 @@ async def run_gated_discover_analyze_trade_flow(
                 skipped_existing_protected_positions
             ),
             "curator_signals": curator_signals,
+            "curator_observation_persistence": curator_observation_persistence,
+            "curator_observation_readiness": cumulative_readiness,
             "risk_approvals": risk_approvals,
             "execution_candidates": approved_positions,
             "execution": execution_result,
@@ -460,6 +475,13 @@ async def run_gated_discover_analyze_trade_flow(
                     skipped_existing_protected_positions
                 ),
                 "curator_signals": len(curator_signals),
+                "curator_observation_persistence_status": (
+                    curator_observation_persistence.get("status")
+                ),
+                "curator_observations_persisted": (
+                    curator_observation_persistence.get("persisted_count", 0)
+                ),
+                "curator_required_mode_cumulative_eligible": readiness_eligible,
                 "execution_status": execution_result.get("status"),
             },
             "ranked_candidates": allocation_report.get("ranked_candidates"),
