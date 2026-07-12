@@ -81,12 +81,33 @@ def normalize_curator_observation(signal: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def summarize_curator_signals(signals: Iterable[Dict[str, Any]]) -> Dict[str, Any]:
-    observations = [normalize_curator_observation(row) for row in signals or []]
+def _cumulative_readiness(
+    signals: List[Dict[str, Any]],
+    readiness: Dict[str, Any] | None,
+) -> Dict[str, Any]:
+    direct = _dict(readiness)
+    if direct:
+        return direct
+    for signal in signals:
+        nested = _dict(_dict(signal).get("cumulative_readiness"))
+        if nested:
+            return nested
+    return {}
+
+
+def summarize_curator_signals(
+    signals: Iterable[Dict[str, Any]],
+    *,
+    cumulative_readiness: Dict[str, Any] | None = None,
+) -> Dict[str, Any]:
+    raw_signals = list(signals or [])
+    observations = [normalize_curator_observation(row) for row in raw_signals]
     ensemble_rows = [row for row in observations if row["mode"] == "shadow_ensemble"]
     active_rows = ensemble_rows or observations
     available_rows = [row for row in active_rows if row["available"]]
-    agreements = [row["agreement"] for row in active_rows if row["agreement"] is not None]
+    agreements = [
+        row["agreement"] for row in active_rows if row["agreement"] is not None
+    ]
     signal_counts = {
         signal: sum(1 for row in active_rows if row["signal"] == signal)
         for signal in ("buy", "hold", "sell", "unknown")
@@ -134,22 +155,106 @@ def summarize_curator_signals(signals: Iterable[Dict[str, Any]]) -> Dict[str, An
         and unsafe_contract_count == 0
     )
 
+    cumulative = _cumulative_readiness(raw_signals, cumulative_readiness)
+    use_cumulative = bool(cumulative)
+    cumulative_counts = {
+        "buy": _integer(cumulative.get("buy_count")),
+        "hold": _integer(cumulative.get("hold_count")),
+        "sell": _integer(cumulative.get("sell_count")),
+        "unknown": _integer(cumulative.get("unknown_count")),
+    }
+
     return {
         "mode": "shadow_ensemble" if ensemble_rows else "single_skill",
-        "observations": len(active_rows),
-        "ensemble_observations": len(ensemble_rows),
-        "available": len(available_rows),
-        "unavailable": len(active_rows) - len(available_rows),
-        "availability_rate": availability_rate,
-        "contract_valid": contract_valid_count,
-        "contract_invalid": contract_invalid_count,
-        "contract_valid_rate": contract_valid_rate,
-        "unsafe_contract_count": unsafe_contract_count,
-        "signal_counts": signal_counts,
-        "average_agreement": average_agreement,
-        "would_pass_required_gate": would_pass,
-        "would_be_blocked": would_block,
-        "observation_target": OBSERVATION_TARGET,
-        "required_mode_eligible": readiness_eligible,
+        "readiness_source": (
+            "database_cumulative" if use_cumulative else "current_run"
+        ),
+        "observations": (
+            _integer(cumulative.get("observations"), len(active_rows))
+            if use_cumulative
+            else len(active_rows)
+        ),
+        "ensemble_observations": (
+            _integer(cumulative.get("observations"), len(ensemble_rows))
+            if use_cumulative
+            else len(ensemble_rows)
+        ),
+        "available": (
+            _integer(cumulative.get("available"), len(available_rows))
+            if use_cumulative
+            else len(available_rows)
+        ),
+        "unavailable": (
+            _integer(
+                cumulative.get("unavailable"),
+                len(active_rows) - len(available_rows),
+            )
+            if use_cumulative
+            else len(active_rows) - len(available_rows)
+        ),
+        "availability_rate": (
+            cumulative.get("availability_rate")
+            if use_cumulative
+            else availability_rate
+        ),
+        "contract_valid": (
+            _integer(cumulative.get("contract_valid"), contract_valid_count)
+            if use_cumulative
+            else contract_valid_count
+        ),
+        "contract_invalid": (
+            _integer(cumulative.get("contract_invalid"), contract_invalid_count)
+            if use_cumulative
+            else contract_invalid_count
+        ),
+        "contract_valid_rate": (
+            cumulative.get("contract_valid_rate")
+            if use_cumulative
+            else contract_valid_rate
+        ),
+        "unsafe_contract_count": (
+            _integer(
+                cumulative.get("unsafe_contract_count"),
+                unsafe_contract_count,
+            )
+            if use_cumulative
+            else unsafe_contract_count
+        ),
+        "signal_counts": cumulative_counts if use_cumulative else signal_counts,
+        "average_agreement": (
+            cumulative.get("average_agreement")
+            if use_cumulative
+            else average_agreement
+        ),
+        "would_pass_required_gate": (
+            _integer(cumulative.get("would_pass_required_gate"), would_pass)
+            if use_cumulative
+            else would_pass
+        ),
+        "would_be_blocked": (
+            _integer(cumulative.get("would_be_blocked"), would_block)
+            if use_cumulative
+            else would_block
+        ),
+        "observation_target": _integer(
+            cumulative.get("observation_target"),
+            OBSERVATION_TARGET,
+        ),
+        "required_mode_eligible": (
+            bool(cumulative.get("required_mode_eligible"))
+            if use_cumulative
+            else readiness_eligible
+        ),
+        "readiness_blockers": (
+            _list(cumulative.get("blockers")) if use_cumulative else []
+        ),
+        "current_run": {
+            "observations": len(active_rows),
+            "available": len(available_rows),
+            "unavailable": len(active_rows) - len(available_rows),
+            "signal_counts": signal_counts,
+            "would_pass_required_gate": would_pass,
+            "would_be_blocked": would_block,
+        },
         "rows": observations,
     }
