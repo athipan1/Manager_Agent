@@ -546,51 +546,11 @@ jobs:
 
           python -m pip install --disable-pip-version-check -r ../Backtest_Agent/requirements.txt
 
-          python ../Backtest_Agent/scripts/run_hourly_backtest.py
+          mkdir -p reports
 
-          python - <<'PY'
+          python ../Backtest_Agent/scripts/run_hourly_backtest.py > reports/hourly-backtest-console.json
 
-          import json
-
-          from pathlib import Path
-
-          report_path = Path("reports/hourly-backtest-result.json")
-
-          if not report_path.exists():
-
-              raise SystemExit("Backtest report was not created.")
-
-          report = json.loads(report_path.read_text(encoding="utf-8"))
-
-          if report.get("published") is not True or report.get("publish_status") != "success":
-
-              raise SystemExit(
-
-                  "Backtest result was not stored in Database_Agent: "
-
-                  f"published={report.get('published')} publish_status={report.get('publish_status')}"
-
-              )
-
-          database_response = report.get("database_response") or {}
-
-          if database_response.get("status") != "success":
-
-              raise SystemExit(f"Database_Agent rejected Backtest result: {database_response}")
-
-          result = report.get("result") or {}
-
-          print(
-
-              "Backtest stored successfully: "
-
-              f"strategy={result.get('strategy')} symbols={result.get('symbols')} "
-
-              f"trade_count={(result.get('metrics') or {}).get('trade_count')}"
-
-          )
-
-          PY
+          python scripts/verify_backtest_publish.py reports/hourly-backtest-result.json
 
       - name: Run hourly portfolio discovery, risk checks, execution, and broker snapshot
 
