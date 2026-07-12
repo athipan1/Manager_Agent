@@ -105,7 +105,10 @@ def _attach_curator_observability(
     if not isinstance(response.data, dict):
         return response
 
-    summary = summarize_curator_signals(response.data.get("curator_signals") or [])
+    summary = summarize_curator_signals(
+        response.data.get("curator_signals") or [],
+        cumulative_readiness=response.data.get("curator_observation_readiness"),
+    )
     response.data["curator_ensemble_summary"] = summary
 
     portfolio_summary = response.data.get("portfolio_summary")
@@ -128,6 +131,10 @@ def _attach_curator_observability(
         portfolio_summary["curator_required_mode_eligible"] = summary.get(
             "required_mode_eligible",
             False,
+        )
+        portfolio_summary["curator_readiness_source"] = summary.get(
+            "readiness_source",
+            "current_run",
         )
     return response
 
