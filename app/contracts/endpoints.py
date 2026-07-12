@@ -13,6 +13,9 @@ class DatabaseEndpoints:
     PRICE_HISTORY = "/prices/{symbol}/history"
     SIGNALS = "/history/signals"
     PERFORMANCE_METRICS = "/history/performance"
+    CURATOR_OBSERVATIONS_BATCH = "/curator/observations/batch"
+    CURATOR_OBSERVATION_READINESS = "/curator/observations/readiness"
+
 
 class ExecutionEndpoints:
     HEALTH = "/health"
@@ -22,14 +25,17 @@ class ExecutionEndpoints:
     BROKER_STATE = "/broker/state"
     BROKER_RECONCILE = "/broker/reconcile"
 
+
 class AnalysisEndpoints:
     ANALYZE = "/analyze"
+
 
 class ScannerEndpoints:
     SCAN = "/scan"
     SCAN_FUNDAMENTAL = "/scan/fundamental"
     DISCOVER_BEST_FUNDAMENTALS = "/discover-best-fundamentals"
     HEALTH = "/health"
+
 
 class LearningEndpoints:
     LEARN = "/learn"
