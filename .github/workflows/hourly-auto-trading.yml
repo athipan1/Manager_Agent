@@ -36,7 +36,7 @@ on:
 
         required: false
 
-        default: "false"
+        default: "true"
 
       curator_enabled:
 
@@ -88,9 +88,9 @@ jobs:
 
       MIN_FINAL_SCORE: ${{ github.event.inputs.min_final_score || '0.55' }}
 
-      DRY_RUN: ${{ github.event.inputs.dry_run || 'false' }}
+      DRY_RUN: ${{ github.event_name == 'schedule' && 'true' || github.event.inputs.dry_run || 'true' }}
 
-      BROKER_MODE: ${{ (github.event.inputs.dry_run || 'false') == 'false' && 'ALPACA' || 'SIMULATOR' }}
+      BROKER_MODE: ${{ github.event_name == 'schedule' && 'SIMULATOR' || (github.event.inputs.dry_run || 'true') == 'false' && 'ALPACA' || 'SIMULATOR' }}
 
       CURATOR_AGENT_ENABLED: ${{ github.event.inputs.curator_enabled || 'true' }}
 
@@ -281,6 +281,24 @@ jobs:
           echo "MANUAL_REVIEW_GATE_SYMBOLS=${MANUAL_REVIEW_GATE_SYMBOLS}"
 
           echo "EXECUTE_APPROVED_PAPER_BRACKET_UPGRADE=${EXECUTE_APPROVED_PAPER_BRACKET_UPGRADE}"
+
+      - name: Enforce scheduled simulator safety
+
+        run: |
+
+          if [ "${GITHUB_EVENT_NAME}" = "schedule" ]; then
+
+            if [ "${DRY_RUN}" != "true" ] || [ "${BROKER_MODE}" != "SIMULATOR" ]; then
+
+              echo "Refusing scheduled run outside Simulator safety mode."
+
+              exit 1
+
+            fi
+
+            echo "Scheduled run locked to DRY_RUN=true and BROKER_MODE=SIMULATOR."
+
+          fi
 
       - name: Validate Alpaca paper configuration
 
