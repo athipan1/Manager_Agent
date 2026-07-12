@@ -1,4 +1,13 @@
+from pathlib import Path
+import sys
 from typing import Any, Dict, List
+
+# GitHub Actions invokes this file as `python scripts/render_hourly_portfolio_report.py`.
+# In that execution mode Python puts `scripts/` on sys.path, not the repository
+# root, so imports from `app` fail unless the root is added explicitly.
+_REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
+if str(_REPOSITORY_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPOSITORY_ROOT))
 
 try:
     from scripts.render_hourly_portfolio_report_legacy import *  # noqa: F401,F403
