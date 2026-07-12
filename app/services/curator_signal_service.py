@@ -9,6 +9,9 @@ from app.curator_ensemble_client import (
     validate_shadow_ensemble_contract,
 )
 from app.resilient_client import AgentUnavailable
+from app.services.curator_observation_service import (
+    persist_curator_observations_best_effort,
+)
 
 
 def _env_bool(name: str, default: bool = False) -> bool:
@@ -163,6 +166,7 @@ async def enrich_payloads_with_curator_signals(
     When shadow ensemble is disabled, this preserves the legacy advisory-only
     behavior. When enabled and required, only payloads with a valid Curator
     contract, BUY consensus, and sufficient agreement are returned downstream.
+    Observation persistence is best-effort and never changes the gate decision.
     """
     enriched: List[Dict[str, Any]] = []
     curator_signals: List[Dict[str, Any]] = []
@@ -213,4 +217,8 @@ async def enrich_payloads_with_curator_signals(
             continue
         enriched.append(updated)
 
+    await persist_curator_observations_best_effort(
+        curator_signals,
+        correlation_id=correlation_id,
+    )
     return enriched, curator_signals
