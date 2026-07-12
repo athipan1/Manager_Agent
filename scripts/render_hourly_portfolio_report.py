@@ -1,3 +1,4 @@
+import importlib.util
 from pathlib import Path
 import sys
 from typing import Any, Dict, List
@@ -16,7 +17,38 @@ except ModuleNotFoundError:
     from render_hourly_portfolio_report_legacy import *  # type: ignore # noqa: F401,F403
     import render_hourly_portfolio_report_legacy as _legacy  # type: ignore
 
-from app.services.curator_observability import summarize_curator_signals
+def _load_curator_summarizer():
+    """Load the pure report helper without requiring the FastAPI runtime.
+
+    The hourly workflow renders reports on the GitHub runner after the trading
+    stack has finished.  That runner intentionally does not install the
+    Manager application dependencies, so importing ``app.services`` would run
+    ``app/__init__.py`` and fail when FastAPI is unavailable.  The observability
+    module itself only uses the Python standard library and is safe to load
+    directly in that environment.
+    """
+    try:
+        from app.services.curator_observability import summarize_curator_signals
+
+        return summarize_curator_signals
+    except ModuleNotFoundError as exc:
+        if exc.name != "fastapi":
+            raise
+
+    module_path = _REPOSITORY_ROOT / "app" / "services" / "curator_observability.py"
+    spec = importlib.util.spec_from_file_location(
+        "manager_curator_observability_report_helper",
+        module_path,
+    )
+    if spec is None or spec.loader is None:
+        raise ImportError(f"unable to load curator report helper from {module_path}")
+
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module.summarize_curator_signals
+
+
+summarize_curator_signals = _load_curator_summarizer()
 
 
 _legacy_render_curator_signals = _legacy.render_curator_signals
