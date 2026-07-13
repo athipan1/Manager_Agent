@@ -24,6 +24,9 @@ from ..models import DiscoverAnalyzeTradeRequest
 from ..resilient_client import AgentUnavailable
 from ..scanner_client import ScannerAgentClient
 from ..services.audit_service import audit_trade_decision, persist_signal
+from ..services.backtest_execution_gate import (
+    filter_candidates_with_backtest_gate,
+)
 from ..services.context_service import fetch_context_value, fetch_session_risk_contexts
 from ..services.curator_observation_persistence import persist_curator_observations
 from ..services.curator_signal_service import enrich_payloads_with_curator_signals
@@ -69,6 +72,28 @@ def exposure_gate_blocked_execution(
         "reason": (
             "No candidate has verified remaining exposure capacity and "
             "operational safety."
+        ),
+        "rejected_candidates": rejected,
+        "rejection_codes": sorted(
+            {
+                code
+                for row in rejected
+                for code in (row.get("rejection_codes") or [])
+            }
+        ),
+    }
+
+
+def backtest_gate_blocked_execution(
+    gate_result: Dict[str, Any],
+) -> Dict[str, Any]:
+    """Return a stable execution result when Backtest evidence is missing."""
+    rejected = gate_result.get("rejected") or []
+    return {
+        "status": "blocked_by_backtest_gate",
+        "reason": (
+            "No exposure-approved candidate has an exact, fresh, passing "
+            "Backtest result for its symbol, strategy, and timeframe."
         ),
         "rejected_candidates": rejected,
         "rejection_codes": sorted(
@@ -199,6 +224,33 @@ async def run_gated_discover_analyze_trade_flow(
             ]
             gate_by_symbol = gate_decision_by_symbol(exposure_gate)
 
+            pre_backtest_selected_positions = selected_positions
+            pre_backtest_payloads = position_analysis_payloads
+            backtest_execution_gate = (
+                await filter_candidates_with_backtest_gate(
+                    db_client=db_client,
+                    selected_positions=pre_backtest_selected_positions,
+                    position_analysis_payloads=pre_backtest_payloads,
+                    correlation_id=correlation_id,
+                    required=config.BACKTEST_EXECUTION_GATE_REQUIRED,
+                    skill_id=config.BACKTEST_GATE_SKILL_ID,
+                    strategy_id=config.BACKTEST_GATE_STRATEGY_ID,
+                    timeframe=config.BACKTEST_GATE_TIMEFRAME,
+                    max_age_hours=config.BACKTEST_GATE_MAX_AGE_HOURS,
+                )
+            )
+            selected_positions = backtest_execution_gate[
+                "selected_positions"
+            ]
+            position_analysis_payloads = backtest_execution_gate[
+                "position_analysis_payloads"
+            ]
+            backtest_gate_by_symbol = {
+                str(row.get("symbol") or "").upper(): row
+                for row in backtest_execution_gate.get("decisions") or []
+                if row.get("symbol")
+            }
+
             (
                 position_analysis_payloads,
                 curator_signals,
@@ -277,6 +329,18 @@ async def run_gated_discover_analyze_trade_flow(
                         "exposure_gate_rejection_codes": (
                             gate.get("rejection_codes") if gate else []
                         ),
+                        "backtest_gate_allowed": (
+                            backtest_gate_by_symbol.get(symbol, {}).get(
+                                "allowed"
+                            )
+                            if symbol in pre_gate_selected_symbols
+                            else None
+                        ),
+                        "backtest_gate_rejection_codes": (
+                            backtest_gate_by_symbol.get(symbol, {}).get(
+                                "rejection_codes", []
+                            )
+                        ),
                         "skipped_existing_protected_position": (
                             symbol in skipped_protected_symbols
                         ),
@@ -290,9 +354,13 @@ async def run_gated_discover_analyze_trade_flow(
             )
 
             if request.execute and pre_gate_payloads:
-                if not position_analysis_payloads:
+                if not pre_backtest_payloads:
                     execution_result = exposure_gate_blocked_execution(
                         exposure_gate
+                    )
+                elif not position_analysis_payloads:
+                    execution_result = backtest_gate_blocked_execution(
+                        backtest_execution_gate
                     )
                 elif risk_position_analysis_payloads:
                     risk_approvals = evaluate_portfolio_risk(
@@ -373,6 +441,22 @@ async def run_gated_discover_analyze_trade_flow(
                             ),
                             "exposure_gate": gate,
                         }
+                    elif not backtest_gate_by_symbol.get(symbol, {}).get(
+                        "allowed", False
+                    ):
+                        backtest_gate = backtest_gate_by_symbol.get(
+                            symbol, {}
+                        )
+                        decision = {
+                            "approved": False,
+                            "symbol": symbol,
+                            "status": "blocked_by_backtest_gate",
+                            "reason": ",".join(
+                                backtest_gate.get("rejection_codes") or []
+                            ),
+                            "exposure_gate": gate,
+                            "backtest_gate": backtest_gate,
+                        }
                     elif symbol in skipped_protected_symbols:
                         decision = {
                             "approved": False,
@@ -442,8 +526,12 @@ async def run_gated_discover_analyze_trade_flow(
             "allocation_plan": allocation_report.get("allocation_plan"),
             "bucket_selection": allocation_report.get("bucket_selection"),
             "pre_gate_selected_positions": pre_gate_selected_positions,
+            "pre_backtest_selected_positions": (
+                pre_backtest_selected_positions
+            ),
             "selected_positions": selected_positions,
             "exposure_gate": exposure_gate,
+            "backtest_execution_gate": backtest_execution_gate,
             "skipped_existing_protected_positions": (
                 skipped_existing_protected_positions
             ),
@@ -467,6 +555,18 @@ async def run_gated_discover_analyze_trade_flow(
                 "exposure_gate_global_new_entry_blocked": (
                     exposure_gate.get("summary") or {}
                 ).get("global_new_entry_blocked", False),
+                "selected_before_backtest_gate": len(
+                    pre_backtest_selected_positions
+                ),
+                "backtest_gate_required": (
+                    backtest_execution_gate.get("required", False)
+                ),
+                "backtest_gate_allowed_positions": (
+                    backtest_execution_gate.get("summary") or {}
+                ).get("allowed_count", 0),
+                "backtest_gate_rejected_positions": (
+                    backtest_execution_gate.get("summary") or {}
+                ).get("rejected_count", 0),
                 "approved_positions": len(approved_positions),
                 "rejected_positions": (
                     len(risk_approvals) - len(approved_positions)
@@ -515,6 +615,15 @@ async def run_gated_discover_analyze_trade_flow(
                 ).get("allowed_count", 0),
                 "exposure_gate_rejected_count": (
                     exposure_gate.get("summary") or {}
+                ).get("rejected_count", 0),
+                "backtest_gate_required": (
+                    backtest_execution_gate.get("required", False)
+                ),
+                "backtest_gate_allowed_count": (
+                    backtest_execution_gate.get("summary") or {}
+                ).get("allowed_count", 0),
+                "backtest_gate_rejected_count": (
+                    backtest_execution_gate.get("summary") or {}
                 ).get("rejected_count", 0),
             },
         )
