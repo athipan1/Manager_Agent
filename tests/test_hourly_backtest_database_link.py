@@ -19,9 +19,7 @@ def test_backtest_publishes_to_database_container_and_fails_closed():
     text = workflow_text()
     assert "DATABASE_AGENT_URL: http://localhost:8004" in text
     assert 'PUBLISH_TO_DATABASE: "true"' in text
-    assert "report.get(\"published\") is not True" in text
-    assert 'report.get("publish_status") != "success"' in text
-    assert 'database_response.get("status") != "success"' in text
+    assert "python scripts/verify_backtest_publish.py reports/hourly-backtest-result.json" in text
 
 
 def test_database_container_and_backtest_use_the_same_api_key():
@@ -31,5 +29,5 @@ def test_database_container_and_backtest_use_the_same_api_key():
 
 def test_backtest_report_is_uploaded_with_hourly_reports():
     text = workflow_text()
-    assert 'Path("reports/hourly-backtest-result.json")' in text
+    assert "verify_backtest_publish.py reports/hourly-backtest-result.json" in text
     assert "path: Manager_Agent/reports/" in text
