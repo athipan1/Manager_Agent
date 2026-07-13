@@ -1,6 +1,7 @@
 import os
 from typing import List, Any, Dict, Union, Type, TypeVar, Optional
 from decimal import Decimal
+from urllib.parse import quote
 from pydantic import BaseModel
 
 from .contracts import (
@@ -185,6 +186,32 @@ class DatabaseAgentClient(ResilientAgentClient):
 
     async def get_broker_sync_status(self, account_id: Union[int, str], correlation_id: str) -> Dict[str, Any]:
         response_data = await self._get(DatabaseEndpoints.BROKER_SYNC_STATUS, correlation_id, params={"account_id": account_id})
+        standard_resp = self.validate_standard_response(response_data)
+        return _coerce_dict(standard_resp.data)
+
+    async def get_skill_backtest_status(
+        self,
+        skill_id: str,
+        correlation_id: str,
+    ) -> Dict[str, Any]:
+        encoded_skill_id = quote(str(skill_id), safe="")
+        response_data = await self._get(
+            f"/skills/{encoded_skill_id}/backtest-status",
+            correlation_id,
+        )
+        standard_resp = self.validate_standard_response(response_data)
+        return _coerce_dict(standard_resp.data)
+
+    async def get_backtest_run(
+        self,
+        run_id: str,
+        correlation_id: str,
+    ) -> Dict[str, Any]:
+        encoded_run_id = quote(str(run_id), safe="")
+        response_data = await self._get(
+            f"/backtests/runs/{encoded_run_id}",
+            correlation_id,
+        )
         standard_resp = self.validate_standard_response(response_data)
         return _coerce_dict(standard_resp.data)
 

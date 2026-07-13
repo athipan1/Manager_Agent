@@ -31,3 +31,17 @@ def test_backtest_report_is_uploaded_with_hourly_reports():
     text = workflow_text()
     assert "verify_backtest_publish.py reports/hourly-backtest-result.json" in text
     assert "path: Manager_Agent/reports/" in text
+
+
+def test_hourly_workflow_requires_exact_backtest_execution_gate():
+    text = workflow_text()
+    compose = Path("docker-compose.yml").read_text(encoding="utf-8")
+
+    assert 'BACKTEST_EXECUTION_GATE_REQUIRED: "true"' in text
+    assert "BACKTEST_GATE_SKILL_ID: hourly-sma-crossover" in text
+    assert "BACKTEST_GATE_STRATEGY_ID: hourly-sma-crossover" in text
+    assert "BACKTEST_GATE_TIMEFRAME: 1d" in text
+    assert (
+        "BACKTEST_EXECUTION_GATE_REQUIRED: "
+        "${BACKTEST_EXECUTION_GATE_REQUIRED:-false}"
+    ) in compose
