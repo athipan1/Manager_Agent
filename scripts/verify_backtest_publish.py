@@ -14,6 +14,32 @@ def unwrap_backtest_report(report: Dict[str, Any]) -> Dict[str, Any]:
 
 def verify_backtest_publish(report: Dict[str, Any]) -> Dict[str, Any]:
     data = unwrap_backtest_report(report)
+    items = data.get("items")
+    if isinstance(items, list):
+        if not items:
+            raise ValueError("Backtest batch contained no symbols")
+        failures = [
+            item
+            for item in items
+            if item.get("status") != "success"
+            or item.get("published") is not True
+            or item.get("publish_status") != "success"
+            or (item.get("database_response") or {}).get("status")
+            != "success"
+        ]
+        if (
+            data.get("all_succeeded") is not True
+            or data.get("published") is not True
+            or data.get("publish_status") != "success"
+            or data.get("published_count") != len(items)
+            or failures
+        ):
+            raise ValueError(
+                "One or more batch Backtests were not stored in "
+                f"Database_Agent: failures={failures}"
+            )
+        return data
+
     published = data.get("published")
     publish_status = data.get("publish_status")
     if published is not True or publish_status != "success":
@@ -41,12 +67,19 @@ def main() -> None:
     except ValueError as exc:
         raise SystemExit(str(exc)) from exc
 
-    result = data.get("result") or {}
-    print(
-        "Backtest stored successfully: "
-        f"strategy={result.get('strategy')} symbols={result.get('symbols')} "
-        f"trade_count={(result.get('metrics') or {}).get('trade_count')}"
-    )
+    if isinstance(data.get("items"), list):
+        print(
+            "Batch Backtests stored successfully: "
+            f"symbols={data.get('succeeded_symbols')} "
+            f"published_count={data.get('published_count')}"
+        )
+    else:
+        result = data.get("result") or {}
+        print(
+            "Backtest stored successfully: "
+            f"strategy={result.get('strategy')} symbols={result.get('symbols')} "
+            f"trade_count={(result.get('metrics') or {}).get('trade_count')}"
+        )
 
 
 if __name__ == "__main__":

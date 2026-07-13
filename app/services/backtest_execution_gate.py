@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
@@ -38,7 +39,6 @@ def _decision(
     *,
     symbol: str,
     required: bool,
-    status: Dict[str, Any],
     detail: Dict[str, Any],
     skill_id: str,
     strategy_id: str,
@@ -48,7 +48,12 @@ def _decision(
     lookup_error: Optional[str],
 ) -> Dict[str, Any]:
     run = detail.get("run") if isinstance(detail.get("run"), dict) else {}
-    latest_run_id = status.get("latest_run_id")
+    skill_result = (
+        detail.get("skill_result")
+        if isinstance(detail.get("skill_result"), dict)
+        else {}
+    )
+    latest_run_id = run.get("run_id")
     reasons: List[str] = []
 
     if not required:
@@ -65,7 +70,7 @@ def _decision(
         reasons.append("backtest_lookup_failed")
     if not latest_run_id:
         reasons.append("backtest_not_found")
-    if not bool(status.get("passed", False)):
+    if not bool(skill_result.get("passed", False)):
         reasons.append("backtest_not_passed")
     if latest_run_id and not run:
         reasons.append("backtest_run_detail_missing")
@@ -84,7 +89,7 @@ def _decision(
         timestamp = _parse_timestamp(
             run.get("updated_at")
             or run.get("created_at")
-            or status.get("updated_at")
+            or skill_result.get("updated_at")
         )
         if max_age_hours > 0:
             if timestamp is None:
@@ -102,7 +107,7 @@ def _decision(
         "allowed": not reasons,
         "rejection_codes": sorted(set(reasons)),
         "latest_run_id": latest_run_id,
-        "backtest_passed": bool(status.get("passed", False)),
+        "backtest_passed": bool(skill_result.get("passed", False)),
         "run_symbol": run.get("symbol"),
         "run_strategy_id": run.get("strategy_id"),
         "run_timeframe": run.get("timeframe"),
@@ -123,29 +128,40 @@ async def filter_candidates_with_backtest_gate(
     max_age_hours: float,
     now: Optional[datetime] = None,
 ) -> Dict[str, Any]:
-    """Keep only candidates covered by the exact latest passing Backtest run.
+    """Keep candidates covered by their own exact latest passing Backtest.
 
-    Database_Agent currently exposes one latest run per skill. Therefore the
-    latest run must match every execution candidate explicitly; a passing run
-    for another symbol, strategy, or timeframe never authorizes an order.
+    Each candidate is looked up by the complete execution-evidence identity.
+    Missing, failed, stale, or mismatched evidence blocks only that symbol and
+    can never fall back to another symbol's passing run.
     """
-    status: Dict[str, Any] = {}
-    detail: Dict[str, Any] = {}
-    lookup_error: Optional[str] = None
-    if required:
+    symbols = list(
+        dict.fromkeys(
+            _symbol(position)
+            for position in selected_positions
+            if _symbol(position)
+        )
+    )
+    evidence_by_symbol: Dict[str, Dict[str, Any]] = {
+        symbol: {} for symbol in symbols
+    }
+    lookup_errors: Dict[str, str] = {}
+
+    async def lookup(symbol: str) -> None:
         try:
-            status = await db_client.get_skill_backtest_status(
-                skill_id,
-                correlation_id,
-            )
-            latest_run_id = status.get("latest_run_id")
-            if latest_run_id:
-                detail = await db_client.get_backtest_run(
-                    str(latest_run_id),
-                    correlation_id,
+            evidence_by_symbol[symbol] = (
+                await db_client.get_latest_exact_backtest_run(
+                    skill_id=skill_id,
+                    strategy_id=strategy_id,
+                    symbol=symbol,
+                    timeframe=timeframe,
+                    correlation_id=correlation_id,
                 )
+            )
         except Exception as exc:
-            lookup_error = str(exc)
+            lookup_errors[symbol] = str(exc)
+
+    if required and symbols:
+        await asyncio.gather(*(lookup(symbol) for symbol in symbols))
 
     current = now or datetime.now(timezone.utc)
     if current.tzinfo is None:
@@ -156,14 +172,13 @@ async def filter_candidates_with_backtest_gate(
         _decision(
             symbol=_symbol(position),
             required=required,
-            status=status,
-            detail=detail,
+            detail=evidence_by_symbol.get(_symbol(position), {}),
             skill_id=skill_id,
             strategy_id=strategy_id,
             timeframe=timeframe,
             max_age_hours=max_age_hours,
             now=current,
-            lookup_error=lookup_error,
+            lookup_error=lookup_errors.get(_symbol(position)),
         )
         for position in selected_positions
         if _symbol(position)
@@ -187,8 +202,20 @@ async def filter_candidates_with_backtest_gate(
         "strategy_id": strategy_id,
         "timeframe": timeframe,
         "max_age_hours": max_age_hours,
-        "latest_run_id": status.get("latest_run_id"),
-        "lookup_error": lookup_error,
+        "latest_run_id": (
+            decisions[0].get("latest_run_id")
+            if len(decisions) == 1
+            else None
+        ),
+        "latest_run_ids": {
+            row["symbol"]: row.get("latest_run_id") for row in decisions
+        },
+        "lookup_error": (
+            next(iter(lookup_errors.values()))
+            if len(lookup_errors) == 1
+            else None
+        ),
+        "lookup_errors": lookup_errors,
         "selected_positions": allowed_positions,
         "position_analysis_payloads": allowed_payloads,
         "decisions": decisions,

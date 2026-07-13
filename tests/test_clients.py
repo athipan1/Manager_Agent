@@ -136,3 +136,41 @@ async def test_database_client_create_order(mock_config):
     assert response.status == OrderStatus.PENDING
     assert response.order_id == str(mock_order_id)
     assert response.client_order_id == client_order_id
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_database_client_gets_latest_exact_backtest_run(mock_config):
+    client = DatabaseAgentClient()
+    route = respx.get(f"{DATABASE_AGENT_URL}/backtests/runs/latest").mock(
+        return_value=Response(
+            200,
+            json={
+                "status": "success",
+                "agent_type": "database",
+                "version": "1.0",
+                "timestamp": datetime.datetime.now().isoformat(),
+                "data": {
+                    "run": {"run_id": "run-aapl", "symbol": "AAPL"},
+                    "skill_result": {"passed": True},
+                },
+            },
+        )
+    )
+
+    result = await client.get_latest_exact_backtest_run(
+        skill_id="hourly-sma-crossover",
+        strategy_id="hourly-sma-crossover",
+        symbol="aapl",
+        timeframe="1d",
+        correlation_id="exact-lookup-test",
+    )
+
+    assert result["run"]["run_id"] == "run-aapl"
+    assert route.called
+    assert dict(route.calls[0].request.url.params) == {
+        "skill_id": "hourly-sma-crossover",
+        "strategy_id": "hourly-sma-crossover",
+        "symbol": "AAPL",
+        "timeframe": "1d",
+    }

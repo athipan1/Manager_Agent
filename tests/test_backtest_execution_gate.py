@@ -10,18 +10,24 @@ NOW = datetime(2026, 7, 13, 12, tzinfo=timezone.utc)
 
 
 class FakeDatabaseClient:
-    def __init__(self, *, status=None, detail=None, error=None):
-        self.status = status or {}
-        self.detail = detail or {}
+    def __init__(self, *, details=None, error=None):
+        self.details = details or {}
         self.error = error
+        self.calls = []
 
-    async def get_skill_backtest_status(self, skill_id, correlation_id):
+    async def get_latest_exact_backtest_run(
+        self,
+        *,
+        skill_id,
+        strategy_id,
+        symbol,
+        timeframe,
+        correlation_id,
+    ):
+        self.calls.append((skill_id, strategy_id, symbol, timeframe))
         if self.error:
             raise self.error
-        return self.status
-
-    async def get_backtest_run(self, run_id, correlation_id):
-        return self.detail
+        return self.details.get(symbol, {})
 
 
 def payloads(*symbols):
@@ -50,21 +56,19 @@ def evaluate(client, *symbols, required=True):
 
 def passing_client(*, symbol="AAPL", strategy_id="hourly-sma-crossover"):
     return FakeDatabaseClient(
-        status={
-            "passed": True,
-            "latest_run_id": "run-1",
-            "updated_at": NOW.isoformat(),
-        },
-        detail={
-            "run": {
-                "run_id": "run-1",
-                "status": "completed",
-                "skill_id": "hourly-sma-crossover",
-                "strategy_id": strategy_id,
-                "symbol": symbol,
-                "timeframe": "1d",
-                "updated_at": NOW.isoformat(),
-            }
+        details={
+            symbol: {
+                "run": {
+                    "run_id": f"run-{symbol.lower()}",
+                    "status": "completed",
+                    "skill_id": "hourly-sma-crossover",
+                    "strategy_id": strategy_id,
+                    "symbol": symbol,
+                    "timeframe": "1d",
+                    "updated_at": NOW.isoformat(),
+                },
+                "skill_result": {"passed": True},
+            },
         },
     )
 
@@ -85,18 +89,29 @@ def test_disabled_gate_preserves_all_candidates_without_database_evidence():
     }
 
 
-def test_required_gate_accepts_only_exact_latest_passing_run():
-    result = evaluate(passing_client(symbol="AAPL"), "AAPL", "MSFT")
+def test_required_gate_accepts_each_independent_exact_latest_passing_run():
+    client = passing_client(symbol="AAPL")
+    client.details.update(passing_client(symbol="MSFT").details)
+    result = evaluate(client, "AAPL", "MSFT")
 
-    assert [row["symbol"] for row in result["selected_positions"]] == ["AAPL"]
-    rejected = result["rejected"][0]
-    assert rejected["symbol"] == "MSFT"
-    assert "backtest_symbol_mismatch" in rejected["rejection_codes"]
+    assert [row["symbol"] for row in result["selected_positions"]] == [
+        "AAPL",
+        "MSFT",
+    ]
+    assert result["rejected"] == []
+    assert client.calls == [
+        ("hourly-sma-crossover", "hourly-sma-crossover", "AAPL", "1d"),
+        ("hourly-sma-crossover", "hourly-sma-crossover", "MSFT", "1d"),
+    ]
+    assert result["latest_run_ids"] == {
+        "AAPL": "run-aapl",
+        "MSFT": "run-msft",
+    }
 
 
 def test_required_gate_blocks_failed_or_missing_result():
     result = evaluate(
-        FakeDatabaseClient(status={"passed": False, "latest_run_id": None}),
+        FakeDatabaseClient(),
         "AAPL",
     )
 
@@ -120,9 +135,22 @@ def test_required_gate_blocks_strategy_mismatch():
     )
 
 
+def test_required_gate_blocks_cross_symbol_evidence():
+    client = passing_client(symbol="AAPL")
+    client.details["MSFT"] = client.details.pop("AAPL")
+
+    result = evaluate(client, "MSFT")
+
+    assert result["summary"]["allowed_count"] == 0
+    assert (
+        "backtest_symbol_mismatch"
+        in result["rejected"][0]["rejection_codes"]
+    )
+
+
 def test_required_gate_blocks_stale_result_and_lookup_failure():
     stale = passing_client()
-    stale.detail["run"]["updated_at"] = (
+    stale.details["AAPL"]["run"]["updated_at"] = (
         NOW - timedelta(hours=27)
     ).isoformat()
     stale_result = evaluate(stale, "AAPL")
