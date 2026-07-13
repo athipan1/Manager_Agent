@@ -232,7 +232,10 @@ async def run_gated_discover_analyze_trade_flow(
                     selected_positions=pre_backtest_selected_positions,
                     position_analysis_payloads=pre_backtest_payloads,
                     correlation_id=correlation_id,
-                    required=config.BACKTEST_EXECUTION_GATE_REQUIRED,
+                    required=(
+                        config.BACKTEST_EXECUTION_GATE_REQUIRED
+                        and request.execute
+                    ),
                     skill_id=config.BACKTEST_GATE_SKILL_ID,
                     strategy_id=config.BACKTEST_GATE_STRATEGY_ID,
                     timeframe=config.BACKTEST_GATE_TIMEFRAME,

@@ -22,6 +22,25 @@ def test_backtest_publishes_to_database_container_and_fails_closed():
     assert "python scripts/verify_backtest_publish.py reports/hourly-backtest-result.json" in text
 
 
+def test_hourly_flow_scans_then_batch_backtests_then_executes_with_exact_gate():
+    text = workflow_text()
+    scanner = text.index("Run Scanner preselection for batch Backtest")
+    batch = text.index(
+        "Run batch Backtest and publish to in-stack Database Agent"
+    )
+    execution = text.index(
+        "Run hourly portfolio discovery, risk checks, execution, and broker snapshot"
+    )
+
+    assert scanner < batch < execution
+    assert "python scripts/run_scanner_preselection.py" in text
+    assert (
+        "BACKTEST_SYMBOLS: "
+        "${{ steps.scanner_preselection.outputs.backtest_symbols }}"
+    ) in text
+    assert "BACKTEST_SYMBOL: ${{ vars.BACKTEST_SYMBOL" not in text
+
+
 def test_database_container_and_backtest_use_the_same_api_key():
     compose = Path("docker-compose.yml").read_text(encoding="utf-8")
     assert "DATABASE_AGENT_API_KEY: ${DATABASE_AGENT_API_KEY:-dev_database_key}" in compose

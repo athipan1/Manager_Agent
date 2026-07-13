@@ -215,6 +215,29 @@ class DatabaseAgentClient(ResilientAgentClient):
         standard_resp = self.validate_standard_response(response_data)
         return _coerce_dict(standard_resp.data)
 
+    async def get_latest_exact_backtest_run(
+        self,
+        *,
+        skill_id: str,
+        strategy_id: str,
+        symbol: str,
+        timeframe: str,
+        correlation_id: str,
+    ) -> Dict[str, Any]:
+        """Return newest Backtest evidence for one exact execution identity."""
+        response_data = await self._get(
+            "/backtests/runs/latest",
+            correlation_id,
+            params={
+                "skill_id": skill_id,
+                "strategy_id": strategy_id,
+                "symbol": symbol.upper(),
+                "timeframe": timeframe,
+            },
+        )
+        standard_resp = self.validate_standard_response(response_data)
+        return _coerce_dict(standard_resp.data)
+
     async def capture_broker_snapshot(self, broker_state: Dict[str, Any], correlation_id: str) -> Dict[str, Any]:
         response_data = await self._post(DatabaseEndpoints.BROKER_SYNC_SNAPSHOT, correlation_id, json_data=broker_state)
         standard_resp = self.validate_standard_response(response_data)

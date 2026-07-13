@@ -127,8 +127,6 @@ jobs:
 
       DATABASE_AGENT_API_KEY: ${{ secrets.DATABASE_AGENT_API_KEY || 'dev_database_key' }}
 
-      BACKTEST_SYMBOL: ${{ vars.BACKTEST_SYMBOL || 'AAPL' }}
-
       BACKTEST_SKILL_ID: ${{ vars.BACKTEST_SKILL_ID || 'hourly-sma-crossover' }}
 
       BACKTEST_STRATEGY_ID: ${{ vars.BACKTEST_STRATEGY_ID || 'hourly-sma-crossover' }}
@@ -525,9 +523,25 @@ jobs:
 
           python scripts/seed_curator_advisory_skill.py
 
-      - name: Run Backtest and publish to in-stack Database Agent
+      - name: Run Scanner preselection for batch Backtest
 
-        if: env.BACKTEST_ENABLED == 'true'
+        id: scanner_preselection
+
+        working-directory: Manager_Agent
+
+        run: |
+
+          mkdir -p reports
+
+          python scripts/run_scanner_preselection.py \
+            --output reports/hourly-pre-backtest-discovery.json \
+            --github-output "${GITHUB_OUTPUT}"
+
+      - name: Run batch Backtest and publish to in-stack Database Agent
+
+        if: >-
+          env.BACKTEST_ENABLED == 'true' &&
+          steps.scanner_preselection.outputs.backtest_symbols != ''
 
         working-directory: Manager_Agent
 
@@ -538,6 +552,8 @@ jobs:
           PUBLISH_TO_DATABASE: "true"
 
           BACKTEST_ACCOUNT_ID: "1"
+
+          BACKTEST_SYMBOLS: ${{ steps.scanner_preselection.outputs.backtest_symbols }}
 
         run: |
 
@@ -552,6 +568,8 @@ jobs:
           python -m pip install --disable-pip-version-check -r ../Backtest_Agent/requirements.txt
 
           mkdir -p reports
+
+          echo "Running exact Backtests for Scanner symbols: ${BACKTEST_SYMBOLS}"
 
           python ../Backtest_Agent/scripts/run_hourly_backtest.py > reports/hourly-backtest-console.json
 

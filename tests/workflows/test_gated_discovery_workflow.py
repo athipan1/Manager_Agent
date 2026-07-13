@@ -266,3 +266,29 @@ async def test_gated_flow_passes_allowed_candidate_to_portfolio_risk(
     assert payload["maximum_order_value"] > 0
     assert response.data["execution"]["status"] == "rejected"
     assert len(audits) == 1
+
+
+@pytest.mark.asyncio
+async def test_discovery_only_skips_execution_backtest_lookup(monkeypatch):
+    FakeDbClient.positions = []
+    FakeDbClient.orders = []
+    audits = []
+    persisted = []
+    _patch_common(monkeypatch, audits=audits, persisted=persisted)
+    monkeypatch.setattr(
+        "app.workflows.gated_discovery_workflow.config.BACKTEST_EXECUTION_GATE_REQUIRED",
+        True,
+    )
+
+    response = await run_gated_discover_analyze_trade_flow(
+        DiscoverAnalyzeTradeRequest(execute=False),
+    )
+
+    assert response.status == "success"
+    assert response.data["backtest_execution_gate"]["status"] == "disabled"
+    assert response.data["backtest_execution_gate"]["required"] is False
+    assert [
+        row["symbol"]
+        for row in response.data["pre_backtest_selected_positions"]
+    ] == ["AAPL"]
+    assert response.data["risk_approvals"] == []
