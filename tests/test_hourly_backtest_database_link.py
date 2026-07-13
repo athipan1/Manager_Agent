@@ -41,6 +41,15 @@ def test_hourly_flow_scans_then_batch_backtests_then_executes_with_exact_gate():
     assert "BACKTEST_SYMBOL: ${{ vars.BACKTEST_SYMBOL" not in text
 
 
+def test_hourly_scanner_preselection_can_reach_manager_from_runner():
+    text = workflow_text()
+    compose = Path("docker-compose.yml").read_text(encoding="utf-8")
+
+    assert '- "8000:80"' in compose
+    assert '- "8000:8000"' not in compose
+    assert "manager_host=$(curl -fsS http://localhost:8000/health" in text
+    assert "manager_host=$manager_host" in text
+
 def test_database_container_and_backtest_use_the_same_api_key():
     compose = Path("docker-compose.yml").read_text(encoding="utf-8")
     assert "DATABASE_AGENT_API_KEY: ${DATABASE_AGENT_API_KEY:-dev_database_key}" in compose
