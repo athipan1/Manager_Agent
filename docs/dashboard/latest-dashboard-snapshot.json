@@ -1,40 +1,127 @@
 {
   "schemaVersion": "dashboard-snapshot.v1",
-  "generatedAt": "2026-07-13T00:52:53.288187+00:00",
-  "mode": "SIMULATOR",
-  "brokerMode": "SIMULATOR",
+  "generatedAt": "2026-07-13T03:10:17.225904+00:00",
+  "mode": "ALPACA_PAPER",
+  "brokerMode": "ALPACA",
   "flow": "discover_analyze_trade",
   "account": {
-    "cash": 100000.0,
-    "equity": 100000.0,
-    "buyingPower": 100000.0,
+    "cash": 42211.67,
+    "equity": 104768.43,
+    "buyingPower": 344005.61,
     "status": "ACTIVE",
-    "mode": "SIMULATOR",
-    "lastSyncedAt": "2026-07-13T00:52:53.288187+00:00"
+    "mode": "ALPACA_PAPER",
+    "lastSyncedAt": "2026-07-13T03:10:17.225904+00:00"
   },
-  "positions": [],
-  "openOrders": [],
-  "curatorSignals": [
+  "positions": [
     {
       "symbol": "ACGL",
-      "status": "unavailable",
-      "skill": "Curator Signal",
-      "signal": "Client error '404 Not Found' for url 'http://curator-agent:8010/skills/shadow-ensemble'\nFor more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/404",
-      "confidence": 0.0
+      "quantity": 151.0,
+      "averageCost": 99.961457,
+      "currentPrice": 101.06,
+      "marketValue": 15260.06,
+      "unrealizedPnL": 165.879993,
+      "bucket": "unassigned",
+      "protection": {
+        "status": "partially_protected",
+        "hasStopLoss": false,
+        "hasTakeProfit": true,
+        "hasBracket": false
+      }
     },
     {
       "symbol": "ADBE",
-      "status": "unavailable",
-      "skill": "Curator Signal",
-      "signal": "Client error '404 Not Found' for url 'http://curator-agent:8010/skills/shadow-ensemble'\nFor more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/404",
-      "confidence": 0.0
+      "quantity": 102.0,
+      "averageCost": 210.697745,
+      "currentPrice": 223.36,
+      "marketValue": 22782.72,
+      "unrealizedPnL": 1291.55001,
+      "bucket": "unassigned",
+      "protection": {
+        "status": "partially_protected",
+        "hasStopLoss": false,
+        "hasTakeProfit": true,
+        "hasBracket": false
+      }
+    },
+    {
+      "symbol": "BKNG",
+      "quantity": 51.0,
+      "averageCost": 182.09,
+      "currentPrice": 177.98,
+      "marketValue": 9076.98,
+      "unrealizedPnL": -209.61,
+      "bucket": "unassigned",
+      "protection": {
+        "status": "bracket_protected",
+        "hasStopLoss": true,
+        "hasTakeProfit": true,
+        "hasBracket": true
+      }
+    },
+    {
+      "symbol": "CINF",
+      "quantity": 86.0,
+      "averageCost": 177.02,
+      "currentPrice": 179.5,
+      "marketValue": 15437.0,
+      "unrealizedPnL": 213.28,
+      "bucket": "unassigned",
+      "protection": {
+        "status": "partially_protected",
+        "hasStopLoss": false,
+        "hasTakeProfit": true,
+        "hasBracket": false
+      }
     }
   ],
+  "openOrders": [
+    {
+      "symbol": "BKNG",
+      "side": "sell",
+      "quantity": 51.0,
+      "orderClass": "oco",
+      "type": "limit",
+      "status": "accepted",
+      "takeProfit": 192.67,
+      "stopLoss": false
+    },
+    {
+      "symbol": "CINF",
+      "side": "sell",
+      "quantity": 86.0,
+      "orderClass": "bracket",
+      "type": "limit",
+      "status": "pending_cancel",
+      "takeProfit": 193.46,
+      "stopLoss": true
+    },
+    {
+      "symbol": "ADBE",
+      "side": "sell",
+      "quantity": 36.0,
+      "orderClass": "bracket",
+      "type": "limit",
+      "status": "pending_cancel",
+      "takeProfit": 262.02,
+      "stopLoss": true
+    },
+    {
+      "symbol": "ACGL",
+      "side": "sell",
+      "quantity": 54.0,
+      "orderClass": "bracket",
+      "type": "limit",
+      "status": "pending_cancel",
+      "takeProfit": 112.84,
+      "stopLoss": true
+    }
+  ],
+  "curatorSignals": [],
   "summary": {
-    "positionCount": 0,
-    "openOrderCount": 0,
-    "curatorSignalCount": 2,
-    "executionStatus": "submitted",
+    "positionCount": 4,
+    "openOrderCount": 4,
+    "curatorSignalCount": 0,
+    "executionStatus": null,
     "executionReason": null
   }
 }
