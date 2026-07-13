@@ -445,6 +445,8 @@ jobs:
 
             manager=$($compose exec -T manager-agent python /app/healthcheck.py >/dev/null && echo ok || echo wait)
 
+            manager_host=$(curl -fsS http://localhost:8000/health >/dev/null && echo ok || echo wait)
+
             fundamental=$(curl -fsS http://localhost:8001/health >/dev/null && echo ok || echo wait)
 
             technical=$(curl -fsS http://localhost:8002/health >/dev/null && echo ok || echo wait)
@@ -483,11 +485,11 @@ jobs:
 
           )
 
-            echo "health: manager=$manager fundamental=$fundamental technical=$technical scanner=$scanner database=$database learning=$learning risk=$risk performance=$performance execution=$execution curator=$curator manager_to_scanner=$manager_to_scanner manager_to_curator=$manager_to_curator"
+            echo "health: manager=$manager manager_host=$manager_host fundamental=$fundamental technical=$technical scanner=$scanner database=$database learning=$learning risk=$risk performance=$performance execution=$execution curator=$curator manager_to_scanner=$manager_to_scanner manager_to_curator=$manager_to_curator"
 
-            if [ "$manager$fundamental$technical$scanner$database$learning$risk$performance$execution$curator$manager_to_scanner$manager_to_curator" = "okokokokokokokokokokokok" ]; then
+            if [ "$manager$manager_host$fundamental$technical$scanner$database$learning$risk$performance$execution$curator$manager_to_scanner$manager_to_curator" = "okokokokokokokokokokokokok" ]; then
 
-              echo "All services are reachable, including manager-agent -> scanner-agent and manager-agent -> curator-agent."
+              echo "All services are reachable, including runner -> manager-agent, manager-agent -> scanner-agent, and manager-agent -> curator-agent."
 
               exit 0
 
