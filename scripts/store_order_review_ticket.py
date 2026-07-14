@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import sys
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -14,6 +15,58 @@ def unwrap_data(value: Any) -> Any:
     if isinstance(value, dict) and "data" in value:
         return value.get("data")
     return value
+
+
+def _error_text(value: Any) -> Optional[str]:
+    """Return the most useful human-readable error detail from nested JSON."""
+    if value is None:
+        return None
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return None
+        try:
+            decoded = json.loads(text)
+        except (TypeError, ValueError):
+            return text
+        return _error_text(decoded) or text
+    if isinstance(value, dict):
+        for key in ("message", "detail", "reason", "description"):
+            text = _error_text(value.get(key))
+            if text:
+                return text
+        for key in ("error", "details", "errors", "body"):
+            text = _error_text(value.get(key))
+            if text:
+                return text
+        if value:
+            return json.dumps(value, ensure_ascii=False, sort_keys=True, default=str)
+        return None
+    if isinstance(value, list):
+        parts = [text for item in value if (text := _error_text(item))]
+        return "; ".join(parts) if parts else None
+    return str(value)
+
+
+def manager_flow_failure(report: Dict[str, Any]) -> Optional[str]:
+    """Describe a failed Manager discovery response, or return None on success."""
+    response = report.get("response")
+    if not isinstance(response, dict):
+        return "Manager discover-analyze-trade response is missing or invalid."
+    if response.get("status") == "success":
+        return None
+
+    http_status = response.get("http_status")
+    detail = (
+        _error_text(response.get("body"))
+        or _error_text(response.get("error"))
+        or _error_text(response)
+        or "No error details provided."
+    )
+    prefix = "Manager discover-analyze-trade failed"
+    if http_status is not None:
+        prefix += f" (HTTP {http_status})"
+    return f"{prefix}: {detail}"
 
 
 def post_json(base_url: str, path: str, payload: Dict[str, Any], api_key: str | None = None, timeout: int = 30) -> Dict[str, Any]:
@@ -221,6 +274,28 @@ def parse_args() -> argparse.Namespace:
 def main() -> int:
     args = parse_args()
     report = json.loads(args.input_json.read_text(encoding="utf-8"))
+
+    failure_reason = manager_flow_failure(report)
+    if failure_reason:
+        validation = {
+            "status": "error",
+            "stage": "discover_analyze_trade",
+            "reason": failure_reason,
+            "store_skipped": True,
+        }
+        report["workflow_validation"] = validation
+        args.output_json.parent.mkdir(parents=True, exist_ok=True)
+        args.output_json.write_text(
+            json.dumps(validation, ensure_ascii=False, indent=2, default=str),
+            encoding="utf-8",
+        )
+        args.input_json.write_text(
+            json.dumps(report, ensure_ascii=False, indent=2, default=str),
+            encoding="utf-8",
+        )
+        print(json.dumps(validation, ensure_ascii=False, indent=2), file=sys.stderr)
+        return 1
+
     result = store_order_review_ticket(
         report,
         args.database_url,
