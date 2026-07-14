@@ -225,3 +225,35 @@ def test_render_hourly_portfolio_report_shows_curator_signals(tmp_path, monkeypa
     assert "hold" in output
     assert "0.55" in output
     assert "Curator advisory only" in output
+
+
+def test_render_hourly_portfolio_report_fails_on_manager_error_response(tmp_path, monkeypatch):
+    reports_dir = tmp_path / "reports"
+    reports_dir.mkdir()
+    report = {
+        "generated_at": "2026-07-14T17:48:30Z",
+        "mode": "SIMULATOR",
+        "broker_mode": "SIMULATOR",
+        "flow": "discover_analyze_trade",
+        "request": {"account_id": 1, "execute": True},
+        "response": {
+            "status": "error",
+            "http_status": 500,
+            "body": json.dumps({"detail": "Agent returned error status: Unknown error"}),
+        },
+        "broker_snapshot": {
+            "account": {"data": {"status": "ACTIVE", "cash": "100000.00", "equity": "100000.00"}},
+            "orders": {"data": []},
+            "positions": {"data": []},
+        },
+    }
+    (reports_dir / "hourly-auto-trading-report.json").write_text(json.dumps(report), encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+
+    assert main() == 1
+
+    output = (reports_dir / "hourly-auto-trading-report.md").read_text(encoding="utf-8")
+    assert "## Manager Workflow Failure" in output
+    assert "http_status=500" in output
+    assert "Agent returned error status: Unknown error" in output
+    assert "green false-positive" in output
