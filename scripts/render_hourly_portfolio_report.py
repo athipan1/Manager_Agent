@@ -1,7 +1,8 @@
 import importlib.util
+import json
 from pathlib import Path
 import sys
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 # GitHub Actions invokes this file as `python scripts/render_hourly_portfolio_report.py`.
 # In that execution mode Python puts `scripts/` on sys.path, not the repository
@@ -16,6 +17,7 @@ try:
 except ModuleNotFoundError:
     from render_hourly_portfolio_report_legacy import *  # type: ignore # noqa: F401,F403
     import render_hourly_portfolio_report_legacy as _legacy  # type: ignore
+
 
 def _load_curator_summarizer():
     """Load the pure report helper without requiring the FastAPI runtime.
@@ -271,9 +273,104 @@ def render_order_review_approval_ticket(
         lines.append("")
 
 
+def _status_is_http_error(value: Any) -> bool:
+    try:
+        return int(value) >= 400
+    except (TypeError, ValueError):
+        return False
+
+
+def _decode_error_body(body: Any) -> Optional[str]:
+    if body in (None, ""):
+        return None
+    if isinstance(body, (dict, list)):
+        return json.dumps(body, ensure_ascii=False, default=str)
+    text = str(body)
+    try:
+        decoded = json.loads(text)
+    except json.JSONDecodeError:
+        return text
+    if isinstance(decoded, dict):
+        for key in ("detail", "message", "reason", "error"):
+            value = decoded.get(key)
+            if value:
+                return str(value)
+    return json.dumps(decoded, ensure_ascii=False, default=str)
+
+
+def _manager_response_failure_message(raw: Dict[str, Any]) -> Optional[str]:
+    response = raw.get("response")
+    if not isinstance(response, dict):
+        return None
+
+    status = str(response.get("status") or "").lower()
+    http_status = response.get("http_status")
+    failed = status == "error" or _status_is_http_error(http_status)
+    if not failed:
+        return None
+
+    body_message = _decode_error_body(response.get("body"))
+    direct_error = response.get("error") or response.get("detail") or response.get("message")
+    detail = body_message or direct_error or "Unknown manager workflow error"
+    return (
+        "Manager /discover-analyze-trade failed "
+        f"with status={response.get('status', '-')} "
+        f"http_status={response.get('http_status', '-')}: {detail}"
+    )
+
+
+def _write_failure_report(raw: Dict[str, Any], output_path: Path, message: str) -> None:
+    lines = [
+        "# รายงานระบบเทรดอัตโนมัติรายชั่วโมง",
+        "",
+        "## Manager Workflow Failure",
+        f"- Generated at UTC: `{raw.get('generated_at', '-')}`",
+        f"- Mode: `{raw.get('mode', '-')}`",
+        f"- Broker Mode: `{raw.get('broker_mode', '-')}`",
+        f"- Flow: `{raw.get('flow', '-')}`",
+        f"- Failure: `{message}`",
+        "",
+        "### Request",
+        "```json",
+        json.dumps(raw.get("request") or {}, ensure_ascii=False, indent=2, default=str),
+        "```",
+        "",
+        "### Manager Response",
+        "```json",
+        json.dumps(raw.get("response") or {}, ensure_ascii=False, indent=2, default=str),
+        "```",
+        "",
+        "### Safety Note",
+        "Broker diagnostics and snapshots may still be present, but the core "
+        "discover/analyze/trade decision failed. The workflow must fail so "
+        "GitHub Actions captures container diagnostics instead of publishing a "
+        "green false-positive run.",
+        "",
+    ]
+    output_path.write_text("\n".join(lines), encoding="utf-8")
+
+
 _legacy.render_curator_signals = render_curator_signals
 _legacy.render_order_review_approval_ticket = render_order_review_approval_ticket
 
 
+def main() -> int:
+    report_path = Path("reports/hourly-auto-trading-report.json")
+    output_path = Path("reports/hourly-auto-trading-report.md")
+    if not report_path.exists():
+        print(f"missing {report_path}", file=sys.stderr)
+        return 1
+
+    raw = json.loads(report_path.read_text(encoding="utf-8"))
+    failure_message = _manager_response_failure_message(raw)
+    if failure_message:
+        _write_failure_report(raw, output_path, failure_message)
+        print(output_path.read_text(encoding="utf-8"))
+        print(failure_message, file=sys.stderr)
+        return 1
+
+    return _legacy.main()
+
+
 if __name__ == "__main__":
-    raise SystemExit(_legacy.main())
+    raise SystemExit(main())
