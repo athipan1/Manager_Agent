@@ -515,6 +515,8 @@ jobs:
 
       - name: Seed Curator advisory skill
 
+        if: env.CURATOR_AGENT_ENABLED == 'true'
+
         working-directory: Manager_Agent
 
         env:
@@ -523,7 +525,57 @@ jobs:
 
         run: |
 
-          python scripts/seed_curator_advisory_skill.py
+          mkdir -p reports
+
+          set +e
+
+          python scripts/seed_curator_advisory_skill.py | tee reports/curator-advisory-status.json
+
+          seed_status=${PIPESTATUS[0]}
+
+          set -e
+
+          if [ "${seed_status}" -eq 78 ]; then
+
+            echo "CURATOR_AGENT_ENABLED=false" >> "${GITHUB_ENV}"
+
+            export CURATOR_AGENT_ENABLED=false
+
+            echo "::warning title=Curator advisory disabled::Isolated sandbox unavailable; continuing this DRY_RUN Simulator workflow with Curator advisory disabled and process fallback forbidden."
+
+            compose="docker compose -f docker-compose.yml -f docker-compose.risk.yml -f docker-compose.curator.yml"
+
+            echo "Recreating manager-agent with CURATOR_AGENT_ENABLED=false."
+
+            $compose up -d --no-deps --force-recreate manager-agent
+
+            for i in {1..30}; do
+
+              if curl -fsS http://localhost:8000/health >/dev/null; then
+
+                echo "manager-agent is healthy with Curator advisory disabled."
+
+                exit 0
+
+              fi
+
+              sleep 2
+
+            done
+
+            echo "manager-agent did not become healthy after disabling Curator advisory."
+
+            exit 1
+
+          fi
+
+          if [ "${seed_status}" -ne 0 ]; then
+
+            echo "Curator advisory seed failed with exit code ${seed_status}; refusing unsafe continuation."
+
+            exit "${seed_status}"
+
+          fi
 
       - name: Run Scanner preselection for batch Backtest
 
