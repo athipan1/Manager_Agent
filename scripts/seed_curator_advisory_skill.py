@@ -11,6 +11,7 @@ from typing import Any, Dict
 
 CURATOR_AGENT_URL = os.getenv("CURATOR_AGENT_URL", "http://localhost:8010").rstrip("/")
 SKILL_NAME = "Manager Advisory Score Signal"
+SIMULATOR_CURATOR_DISABLED_EXIT_CODE = 78
 
 SKILL_CODE = """def manager_advisory_score_signal(symbol, analysis, ticker):
     score_breakdown = analysis.get("score_breakdown") or {}
@@ -61,6 +62,20 @@ def approved_skill_exists() -> bool:
     if not isinstance(skills, list):
         return False
     return any((skill or {}).get("name") == SKILL_NAME for skill in skills if isinstance(skill, dict))
+
+
+def _simulator_downgrade_allowed() -> bool:
+    dry_run = os.getenv("DRY_RUN", "").strip().lower() == "true"
+    broker_mode = os.getenv("BROKER_MODE", "").strip().upper()
+    return dry_run and broker_mode == "SIMULATOR"
+
+
+def _isolated_sandbox_unavailable(execution: Dict[str, Any]) -> bool:
+    return (
+        execution.get("execution_status") == "rejected_no_isolated_sandbox"
+        and execution.get("error") == "isolated_container_sandbox_required"
+        and execution.get("fallback_used") is False
+    )
 
 
 def main() -> int:
@@ -133,7 +148,37 @@ def main() -> int:
             },
         )
         execution = execute_response.get("data") or {}
+        if execution.get("fallback_used") is True:
+            print(
+                json.dumps(
+                    {
+                        "ok": False,
+                        "stage": "execute",
+                        "reason": "unisolated_process_fallback_rejected",
+                        "response": execute_response,
+                    },
+                    indent=2,
+                )
+            )
+            return 1
         if execution.get("execution_status") != "success":
+            if _isolated_sandbox_unavailable(execution) and _simulator_downgrade_allowed():
+                print(
+                    json.dumps(
+                        {
+                            "ok": True,
+                            "status": "curator_disabled_for_simulator",
+                            "reason": "isolated_container_sandbox_unavailable",
+                            "curator_agent_enabled": False,
+                            "dry_run": True,
+                            "broker_mode": "SIMULATOR",
+                            "fallback_used": False,
+                            "response": execute_response,
+                        },
+                        indent=2,
+                    )
+                )
+                return SIMULATOR_CURATOR_DISABLED_EXIT_CODE
             print(json.dumps({"ok": False, "stage": "execute", "response": execute_response}, indent=2))
             return 1
 
