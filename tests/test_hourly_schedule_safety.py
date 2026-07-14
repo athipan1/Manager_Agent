@@ -40,3 +40,24 @@ def test_hourly_schedule_has_fail_closed_runtime_assertion():
     assert '[ "${DRY_RUN}" != "true" ]' in workflow
     assert '[ "${BROKER_MODE}" != "SIMULATOR" ]' in workflow
     assert "Refusing scheduled run outside Simulator safety mode." in workflow
+
+
+def test_hourly_simulator_disables_curator_when_isolated_sandbox_is_unavailable():
+    workflow = _workflow_text()
+
+    assert "python scripts/seed_curator_advisory_skill.py | tee reports/curator-advisory-status.json" in workflow
+    assert 'seed_status=${PIPESTATUS[0]}' in workflow
+    assert 'if [ "${seed_status}" -eq 78 ]; then' in workflow
+    assert 'echo "CURATOR_AGENT_ENABLED=false" >> "${GITHUB_ENV}"' in workflow
+    assert "export CURATOR_AGENT_ENABLED=false" in workflow
+    assert "$compose up -d --no-deps --force-recreate manager-agent" in workflow
+    assert "manager-agent is healthy with Curator advisory disabled." in workflow
+    assert "process fallback forbidden" in workflow
+
+
+def test_hourly_curator_seed_keeps_non_downgrade_failures_fatal():
+    workflow = _workflow_text()
+
+    assert 'if [ "${seed_status}" -ne 0 ]; then' in workflow
+    assert "refusing unsafe continuation" in workflow
+    assert 'exit "${seed_status}"' in workflow
