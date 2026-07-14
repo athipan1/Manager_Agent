@@ -1,3 +1,4 @@
+import json
 import httpx
 import time
 import asyncio
@@ -13,9 +14,43 @@ from .config import (
 )
 from .logger import report_logger
 
+
+def _extract_agent_error_message(value: Any) -> str:
+    """Preserve useful upstream error details instead of collapsing to Unknown error."""
+    if value is None:
+        return "No error details provided"
+    if isinstance(value, str):
+        text = value.strip()
+        return text or "No error details provided"
+    if isinstance(value, dict):
+        for key in ("message", "detail", "reason", "description"):
+            if key in value:
+                detail = _extract_agent_error_message(value.get(key))
+                if detail != "No error details provided":
+                    return detail
+        for key in ("error", "details", "errors"):
+            if key in value:
+                detail = _extract_agent_error_message(value.get(key))
+                if detail != "No error details provided":
+                    return detail
+        if value:
+            return json.dumps(value, ensure_ascii=False, sort_keys=True, default=str)
+        return "No error details provided"
+    if isinstance(value, list):
+        details = [
+            detail
+            for item in value
+            if (detail := _extract_agent_error_message(item))
+            != "No error details provided"
+        ]
+        return "; ".join(details) if details else "No error details provided"
+    return str(value)
+
+
 class AgentUnavailable(Exception):
     """Custom exception raised when an Agent is unreachable or consistently failing."""
     pass
+
 
 class ResilientAgentClient:
     """
@@ -203,8 +238,10 @@ class ResilientAgentClient:
         try:
             standard_resp = StandardAgentResponse.model_validate(response_data)
             if standard_resp.status != "success":
-                error_msg = standard_resp.error.get("message", "Unknown error") if standard_resp.error else "No error message provided"
-                raise ValueError(f"Agent returned error status: {error_msg}")
+                error_msg = _extract_agent_error_message(standard_resp.error)
+                raise ValueError(
+                    f"Agent {standard_resp.agent_type} returned error status: {error_msg}"
+                )
             return standard_resp
         except Exception as e:
             report_logger.error(f"Response validation failed for {self.base_url}: {e}")
