@@ -1,7 +1,8 @@
-import httpx
-import time
 import asyncio
-from typing import List, Optional, Dict, Any, Type, TypeVar
+import time
+from typing import Any, Dict, List, Optional, Type, TypeVar
+
+import httpx
 
 from .contracts import StandardAgentResponse
 from .config import (
@@ -13,9 +14,60 @@ from .config import (
 )
 from .logger import report_logger
 
+
+def _compact_error_value(value: Any) -> Optional[str]:
+    if value in (None, "", [], {}):
+        return None
+    if isinstance(value, str):
+        return value
+    if isinstance(value, dict):
+        parts = []
+        for key in ("message", "detail", "reason", "code", "type"):
+            item = value.get(key)
+            if item not in (None, "", [], {}):
+                parts.append(f"{key}={item}")
+        if parts:
+            return "; ".join(parts)
+        return str(value)
+    if isinstance(value, list):
+        return "; ".join(str(item) for item in value[:5])
+    return str(value)
+
+
+def _agent_error_message(
+    response_data: Dict[str, Any],
+    standard_resp: StandardAgentResponse,
+) -> str:
+    candidates: List[Any] = [
+        standard_resp.error,
+        response_data.get("error"),
+        response_data.get("detail"),
+        response_data.get("message"),
+        response_data.get("reason"),
+    ]
+    data = response_data.get("data")
+    if isinstance(data, dict):
+        candidates.extend(
+            [
+                data.get("error"),
+                data.get("detail"),
+                data.get("message"),
+                data.get("reason"),
+                data.get("errors"),
+            ]
+        )
+
+    for candidate in candidates:
+        message = _compact_error_value(candidate)
+        if message:
+            return message
+    return "Unknown error"
+
+
 class AgentUnavailable(Exception):
     """Custom exception raised when an Agent is unreachable or consistently failing."""
     pass
+
 
 class ResilientAgentClient:
     """
@@ -203,7 +255,7 @@ class ResilientAgentClient:
         try:
             standard_resp = StandardAgentResponse.model_validate(response_data)
             if standard_resp.status != "success":
-                error_msg = standard_resp.error.get("message", "Unknown error") if standard_resp.error else "No error message provided"
+                error_msg = _agent_error_message(response_data, standard_resp)
                 raise ValueError(f"Agent returned error status: {error_msg}")
             return standard_resp
         except Exception as e:
