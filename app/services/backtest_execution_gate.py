@@ -7,6 +7,9 @@ from datetime import datetime, timezone
 from typing import Any, Dict, Iterable, List, Optional
 
 
+WALK_FORWARD_VALIDATION_PROFILE = "rolling_walk_forward_v1"
+
+
 def _symbol(value: Any) -> str:
     if isinstance(value, dict):
         return str(value.get("ticker") or value.get("symbol") or "").upper()
@@ -46,6 +49,7 @@ def _detail_timestamp(detail: Dict[str, Any]) -> datetime:
         run.get("updated_at")
         or run.get("created_at")
         or skill_result.get("updated_at")
+        or skill_result.get("created_at")
     )
     return parsed or datetime.min.replace(tzinfo=timezone.utc)
 
@@ -65,12 +69,7 @@ def _configured_strategy_ids(
     primary_strategy_id: str,
     strategy_ids: Optional[Iterable[str]],
 ) -> List[str]:
-    """Resolve the exact strategy identities accepted by the execution gate.
-
-    Passing an explicit empty iterable preserves the legacy single-strategy
-    behavior. When omitted, production configuration may enable the deterministic
-    multi-strategy suite published by Backtest_Agent.
-    """
+    """Resolve the exact strategy identities accepted by the execution gate."""
 
     if strategy_ids is not None:
         resolved = _deduplicated_strategy_ids(strategy_ids)
@@ -91,6 +90,99 @@ def _configured_strategy_ids(
     return _deduplicated_strategy_ids([primary_strategy_id])
 
 
+def _configured_walk_forward_required(value: Optional[bool]) -> bool:
+    if value is not None:
+        return value
+    try:
+        from .. import config
+
+        return bool(config.BACKTEST_WALK_FORWARD_GATE_REQUIRED)
+    except (AttributeError, ImportError):
+        return False
+
+
+def _is_not_found_error(exc: Exception) -> bool:
+    response = getattr(exc, "response", None)
+    if getattr(response, "status_code", None) == 404:
+        return True
+    text = str(exc).strip().lower()
+    return "404" in text and "not found" in text
+
+
+def _walk_forward_evidence(
+    run: Dict[str, Any],
+) -> tuple[Dict[str, Any], Dict[str, Any], Dict[str, Any]]:
+    metadata = run.get("metadata") if isinstance(run.get("metadata"), dict) else {}
+    validation = (
+        metadata.get("walk_forward_validation")
+        if isinstance(metadata.get("walk_forward_validation"), dict)
+        else {}
+    )
+    criteria = (
+        metadata.get("walk_forward_criteria")
+        if isinstance(metadata.get("walk_forward_criteria"), dict)
+        else {}
+    )
+    return metadata, validation, criteria
+
+
+def _walk_forward_rejection_codes(run: Dict[str, Any]) -> List[str]:
+    metadata, validation, criteria = _walk_forward_evidence(run)
+    reasons: List[str] = []
+
+    if (
+        metadata.get("validation_profile") != WALK_FORWARD_VALIDATION_PROFILE
+        or metadata.get("walk_forward_required") is not True
+        or not validation
+        or not criteria
+    ):
+        reasons.append("backtest_walk_forward_evidence_missing")
+
+    if (
+        metadata.get("walk_forward_passed") is not True
+        or validation.get("passed") is not True
+    ):
+        reasons.append("backtest_walk_forward_not_passed")
+
+    if (
+        metadata.get("walk_forward_status") != "completed"
+        or validation.get("status") != "completed"
+    ):
+        reasons.append("backtest_walk_forward_incomplete")
+
+    walk_forward_gates = (
+        validation.get("gates")
+        if isinstance(validation.get("gates"), dict)
+        else {}
+    )
+    selection_gates = (
+        metadata.get("selection_gates")
+        if isinstance(metadata.get("selection_gates"), dict)
+        else {}
+    )
+    if (
+        not walk_forward_gates
+        or not all(value is True for value in walk_forward_gates.values())
+        or not selection_gates
+        or not all(value is True for value in selection_gates.values())
+    ):
+        reasons.append("backtest_walk_forward_gates_failed")
+
+    evaluated_windows = validation.get("evaluated_windows")
+    minimum_windows = criteria.get("min_windows")
+    try:
+        window_count_valid = (
+            int(evaluated_windows) >= int(minimum_windows)
+            and int(minimum_windows) >= 1
+        )
+    except (TypeError, ValueError):
+        window_count_valid = False
+    if not window_count_valid:
+        reasons.append("backtest_walk_forward_window_count_invalid")
+
+    return reasons
+
+
 def _decision(
     *,
     symbol: str,
@@ -102,6 +194,7 @@ def _decision(
     max_age_hours: float,
     now: datetime,
     lookup_error: Optional[str],
+    walk_forward_required: bool,
 ) -> Dict[str, Any]:
     run = detail.get("run") if isinstance(detail.get("run"), dict) else {}
     skill_result = (
@@ -119,6 +212,7 @@ def _decision(
             "rejection_codes": [],
             "latest_run_id": latest_run_id,
             "strategy_id": strategy_id,
+            "walk_forward_required": walk_forward_required,
             "mode": "disabled",
         }
     if not skill_id or not strategy_id or not timeframe:
@@ -147,6 +241,7 @@ def _decision(
             run.get("updated_at")
             or run.get("created_at")
             or skill_result.get("updated_at")
+            or skill_result.get("created_at")
         )
         if max_age_hours > 0:
             if timestamp is None:
@@ -159,6 +254,10 @@ def _decision(
                 if age_hours > max_age_hours:
                     reasons.append("backtest_stale")
 
+        if walk_forward_required:
+            reasons.extend(_walk_forward_rejection_codes(run))
+
+    metadata, validation, criteria = _walk_forward_evidence(run)
     return {
         "symbol": symbol,
         "allowed": not reasons,
@@ -169,6 +268,14 @@ def _decision(
         "run_symbol": run.get("symbol"),
         "run_strategy_id": run.get("strategy_id"),
         "run_timeframe": run.get("timeframe"),
+        "walk_forward_required": walk_forward_required,
+        "walk_forward_passed": metadata.get("walk_forward_passed"),
+        "walk_forward_status": metadata.get("walk_forward_status"),
+        "walk_forward_stability_score": metadata.get(
+            "walk_forward_stability_score"
+        ),
+        "walk_forward_validation": validation or None,
+        "walk_forward_criteria": criteria or None,
         "mode": "required",
     }
 
@@ -178,6 +285,7 @@ def _combined_symbol_decision(
     symbol: str,
     attempts: List[Dict[str, Any]],
     details_by_strategy: Dict[str, Dict[str, Any]],
+    walk_forward_required: bool,
 ) -> Dict[str, Any]:
     allowed_attempts = [attempt for attempt in attempts if attempt.get("allowed")]
     if allowed_attempts:
@@ -220,6 +328,7 @@ def _combined_symbol_decision(
             attempt.get("strategy_id") for attempt in attempts
         ],
         "strategy_attempts": attempts,
+        "walk_forward_required": walk_forward_required,
         "mode": "required",
     }
 
@@ -237,15 +346,9 @@ async def filter_candidates_with_backtest_gate(
     max_age_hours: float,
     now: Optional[datetime] = None,
     strategy_ids: Optional[Iterable[str]] = None,
+    walk_forward_required: Optional[bool] = None,
 ) -> Dict[str, Any]:
-    """Keep candidates covered by their own exact latest passing Backtest.
-
-    Each candidate is looked up by the complete execution-evidence identity.
-    In multi-strategy mode the gate evaluates only the configured exact strategy
-    IDs, then accepts the newest fresh passing result for that symbol. Missing,
-    failed, stale, or mismatched evidence blocks only that symbol and can never
-    fall back to another symbol or to the legacy fixed strategy.
-    """
+    """Keep candidates covered by exact, fresh, validated Backtest evidence."""
 
     symbols = list(
         dict.fromkeys(
@@ -257,6 +360,9 @@ async def filter_candidates_with_backtest_gate(
     resolved_strategy_ids = _configured_strategy_ids(
         primary_strategy_id=strategy_id,
         strategy_ids=strategy_ids,
+    )
+    resolved_walk_forward_required = _configured_walk_forward_required(
+        walk_forward_required
     )
     evidence_by_key: Dict[tuple[str, str], Dict[str, Any]] = {
         (symbol, candidate_strategy_id): {}
@@ -277,7 +383,8 @@ async def filter_candidates_with_backtest_gate(
                 )
             )
         except Exception as exc:
-            lookup_errors_by_key[(symbol, candidate_strategy_id)] = str(exc)
+            if not _is_not_found_error(exc):
+                lookup_errors_by_key[(symbol, candidate_strategy_id)] = str(exc)
 
     if required and symbols:
         await asyncio.gather(
@@ -311,6 +418,7 @@ async def filter_candidates_with_backtest_gate(
                 lookup_error=lookup_errors_by_key.get(
                     (symbol, candidate_strategy_id)
                 ),
+                walk_forward_required=resolved_walk_forward_required,
             )
             for candidate_strategy_id in resolved_strategy_ids
         ]
@@ -327,6 +435,7 @@ async def filter_candidates_with_backtest_gate(
                     )
                     for candidate_strategy_id in resolved_strategy_ids
                 },
+                walk_forward_required=resolved_walk_forward_required,
             )
         )
 
@@ -365,6 +474,12 @@ async def filter_candidates_with_backtest_gate(
             for row in decisions
             if row.get("selected_strategy_id")
         },
+        "walk_forward_required": resolved_walk_forward_required,
+        "validation_profile": (
+            WALK_FORWARD_VALIDATION_PROFILE
+            if resolved_walk_forward_required
+            else None
+        ),
         "timeframe": timeframe,
         "max_age_hours": max_age_hours,
         "latest_run_id": (
