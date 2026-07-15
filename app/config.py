@@ -99,9 +99,12 @@ BACKTEST_GATE_STRATEGY_IDS = _env_csv(
     ),
 )
 
-# Pre-backtest investability guardrails. Disabled by default for generic/local
-# calls; the production Hourly workflow enables it explicitly.
-INVESTABILITY_GATE_ENABLED = _env_bool("INVESTABILITY_GATE_ENABLED", False)
+# Pre-backtest investability guardrails. Generic analysis remains unchanged, while
+# any path that requires the execution Backtest gate enables investability by default.
+INVESTABILITY_GATE_ENABLED = _env_bool(
+    "INVESTABILITY_GATE_ENABLED",
+    BACKTEST_EXECUTION_GATE_REQUIRED,
+)
 INVESTABILITY_MIN_PRICE_USD = float(
     os.getenv("INVESTABILITY_MIN_PRICE_USD", "3")
 )
