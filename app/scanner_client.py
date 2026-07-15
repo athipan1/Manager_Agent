@@ -4,6 +4,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from .config import SCANNER_AGENT_URL
 from .contracts import ScannerEndpoints, StandardAgentResponse
+from .logger import report_logger
 from .resilient_client import ResilientAgentClient
 
 
@@ -54,6 +55,15 @@ def _discovery_cache_key(
     )
 
 
+def _cache_key_metadata(key: Tuple[int, int, str, int]) -> Dict[str, Any]:
+    return {
+        "max_universe": key[0],
+        "top_n": key[1],
+        "exchange": key[2],
+        "max_workers": key[3],
+    }
+
+
 def _get_cached_discovery_response(
     key: Tuple[int, int, str, int],
     correlation_id: str,
@@ -65,31 +75,40 @@ def _get_cached_discovery_response(
         return None
 
     age_seconds = max(0.0, time.monotonic() - float(cached["stored_at"]))
-    if age_seconds > _discovery_cache_ttl_seconds():
+    ttl_seconds = _discovery_cache_ttl_seconds()
+    if age_seconds > ttl_seconds:
+        report_logger.info(
+            "Scanner discovery cache expired: key=%s age_seconds=%.3f ttl_seconds=%.3f",
+            _cache_key_metadata(key),
+            age_seconds,
+            ttl_seconds,
+        )
         return None
 
-    response = StandardAgentResponse.model_validate(cached["response"])
-    metadata = dict(response.metadata or {})
-    metadata.update(
-        {
-            "scanner_discovery_cache_hit": True,
-            "scanner_discovery_cache_one_shot": True,
-            "scanner_discovery_cache_age_seconds": round(age_seconds, 3),
-            "scanner_discovery_cache_ttl_seconds": _discovery_cache_ttl_seconds(),
-            "scanner_discovery_cache_key": {
-                "max_universe": key[0],
-                "top_n": key[1],
-                "exchange": key[2],
-                "max_workers": key[3],
-            },
-        }
+    cache_metadata = {
+        "scanner_discovery_cache_hit": True,
+        "scanner_discovery_cache_one_shot": True,
+        "scanner_discovery_cache_age_seconds": round(age_seconds, 3),
+        "scanner_discovery_cache_ttl_seconds": ttl_seconds,
+        "scanner_discovery_cache_key": _cache_key_metadata(key),
+    }
+    payload = StandardAgentResponse.model_validate(cached["response"]).model_dump(
+        mode="json"
     )
-    return response.model_copy(
-        update={
-            "correlation_id": correlation_id,
-            "metadata": metadata,
+    payload["correlation_id"] = correlation_id
+    payload["metadata"] = {**(payload.get("metadata") or {}), **cache_metadata}
+    if isinstance(payload.get("data"), dict):
+        payload["data"]["metadata"] = {
+            **(payload["data"].get("metadata") or {}),
+            **cache_metadata,
         }
+
+    report_logger.info(
+        "Reusing one-shot Scanner discovery response: key=%s age_seconds=%.3f",
+        _cache_key_metadata(key),
+        age_seconds,
     )
+    return StandardAgentResponse.model_validate(payload)
 
 
 def _store_discovery_response(
@@ -100,6 +119,11 @@ def _store_discovery_response(
         "stored_at": time.monotonic(),
         "response": response.model_dump(mode="json"),
     }
+    report_logger.info(
+        "Stored one-shot Scanner discovery response: key=%s ttl_seconds=%.3f",
+        _cache_key_metadata(key),
+        _discovery_cache_ttl_seconds(),
+    )
 
 
 def _cache_scanner_candidates(response: StandardAgentResponse) -> None:
