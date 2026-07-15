@@ -1,10 +1,15 @@
-from typing import List, Optional, Dict, Any
-from .contracts import ScannerEndpoints, StandardAgentResponse
+import os
+import time
+from typing import Any, Dict, List, Optional, Tuple
+
 from .config import SCANNER_AGENT_URL
+from .contracts import ScannerEndpoints, StandardAgentResponse
 from .resilient_client import ResilientAgentClient
 
 
 SCANNER_PREFETCH_CACHE: Dict[str, Dict[str, Any]] = {}
+SCANNER_DISCOVERY_RESPONSE_CACHE: Dict[Tuple[int, int, str, int], Dict[str, Any]] = {}
+_DEFAULT_DISCOVERY_CACHE_TTL_SECONDS = 1800.0
 
 
 def _to_dict(value: Any) -> Dict[str, Any]:
@@ -17,6 +22,82 @@ def _to_dict(value: Any) -> Dict[str, Any]:
 
 def get_scanner_prefetch(symbol: str) -> Optional[Dict[str, Any]]:
     return SCANNER_PREFETCH_CACHE.get(symbol.upper())
+
+
+def clear_scanner_discovery_cache() -> None:
+    """Clear broad-discovery responses. Intended for tests and explicit resets."""
+    SCANNER_DISCOVERY_RESPONSE_CACHE.clear()
+
+
+def _discovery_cache_ttl_seconds() -> float:
+    raw_value = os.getenv(
+        "SCANNER_DISCOVERY_CACHE_TTL_SECONDS",
+        str(_DEFAULT_DISCOVERY_CACHE_TTL_SECONDS),
+    )
+    try:
+        return max(0.0, float(raw_value))
+    except (TypeError, ValueError):
+        return _DEFAULT_DISCOVERY_CACHE_TTL_SECONDS
+
+
+def _discovery_cache_key(
+    max_universe: int,
+    top_n: int,
+    exchange: str,
+    max_workers: int,
+) -> Tuple[int, int, str, int]:
+    return (
+        int(max_universe),
+        int(top_n),
+        str(exchange or "NASDAQ").strip().upper(),
+        int(max_workers),
+    )
+
+
+def _get_cached_discovery_response(
+    key: Tuple[int, int, str, int],
+    correlation_id: str,
+) -> Optional[StandardAgentResponse]:
+    cached = SCANNER_DISCOVERY_RESPONSE_CACHE.get(key)
+    if not cached:
+        return None
+
+    age_seconds = max(0.0, time.monotonic() - float(cached["stored_at"]))
+    if age_seconds > _discovery_cache_ttl_seconds():
+        SCANNER_DISCOVERY_RESPONSE_CACHE.pop(key, None)
+        return None
+
+    response = StandardAgentResponse.model_validate(cached["response"])
+    metadata = dict(response.metadata or {})
+    metadata.update(
+        {
+            "scanner_discovery_cache_hit": True,
+            "scanner_discovery_cache_age_seconds": round(age_seconds, 3),
+            "scanner_discovery_cache_ttl_seconds": _discovery_cache_ttl_seconds(),
+            "scanner_discovery_cache_key": {
+                "max_universe": key[0],
+                "top_n": key[1],
+                "exchange": key[2],
+                "max_workers": key[3],
+            },
+        }
+    )
+    return response.model_copy(
+        update={
+            "correlation_id": correlation_id,
+            "metadata": metadata,
+        }
+    )
+
+
+def _store_discovery_response(
+    key: Tuple[int, int, str, int],
+    response: StandardAgentResponse,
+) -> None:
+    SCANNER_DISCOVERY_RESPONSE_CACHE[key] = {
+        "stored_at": time.monotonic(),
+        "response": response.model_dump(mode="json"),
+    }
 
 
 def _cache_scanner_candidates(response: StandardAgentResponse) -> None:
@@ -33,6 +114,7 @@ class ScannerAgentClient(ResilientAgentClient):
     """
     A client for the Scanner Agent service, built on top of ResilientAgentClient.
     """
+
     def __init__(self):
         super().__init__(base_url=SCANNER_AGENT_URL)
 
@@ -40,22 +122,34 @@ class ScannerAgentClient(ResilientAgentClient):
         """Checks the health of the Scanner Agent."""
         return await self._get(ScannerEndpoints.HEALTH, correlation_id)
 
-    async def scan(self, symbols: Optional[List[str]], correlation_id: str) -> StandardAgentResponse:
-        """
-        Calls the technical scan endpoint of the Scanner Agent.
-        """
+    async def scan(
+        self,
+        symbols: Optional[List[str]],
+        correlation_id: str,
+    ) -> StandardAgentResponse:
+        """Calls the technical scan endpoint of the Scanner Agent."""
         payload = {"symbols": symbols}
-        response_data = await self._post(ScannerEndpoints.SCAN, correlation_id, json_data=payload)
+        response_data = await self._post(
+            ScannerEndpoints.SCAN,
+            correlation_id,
+            json_data=payload,
+        )
         response = self.validate_standard_response(response_data)
         _cache_scanner_candidates(response)
         return response
 
-    async def scan_fundamental(self, symbols: Optional[List[str]], correlation_id: str) -> StandardAgentResponse:
-        """
-        Calls the fundamental scan endpoint of the Scanner Agent.
-        """
+    async def scan_fundamental(
+        self,
+        symbols: Optional[List[str]],
+        correlation_id: str,
+    ) -> StandardAgentResponse:
+        """Calls the fundamental scan endpoint of the Scanner Agent."""
         payload = {"symbols": symbols}
-        response_data = await self._post(ScannerEndpoints.SCAN_FUNDAMENTAL, correlation_id, json_data=payload)
+        response_data = await self._post(
+            ScannerEndpoints.SCAN_FUNDAMENTAL,
+            correlation_id,
+            json_data=payload,
+        )
         response = self.validate_standard_response(response_data)
         _cache_scanner_candidates(response)
         return response
@@ -70,8 +164,26 @@ class ScannerAgentClient(ResilientAgentClient):
     ) -> StandardAgentResponse:
         """
         Calls Scanner_Agent's broad-market fundamental discovery endpoint.
-        Returns Top N candidates for Manager_Agent to analyze deeply.
+
+        The hourly workflow invokes the same discovery twice: first to select
+        symbols for exact Backtests, then to continue through Risk/Execution.
+        Reusing the first successful response prevents a second 1,000-symbol
+        provider sweep and keeps both stages on the same Scanner candidate set.
         """
+        cache_key = _discovery_cache_key(
+            max_universe,
+            top_n,
+            exchange,
+            max_workers,
+        )
+        cached_response = _get_cached_discovery_response(
+            cache_key,
+            correlation_id,
+        )
+        if cached_response is not None:
+            _cache_scanner_candidates(cached_response)
+            return cached_response
+
         payload = {
             "universe": "NASDAQ_SP500",
             "max_universe": max_universe,
@@ -87,4 +199,5 @@ class ScannerAgentClient(ResilientAgentClient):
         )
         response = self.validate_standard_response(response_data)
         _cache_scanner_candidates(response)
+        _store_discovery_response(cache_key, response)
         return response
