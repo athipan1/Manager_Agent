@@ -9,10 +9,17 @@ from scripts.run_multi_strategy_backtests import (
     _selection_criteria,
     _symbols_from_env,
 )
+from scripts.run_walk_forward_multi_strategy import (
+    WALK_FORWARD_ENDPOINT,
+    WALK_FORWARD_PROFILE,
+    _deterministic_walk_forward_run_id,
+    _walk_forward_criteria,
+)
 
 
 def test_manager_gate_defaults_to_balanced_strategy_identities():
     assert config.BACKTEST_MULTI_STRATEGY_GATE_ENABLED is True
+    assert config.BACKTEST_WALK_FORWARD_GATE_REQUIRED is True
     assert config.BACKTEST_GATE_STRATEGY_IDS == BALANCED_STRATEGY_IDS
     assert "hourly-sma-crossover" not in config.BACKTEST_GATE_STRATEGY_IDS
 
@@ -58,6 +65,37 @@ def test_selection_criteria_defaults_match_backtest_agent_contract(monkeypatch):
     }
 
 
+def test_walk_forward_defaults_match_backtest_agent_contract(monkeypatch):
+    for name in (
+        "BACKTEST_WALK_FORWARD_TRAIN_BARS",
+        "BACKTEST_WALK_FORWARD_TEST_BARS",
+        "BACKTEST_WALK_FORWARD_STEP_BARS",
+        "BACKTEST_WALK_FORWARD_MIN_WINDOWS",
+        "BACKTEST_WALK_FORWARD_MIN_WINDOW_TRADES",
+        "BACKTEST_WALK_FORWARD_MIN_PROFITABLE_RATE",
+        "BACKTEST_WALK_FORWARD_MIN_MEDIAN_SHARPE",
+        "BACKTEST_WALK_FORWARD_MIN_MEDIAN_PROFIT_FACTOR",
+        "BACKTEST_WALK_FORWARD_MAX_DRAWDOWN_FLOOR",
+        "BACKTEST_WALK_FORWARD_MAX_KILL_SWITCH_EVENTS",
+    ):
+        monkeypatch.delenv(name, raising=False)
+
+    assert WALK_FORWARD_ENDPOINT == "/backtest/multi-strategy/walk-forward"
+    assert WALK_FORWARD_PROFILE == "rolling_walk_forward_v1"
+    assert _walk_forward_criteria() == {
+        "train_bars": 126,
+        "test_bars": 126,
+        "step_bars": 63,
+        "min_windows": 4,
+        "min_window_trades": 1,
+        "min_profitable_window_rate": 0.60,
+        "min_median_sharpe_ratio": 0.70,
+        "min_median_profit_factor": 1.10,
+        "max_drawdown_floor": -0.20,
+        "max_kill_switch_events": 0,
+    }
+
+
 def test_deterministic_run_id_changes_with_exact_strategy_identity():
     common = {
         "symbol": "AAPL",
@@ -84,3 +122,32 @@ def test_deterministic_run_id_changes_with_exact_strategy_identity():
     assert first != other
     assert first.startswith("backtest-selection-")
     json.dumps({"run_id": first})
+
+
+def test_walk_forward_run_id_binds_validation_criteria():
+    common = {
+        "symbol": "AAPL",
+        "strategy_id": "trend-following-balanced-v1",
+        "fingerprint": "dataset-123",
+        "parameters": {"fast_window": 20, "slow_window": 50},
+        "timeframe": "1d",
+        "engine_version": "backtest-agent-0.6.0",
+    }
+    criteria = _walk_forward_criteria()
+
+    first = _deterministic_walk_forward_run_id(
+        walk_forward_criteria=criteria,
+        **common,
+    )
+    repeated = _deterministic_walk_forward_run_id(
+        walk_forward_criteria=criteria,
+        **common,
+    )
+    stricter = _deterministic_walk_forward_run_id(
+        walk_forward_criteria={**criteria, "min_windows": 5},
+        **common,
+    )
+
+    assert first == repeated
+    assert first != stricter
+    assert first.startswith("backtest-walk-forward-")
