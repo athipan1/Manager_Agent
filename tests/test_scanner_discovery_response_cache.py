@@ -82,6 +82,7 @@ async def test_identical_discovery_reuses_first_successful_response(monkeypatch)
     assert first.correlation_id == "pre-backtest"
     assert second.correlation_id == "risk-execution"
     assert second.metadata["scanner_discovery_cache_hit"] is True
+    assert second.metadata["scanner_discovery_cache_one_shot"] is True
     assert second.metadata["scanner_discovery_cache_key"] == {
         "max_universe": 1000,
         "top_n": 10,
@@ -92,6 +93,7 @@ async def test_identical_discovery_reuses_first_successful_response(monkeypatch)
         "ACGL",
         "ADBE",
     ]
+    assert SCANNER_DISCOVERY_RESPONSE_CACHE == {}
 
 
 @pytest.mark.asyncio
