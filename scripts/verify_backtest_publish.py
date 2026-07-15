@@ -3,8 +3,19 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import sys
 from pathlib import Path
 from typing import Any, Dict
+
+
+# GitHub Actions invokes this file directly with
+# `python scripts/verify_backtest_publish.py`. In that mode Python places the
+# scripts directory, not the repository root, at sys.path[0]. Add the root
+# explicitly so sibling modules can use the same `scripts.*` package imports
+# used by pytest and `python -m` execution.
+REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
+if str(REPOSITORY_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPOSITORY_ROOT))
 
 
 WALK_FORWARD_MODE = "walk_forward_multi_strategy_selection"
@@ -98,18 +109,12 @@ def _verify_multi_strategy_publish(data: Dict[str, Any]) -> Dict[str, Any]:
     if not isinstance(items, list) or not items:
         raise ValueError("Multi-strategy Backtest batch contained no symbols")
 
-    operational_failures = [
-        item for item in items if item.get("status") == "failed"
-    ]
+    operational_failures = [item for item in items if item.get("status") == "failed"]
     eligible = [
-        item
-        for item in items
-        if item.get("status") == "eligible_strategy_found"
+        item for item in items if item.get("status") == "eligible_strategy_found"
     ]
     ineligible = [
-        item
-        for item in items
-        if item.get("status") == "no_eligible_strategy"
+        item for item in items if item.get("status") == "no_eligible_strategy"
     ]
     unknown = [
         item
@@ -148,9 +153,7 @@ def _verify_multi_strategy_publish(data: Dict[str, Any]) -> Dict[str, Any]:
     }
     actual_strategy_map = {
         str(symbol).upper(): strategy_id
-        for symbol, strategy_id in (
-            data.get("strategy_ids_by_symbol") or {}
-        ).items()
+        for symbol, strategy_id in (data.get("strategy_ids_by_symbol") or {}).items()
     }
     mode_invalid = data.get("mode") == WALK_FORWARD_MODE and (
         data.get("walk_forward_required") is not True
@@ -186,10 +189,7 @@ def _verify_multi_strategy_publish(data: Dict[str, Any]) -> Dict[str, Any]:
 
 def verify_backtest_publish(report: Dict[str, Any]) -> Dict[str, Any]:
     data = unwrap_backtest_report(report)
-    if data.get("mode") in {
-        "multi_strategy_selection",
-        WALK_FORWARD_MODE,
-    }:
+    if data.get("mode") in {"multi_strategy_selection", WALK_FORWARD_MODE}:
         return _verify_multi_strategy_publish(data)
 
     items = data.get("items")
@@ -202,8 +202,7 @@ def verify_backtest_publish(report: Dict[str, Any]) -> Dict[str, Any]:
             if item.get("status") != "success"
             or item.get("published") is not True
             or item.get("publish_status") != "success"
-            or (item.get("database_response") or {}).get("status")
-            != "success"
+            or (item.get("database_response") or {}).get("status") != "success"
         ]
         if (
             data.get("all_succeeded") is not True
@@ -242,27 +241,16 @@ def _run_strategy_selection_if_enabled(report_path: Path) -> None:
         return
 
     if _bool_env("BACKTEST_WALK_FORWARD_ENABLED", True):
-        try:
-            from scripts.local_backtest_api import managed_backtest_agent
-            from scripts.run_walk_forward_multi_strategy import (
-                run_hourly_walk_forward_multi_strategy,
-            )
-        except ModuleNotFoundError:
-            from local_backtest_api import managed_backtest_agent
-            from run_walk_forward_multi_strategy import (
-                run_hourly_walk_forward_multi_strategy,
-            )
+        from scripts.local_backtest_api import managed_backtest_agent
+        from scripts.run_walk_forward_multi_strategy import (
+            run_hourly_walk_forward_multi_strategy,
+        )
 
         with managed_backtest_agent():
             run_hourly_walk_forward_multi_strategy(report_path)
         return
 
-    try:
-        from scripts.run_multi_strategy_backtests import (
-            run_hourly_multi_strategy,
-        )
-    except ModuleNotFoundError:
-        from run_multi_strategy_backtests import run_hourly_multi_strategy
+    from scripts.run_multi_strategy_backtests import run_hourly_multi_strategy
 
     run_hourly_multi_strategy(report_path)
 
