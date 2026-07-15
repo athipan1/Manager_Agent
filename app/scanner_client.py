@@ -58,13 +58,14 @@ def _get_cached_discovery_response(
     key: Tuple[int, int, str, int],
     correlation_id: str,
 ) -> Optional[StandardAgentResponse]:
-    cached = SCANNER_DISCOVERY_RESPONSE_CACHE.get(key)
+    # One-shot consumption keeps the cache scoped to the preselection -> execute
+    # pair and prevents a later manual/hourly run from inheriting stale symbols.
+    cached = SCANNER_DISCOVERY_RESPONSE_CACHE.pop(key, None)
     if not cached:
         return None
 
     age_seconds = max(0.0, time.monotonic() - float(cached["stored_at"]))
     if age_seconds > _discovery_cache_ttl_seconds():
-        SCANNER_DISCOVERY_RESPONSE_CACHE.pop(key, None)
         return None
 
     response = StandardAgentResponse.model_validate(cached["response"])
@@ -72,6 +73,7 @@ def _get_cached_discovery_response(
     metadata.update(
         {
             "scanner_discovery_cache_hit": True,
+            "scanner_discovery_cache_one_shot": True,
             "scanner_discovery_cache_age_seconds": round(age_seconds, 3),
             "scanner_discovery_cache_ttl_seconds": _discovery_cache_ttl_seconds(),
             "scanner_discovery_cache_key": {
