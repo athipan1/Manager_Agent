@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Iterable, List, Optional
 
 
 def _symbol(value: Any) -> str:
@@ -35,6 +35,62 @@ def _parse_timestamp(value: Any) -> Optional[datetime]:
     return parsed.astimezone(timezone.utc)
 
 
+def _detail_timestamp(detail: Dict[str, Any]) -> datetime:
+    run = detail.get("run") if isinstance(detail.get("run"), dict) else {}
+    skill_result = (
+        detail.get("skill_result")
+        if isinstance(detail.get("skill_result"), dict)
+        else {}
+    )
+    parsed = _parse_timestamp(
+        run.get("updated_at")
+        or run.get("created_at")
+        or skill_result.get("updated_at")
+    )
+    return parsed or datetime.min.replace(tzinfo=timezone.utc)
+
+
+def _deduplicated_strategy_ids(values: Iterable[str]) -> List[str]:
+    return list(
+        dict.fromkeys(
+            str(value).strip()
+            for value in values
+            if str(value).strip()
+        )
+    )
+
+
+def _configured_strategy_ids(
+    *,
+    primary_strategy_id: str,
+    strategy_ids: Optional[Iterable[str]],
+) -> List[str]:
+    """Resolve the exact strategy identities accepted by the execution gate.
+
+    Passing an explicit empty iterable preserves the legacy single-strategy
+    behavior. When omitted, production configuration may enable the deterministic
+    multi-strategy suite published by Backtest_Agent.
+    """
+
+    if strategy_ids is not None:
+        resolved = _deduplicated_strategy_ids(strategy_ids)
+        return resolved or _deduplicated_strategy_ids([primary_strategy_id])
+
+    try:
+        from .. import config
+
+        if config.BACKTEST_MULTI_STRATEGY_GATE_ENABLED:
+            resolved = _deduplicated_strategy_ids(
+                config.BACKTEST_GATE_STRATEGY_IDS
+            )
+            if resolved:
+                return resolved
+    except (AttributeError, ImportError):
+        pass
+
+    return _deduplicated_strategy_ids([primary_strategy_id])
+
+
 def _decision(
     *,
     symbol: str,
@@ -62,6 +118,7 @@ def _decision(
             "allowed": True,
             "rejection_codes": [],
             "latest_run_id": latest_run_id,
+            "strategy_id": strategy_id,
             "mode": "disabled",
         }
     if not skill_id or not strategy_id or not timeframe:
@@ -108,9 +165,61 @@ def _decision(
         "rejection_codes": sorted(set(reasons)),
         "latest_run_id": latest_run_id,
         "backtest_passed": bool(skill_result.get("passed", False)),
+        "strategy_id": strategy_id,
         "run_symbol": run.get("symbol"),
         "run_strategy_id": run.get("strategy_id"),
         "run_timeframe": run.get("timeframe"),
+        "mode": "required",
+    }
+
+
+def _combined_symbol_decision(
+    *,
+    symbol: str,
+    attempts: List[Dict[str, Any]],
+    details_by_strategy: Dict[str, Dict[str, Any]],
+) -> Dict[str, Any]:
+    allowed_attempts = [attempt for attempt in attempts if attempt.get("allowed")]
+    if allowed_attempts:
+        selected = max(
+            allowed_attempts,
+            key=lambda attempt: _detail_timestamp(
+                details_by_strategy.get(str(attempt.get("strategy_id") or ""), {})
+            ),
+        )
+        return {
+            **selected,
+            "selected_strategy_id": selected.get("strategy_id"),
+            "attempted_strategy_ids": [
+                attempt.get("strategy_id") for attempt in attempts
+            ],
+            "strategy_attempts": attempts,
+        }
+
+    latest_attempt = max(
+        attempts,
+        key=lambda attempt: _detail_timestamp(
+            details_by_strategy.get(str(attempt.get("strategy_id") or ""), {})
+        ),
+        default={"symbol": symbol, "latest_run_id": None},
+    )
+    return {
+        "symbol": symbol,
+        "allowed": False,
+        "rejection_codes": sorted(
+            {
+                code
+                for attempt in attempts
+                for code in (attempt.get("rejection_codes") or [])
+            }
+        ),
+        "latest_run_id": latest_attempt.get("latest_run_id"),
+        "backtest_passed": False,
+        "selected_strategy_id": None,
+        "attempted_strategy_ids": [
+            attempt.get("strategy_id") for attempt in attempts
+        ],
+        "strategy_attempts": attempts,
         "mode": "required",
     }
 
@@ -127,13 +236,17 @@ async def filter_candidates_with_backtest_gate(
     timeframe: str,
     max_age_hours: float,
     now: Optional[datetime] = None,
+    strategy_ids: Optional[Iterable[str]] = None,
 ) -> Dict[str, Any]:
     """Keep candidates covered by their own exact latest passing Backtest.
 
     Each candidate is looked up by the complete execution-evidence identity.
-    Missing, failed, stale, or mismatched evidence blocks only that symbol and
-    can never fall back to another symbol's passing run.
+    In multi-strategy mode the gate evaluates only the configured exact strategy
+    IDs, then accepts the newest fresh passing result for that symbol. Missing,
+    failed, stale, or mismatched evidence blocks only that symbol and can never
+    fall back to another symbol or to the legacy fixed strategy.
     """
+
     symbols = list(
         dict.fromkeys(
             _symbol(position)
@@ -141,48 +254,82 @@ async def filter_candidates_with_backtest_gate(
             if _symbol(position)
         )
     )
-    evidence_by_symbol: Dict[str, Dict[str, Any]] = {
-        symbol: {} for symbol in symbols
+    resolved_strategy_ids = _configured_strategy_ids(
+        primary_strategy_id=strategy_id,
+        strategy_ids=strategy_ids,
+    )
+    evidence_by_key: Dict[tuple[str, str], Dict[str, Any]] = {
+        (symbol, candidate_strategy_id): {}
+        for symbol in symbols
+        for candidate_strategy_id in resolved_strategy_ids
     }
-    lookup_errors: Dict[str, str] = {}
+    lookup_errors_by_key: Dict[tuple[str, str], str] = {}
 
-    async def lookup(symbol: str) -> None:
+    async def lookup(symbol: str, candidate_strategy_id: str) -> None:
         try:
-            evidence_by_symbol[symbol] = (
+            evidence_by_key[(symbol, candidate_strategy_id)] = (
                 await db_client.get_latest_exact_backtest_run(
                     skill_id=skill_id,
-                    strategy_id=strategy_id,
+                    strategy_id=candidate_strategy_id,
                     symbol=symbol,
                     timeframe=timeframe,
                     correlation_id=correlation_id,
                 )
             )
         except Exception as exc:
-            lookup_errors[symbol] = str(exc)
+            lookup_errors_by_key[(symbol, candidate_strategy_id)] = str(exc)
 
     if required and symbols:
-        await asyncio.gather(*(lookup(symbol) for symbol in symbols))
+        await asyncio.gather(
+            *(
+                lookup(symbol, candidate_strategy_id)
+                for symbol in symbols
+                for candidate_strategy_id in resolved_strategy_ids
+            )
+        )
 
     current = now or datetime.now(timezone.utc)
     if current.tzinfo is None:
         current = current.replace(tzinfo=timezone.utc)
     current = current.astimezone(timezone.utc)
 
-    decisions = [
-        _decision(
-            symbol=_symbol(position),
-            required=required,
-            detail=evidence_by_symbol.get(_symbol(position), {}),
-            skill_id=skill_id,
-            strategy_id=strategy_id,
-            timeframe=timeframe,
-            max_age_hours=max_age_hours,
-            now=current,
-            lookup_error=lookup_errors.get(_symbol(position)),
+    decisions: List[Dict[str, Any]] = []
+    for position in selected_positions:
+        symbol = _symbol(position)
+        if not symbol:
+            continue
+        attempts = [
+            _decision(
+                symbol=symbol,
+                required=required,
+                detail=evidence_by_key.get((symbol, candidate_strategy_id), {}),
+                skill_id=skill_id,
+                strategy_id=candidate_strategy_id,
+                timeframe=timeframe,
+                max_age_hours=max_age_hours,
+                now=current,
+                lookup_error=lookup_errors_by_key.get(
+                    (symbol, candidate_strategy_id)
+                ),
+            )
+            for candidate_strategy_id in resolved_strategy_ids
+        ]
+        if not required:
+            decisions.append(attempts[0])
+            continue
+        decisions.append(
+            _combined_symbol_decision(
+                symbol=symbol,
+                attempts=attempts,
+                details_by_strategy={
+                    candidate_strategy_id: evidence_by_key.get(
+                        (symbol, candidate_strategy_id), {}
+                    )
+                    for candidate_strategy_id in resolved_strategy_ids
+                },
+            )
         )
-        for position in selected_positions
-        if _symbol(position)
-    ]
+
     allowed_symbols = {
         row["symbol"] for row in decisions if row.get("allowed")
     }
@@ -195,11 +342,29 @@ async def filter_candidates_with_backtest_gate(
         if _symbol(row) in allowed_symbols
     ]
     rejected = [row for row in decisions if not row.get("allowed")]
+    lookup_errors = {
+        (
+            symbol
+            if len(resolved_strategy_ids) == 1
+            else f"{symbol}:{candidate_strategy_id}"
+        ): error
+        for (symbol, candidate_strategy_id), error in lookup_errors_by_key.items()
+    }
     return {
         "status": "required" if required else "disabled",
         "required": required,
         "skill_id": skill_id,
-        "strategy_id": strategy_id,
+        "strategy_id": (
+            resolved_strategy_ids[0]
+            if len(resolved_strategy_ids) == 1
+            else None
+        ),
+        "strategy_ids": resolved_strategy_ids,
+        "strategy_ids_by_symbol": {
+            row["symbol"]: row.get("selected_strategy_id")
+            for row in decisions
+            if row.get("selected_strategy_id")
+        },
         "timeframe": timeframe,
         "max_age_hours": max_age_hours,
         "latest_run_id": (
