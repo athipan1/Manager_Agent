@@ -46,18 +46,25 @@ class ScannerResponseData(BaseModel):
     candidates: List[Any]
     scan_type: str
     count: int
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+    errors: Dict[str, Any] = Field(default_factory=dict)
 
-    @model_validator(mode='before')
+    @model_validator(mode="before")
     @classmethod
     def validate_required_fields(cls, data: Any) -> Any:
         if isinstance(data, dict):
             required_fields = ["candidates", "scan_type", "count"]
-            missing_fields = [field for field in required_fields if field not in data]
+            missing_fields = [
+                field for field in required_fields if field not in data
+            ]
             if missing_fields:
-                raise ValueError(f"Scanner response missing required fields: {', '.join(missing_fields)}")
+                raise ValueError(
+                    "Scanner response missing required fields: "
+                    + ", ".join(missing_fields)
+                )
         return data
 
-    @model_validator(mode='after')
+    @model_validator(mode="after")
     def normalize_candidates(self):
         normalized = []
         for candidate in self.candidates:
@@ -68,10 +75,19 @@ class ScannerResponseData(BaseModel):
                 normalized.append(candidate.to_legacy_candidate())
                 continue
             if isinstance(candidate, dict):
-                if "candidate_score" in candidate or "recommendation_hint" in candidate:
-                    normalized.append(ScannerCandidateContract.model_validate(candidate).to_legacy_candidate())
+                if (
+                    "candidate_score" in candidate
+                    or "recommendation_hint" in candidate
+                ):
+                    normalized.append(
+                        ScannerCandidateContract.model_validate(
+                            candidate
+                        ).to_legacy_candidate()
+                    )
                 else:
-                    normalized.append(ScannerCandidate.model_validate(candidate))
+                    normalized.append(
+                        ScannerCandidate.model_validate(candidate)
+                    )
                 continue
             normalized.append(candidate)
         self.candidates = normalized
