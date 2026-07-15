@@ -13,6 +13,17 @@ def _env_bool(name: str, default: bool = False) -> bool:
     return value.strip().lower() in ("1", "true", "yes", "y", "on")
 
 
+def _env_csv(name: str, default: str = "") -> tuple[str, ...]:
+    raw = os.getenv(name, default)
+    return tuple(
+        dict.fromkeys(
+            item.strip()
+            for item in raw.split(",")
+            if item.strip()
+        )
+    )
+
+
 # General Configuration
 DEFAULT_ACCOUNT_ID = int(os.getenv("DEFAULT_ACCOUNT_ID", 1))
 
@@ -71,6 +82,18 @@ BACKTEST_GATE_STRATEGY_ID = os.getenv(
 BACKTEST_GATE_TIMEFRAME = os.getenv("BACKTEST_GATE_TIMEFRAME", "1d").strip()
 BACKTEST_GATE_MAX_AGE_HOURS = float(
     os.getenv("BACKTEST_GATE_MAX_AGE_HOURS", "26")
+)
+BACKTEST_MULTI_STRATEGY_GATE_ENABLED = _env_bool(
+    "BACKTEST_MULTI_STRATEGY_GATE_ENABLED", True
+)
+BACKTEST_GATE_STRATEGY_IDS = _env_csv(
+    "BACKTEST_GATE_STRATEGY_IDS",
+    (
+        "sma-crossover-balanced-v1,"
+        "trend-following-balanced-v1,"
+        "mean-reversion-balanced-v1,"
+        "breakout-balanced-v1"
+    ),
 )
 RISK_AGENT_TIMEOUT = float(os.getenv("RISK_AGENT_TIMEOUT", 10))
 RISK_AGENT_FAILURE_THRESHOLD = int(os.getenv("RISK_AGENT_FAILURE_THRESHOLD", 3))
