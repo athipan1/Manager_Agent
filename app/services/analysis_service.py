@@ -12,24 +12,38 @@ from typing import Any, Dict, Tuple
 from .serialization_service import normalize_score
 
 
-def extract_current_price_and_stop(analysis_result: Dict[str, Any]) -> Tuple[float, Any]:
+def extract_current_price_and_stop(
+    analysis_result: Dict[str, Any],
+) -> Tuple[float, Any]:
     """Extract current price and technical stop from a technical agent payload.
 
-    Fails safe to `(0.0, None)` when the expected nested fields are missing or
+    Fails safe to ``(0.0, None)`` when the expected nested fields are missing or
     malformed.
     """
+
     tech_dict = analysis_result.get("raw_data", {}).get("technical") or {}
     try:
         data = tech_dict.get("data") or {}
         indicators = data.get("indicators") or {}
-        return float(data.get("current_price") or 0), indicators.get("stop_loss")
+        return (
+            float(data.get("current_price") or 0),
+            indicators.get("stop_loss"),
+        )
     except Exception:
         return 0.0, None
 
 
-def fundamental_v2_scores(analysis_result: Dict[str, Any]) -> Dict[str, Any]:
+def fundamental_v2_scores(
+    analysis_result: Dict[str, Any],
+) -> Dict[str, Any]:
     """Extract normalized fundamental v2 score data from an analysis result."""
-    data = (analysis_result.get("raw_data", {}).get("fundamental") or {}).get("data") or {}
+
+    data = (
+        (analysis_result.get("raw_data", {}).get("fundamental") or {}).get(
+            "data"
+        )
+        or {}
+    )
     composite = normalize_score(data.get("confidence_score"))
     return {
         "composite_score": composite,
@@ -39,18 +53,26 @@ def fundamental_v2_scores(analysis_result: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def score_deep_analysis(analysis_result: Dict[str, Any], scanner_score: float) -> Dict[str, Any]:
-    """Build the manager's discovery ranking score breakdown.
+def score_deep_analysis(
+    analysis_result: Dict[str, Any],
+    scanner_score: float,
+) -> Dict[str, Any]:
+    """Build the Manager discovery ranking score breakdown.
 
-    The formula intentionally mirrors the legacy `app.main._score_deep_analysis`
-    helper so this module can be wired in without changing behavior.
+    The numeric formula intentionally mirrors the legacy
+    ``app.main._score_deep_analysis`` helper. Cache telemetry is appended only
+    when present and never participates in the ranking score.
     """
+
     details = analysis_result.get("details")
     tech_detail = details.technical if details else None
     fund_detail = details.fundamental if details else None
 
     tech_score = normalize_score(tech_detail.score if tech_detail else 0.0)
-    fund_score = normalize_score(fund_detail.score if fund_detail else 0.0) or scanner_score
+    fund_score = (
+        normalize_score(fund_detail.score if fund_detail else 0.0)
+        or scanner_score
+    )
     verdict = analysis_result.get("final_verdict", "hold")
     verdict_score = {
         "strong_buy": 1.0,
@@ -67,10 +89,31 @@ def score_deep_analysis(analysis_result: Dict[str, Any], scanner_score: float) -
         + (verdict_score * 0.10)
     )
 
-    return {
+    result: Dict[str, Any] = {
         "scanner_score": round(scanner_score, 4),
         "technical_score": round(tech_score, 4),
         "fundamental_score": round(fund_score, 4),
         "verdict_score": round(verdict_score, 4),
         "final_opportunity_score": round(final_score, 4),
     }
+
+    cache = analysis_result.get("analysis_cache")
+    if isinstance(cache, dict):
+        result.update(
+            {
+                "analysis_cache_policy_version": cache.get(
+                    "policy_version"
+                ),
+                "analysis_cache_hit": bool(cache.get("hit")),
+                "analysis_cache_one_shot": bool(cache.get("one_shot")),
+                "analysis_cache_age_seconds": cache.get("age_seconds"),
+                "analysis_cache_ttl_seconds": cache.get("ttl_seconds"),
+                "analysis_cache_source_correlation_id": cache.get(
+                    "source_correlation_id"
+                ),
+                "analysis_cache_request_correlation_id": cache.get(
+                    "request_correlation_id"
+                ),
+            }
+        )
+    return result
