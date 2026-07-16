@@ -35,14 +35,32 @@ def _coverage(available: int, total: int) -> tuple[float, float]:
     return ratio, round(ratio * 100.0, 1)
 
 
-def _technical_evidence(row: Mapping[str, Any]) -> tuple[Dict[str, Any], Dict[str, Any]]:
+def _technical_evidence(
+    row: Mapping[str, Any],
+) -> tuple[Dict[str, Any], Dict[str, Any]]:
+    """Read normalized technical evidence with backward-compatible fallbacks.
+
+    Current Manager artifacts store evidence under
+    ``evidence_summary.sources.technical``. Older tests and historical reports
+    may store the same data under ``evidence_summary.technical`` or split the
+    metrics/provenance maps at the evidence-summary root. Prefer the canonical
+    source path while retaining those legacy fallbacks.
+    """
+
     evidence_summary = _dict(row.get("evidence_summary"))
-    technical = _dict(evidence_summary.get("technical"))
+    source_technical = _dict(
+        _dict(evidence_summary.get("sources")).get("technical")
+    )
+    legacy_technical = _dict(evidence_summary.get("technical"))
+    technical = source_technical or legacy_technical
+
     metrics = _dict(technical.get("metrics"))
     provenance = _dict(technical.get("provenance"))
 
     if not metrics:
-        metrics = _dict(_dict(evidence_summary.get("metrics")).get("technical"))
+        metrics = _dict(
+            _dict(evidence_summary.get("metrics")).get("technical")
+        )
     if not provenance:
         provenance = _dict(
             _dict(evidence_summary.get("provenance")).get("technical")
@@ -61,7 +79,11 @@ def summarize_liquidity_coverage(
     inferred from historical bars.
     """
 
-    rows = [row for row in (ranked_candidates or []) if isinstance(row, Mapping)]
+    rows = [
+        row
+        for row in (ranked_candidates or [])
+        if isinstance(row, Mapping)
+    ]
     total = len(rows)
     average_daily_volume_count = 0
     average_dollar_volume_count = 0
@@ -72,7 +94,9 @@ def summarize_liquidity_coverage(
 
     for row in rows:
         metrics, provenance = _technical_evidence(row)
-        gate_metrics = _dict(_dict(row.get("investability_gate")).get("metrics"))
+        gate_metrics = _dict(
+            _dict(row.get("investability_gate")).get("metrics")
+        )
 
         average_daily_volume = _finite_number(
             metrics.get("average_daily_volume"),
@@ -112,32 +136,47 @@ def summarize_liquidity_coverage(
         quote_source_counts[quote_source or "unavailable"] += 1
 
     adv_ratio, adv_pct = _coverage(average_daily_volume_count, total)
-    dollar_ratio, dollar_pct = _coverage(average_dollar_volume_count, total)
+    dollar_ratio, dollar_pct = _coverage(
+        average_dollar_volume_count,
+        total,
+    )
     spread_ratio, spread_pct = _coverage(spread_count, total)
 
     return {
         "summary_version": LIQUIDITY_COVERAGE_VERSION,
         "population": "ranked_candidates",
         "candidate_count": total,
-        "average_daily_volume_available_count": average_daily_volume_count,
+        "average_daily_volume_available_count": (
+            average_daily_volume_count
+        ),
         "average_daily_volume_coverage": adv_ratio,
         "average_daily_volume_coverage_pct": adv_pct,
-        "average_dollar_volume_available_count": average_dollar_volume_count,
+        "average_dollar_volume_available_count": (
+            average_dollar_volume_count
+        ),
         "average_dollar_volume_coverage": dollar_ratio,
         "average_dollar_volume_coverage_pct": dollar_pct,
         "spread_available_count": spread_count,
         "spread_coverage": spread_ratio,
         "spread_coverage_pct": spread_pct,
-        "liquidity_evidence_version_counts": dict(sorted(version_counts.items())),
-        "liquidity_evidence_status_counts": dict(sorted(status_counts.items())),
-        "quote_source_counts": dict(sorted(quote_source_counts.items())),
+        "liquidity_evidence_version_counts": dict(
+            sorted(version_counts.items())
+        ),
+        "liquidity_evidence_status_counts": dict(
+            sorted(status_counts.items())
+        ),
+        "quote_source_counts": dict(
+            sorted(quote_source_counts.items())
+        ),
         "average_dollar_volume_required_gate_ready": (
             total > 0 and average_dollar_volume_count == total
         ),
-        "spread_required_gate_ready": total > 0 and spread_count == total,
+        "spread_required_gate_ready": (
+            total > 0 and spread_count == total
+        ),
         "safety_note": (
-            "Coverage reports evidence availability only; Manager investability "
-            "thresholds remain authoritative."
+            "Coverage reports evidence availability only; Manager "
+            "investability thresholds remain authoritative."
         ),
     }
 
@@ -156,8 +195,8 @@ def runtime_report_metadata(mode: Any, broker_mode: Any) -> Dict[str, Any]:
             "mode": "ALPACA_PAPER",
             "broker_mode": "ALPACA",
             "warning": (
-                "Alpaca Paper execution mode is active; eligible orders may be "
-                "submitted only to the Alpaca Paper endpoint."
+                "Alpaca Paper execution mode is active; eligible orders may "
+                "be submitted only to the Alpaca Paper endpoint."
             ),
             "broker_order_submission_possible": True,
         }
@@ -165,7 +204,8 @@ def runtime_report_metadata(mode: Any, broker_mode: Any) -> Dict[str, Any]:
         "mode": "SIMULATOR",
         "broker_mode": normalized_broker_mode or "SIMULATOR",
         "warning": (
-            "Simulator safety mode is active; no broker orders will be submitted."
+            "Simulator safety mode is active; no broker orders will be "
+            "submitted."
         ),
         "broker_order_submission_possible": False,
     }
