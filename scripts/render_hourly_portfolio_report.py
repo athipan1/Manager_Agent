@@ -1,4 +1,5 @@
 import importlib.util
+import json
 from pathlib import Path
 import sys
 from typing import Any, Dict, List
@@ -13,17 +14,20 @@ if str(_REPOSITORY_ROOT) not in sys.path:
 try:
     from scripts.render_hourly_portfolio_report_legacy import *  # noqa: F401,F403
     import scripts.render_hourly_portfolio_report_legacy as _legacy
+    from scripts.liquidity_coverage import enrich_hourly_artifact
 except ModuleNotFoundError:
     from render_hourly_portfolio_report_legacy import *  # type: ignore # noqa: F401,F403
     import render_hourly_portfolio_report_legacy as _legacy  # type: ignore
+    from liquidity_coverage import enrich_hourly_artifact  # type: ignore
+
 
 def _load_curator_summarizer():
     """Load the pure report helper without requiring the FastAPI runtime.
 
     The hourly workflow renders reports on the GitHub runner after the trading
-    stack has finished.  That runner intentionally does not install the
+    stack has finished. That runner intentionally does not install the
     Manager application dependencies, so importing ``app.services`` would run
-    ``app/__init__.py`` and fail when FastAPI is unavailable.  The observability
+    ``app/__init__.py`` and fail when FastAPI is unavailable. The observability
     module itself only uses the Python standard library and is safe to load
     directly in that environment.
     """
@@ -35,13 +39,17 @@ def _load_curator_summarizer():
         if exc.name != "fastapi":
             raise
 
-    module_path = _REPOSITORY_ROOT / "app" / "services" / "curator_observability.py"
+    module_path = (
+        _REPOSITORY_ROOT / "app" / "services" / "curator_observability.py"
+    )
     spec = importlib.util.spec_from_file_location(
         "manager_curator_observability_report_helper",
         module_path,
     )
     if spec is None or spec.loader is None:
-        raise ImportError(f"unable to load curator report helper from {module_path}")
+        raise ImportError(
+            f"unable to load curator report helper from {module_path}"
+        )
 
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
@@ -52,6 +60,7 @@ summarize_curator_signals = _load_curator_summarizer()
 
 
 _legacy_render_curator_signals = _legacy.render_curator_signals
+_legacy_render_portfolio_section = _legacy.render_portfolio_section
 
 
 def _percent(value: Any) -> str:
@@ -59,6 +68,80 @@ def _percent(value: Any) -> str:
         return f"{float(value) * 100:.1f}%"
     except (TypeError, ValueError):
         return "-"
+
+
+def _coverage_percent(summary: Dict[str, Any], key: str) -> str:
+    pct_key = f"{key}_pct"
+    if summary.get(pct_key) is not None:
+        try:
+            return f"{float(summary[pct_key]):.1f}%"
+        except (TypeError, ValueError):
+            pass
+    return _percent(summary.get(key))
+
+
+def render_liquidity_coverage(
+    lines: List[str],
+    summary: Dict[str, Any],
+) -> None:
+    if not isinstance(summary, dict) or not summary:
+        return
+
+    total = int(summary.get("candidate_count") or 0)
+    adv_count = int(
+        summary.get("average_daily_volume_available_count") or 0
+    )
+    dollar_count = int(
+        summary.get("average_dollar_volume_available_count") or 0
+    )
+    spread_count = int(summary.get("spread_available_count") or 0)
+
+    lines.append("## Liquidity Evidence Coverage")
+    lines.append(f"- Summary Version: `{summary.get('summary_version', '-')}`")
+    lines.append(f"- Population: `{summary.get('population', '-')}`")
+    lines.append(f"- Candidates: `{total}`")
+    lines.append(
+        f"- Average Daily Volume: `{adv_count}/{total}` "
+        f"(`{_coverage_percent(summary, 'average_daily_volume_coverage')}`)"
+    )
+    lines.append(
+        f"- Average Dollar Volume: `{dollar_count}/{total}` "
+        f"(`{_coverage_percent(summary, 'average_dollar_volume_coverage')}`)"
+    )
+    lines.append(
+        f"- Bid/Ask Spread: `{spread_count}/{total}` "
+        f"(`{_coverage_percent(summary, 'spread_coverage')}`)"
+    )
+    lines.append(
+        "- Average Dollar Volume Required-Gate Readiness: "
+        f"`{'eligible' if summary.get('average_dollar_volume_required_gate_ready') else 'not_ready'}`"
+    )
+    lines.append(
+        "- Spread Required-Gate Readiness: "
+        f"`{'eligible' if summary.get('spread_required_gate_ready') else 'not_ready'}`"
+    )
+    lines.append(
+        "- Evidence Versions: "
+        f"`{json.dumps(summary.get('liquidity_evidence_version_counts') or {}, ensure_ascii=False, sort_keys=True)}`"
+    )
+    lines.append(
+        "- Evidence Statuses: "
+        f"`{json.dumps(summary.get('liquidity_evidence_status_counts') or {}, ensure_ascii=False, sort_keys=True)}`"
+    )
+    lines.append(
+        "- Quote Sources: "
+        f"`{json.dumps(summary.get('quote_source_counts') or {}, ensure_ascii=False, sort_keys=True)}`"
+    )
+    lines.append(f"- Safety: `{summary.get('safety_note', '-')}`")
+    lines.append("")
+
+
+def render_portfolio_section(lines: List[str], data: Dict[str, Any]) -> None:
+    _legacy_render_portfolio_section(lines, data)
+    render_liquidity_coverage(
+        lines,
+        data.get("liquidity_coverage_summary") or {},
+    )
 
 
 def render_curator_signals(lines: List[str], data: Dict[str, Any]) -> None:
@@ -77,25 +160,35 @@ def render_curator_signals(lines: List[str], data: Dict[str, Any]) -> None:
     rows = _legacy._list(summary.get("rows"))
     lines.append("## Curator Shadow Ensemble")
     lines.append("- Deployment Mode: `advisory`")
-    lines.append(f"- Observations: `{summary.get('ensemble_observations', 0)}`")
+    lines.append(
+        f"- Observations: `{summary.get('ensemble_observations', 0)}`"
+    )
     lines.append(
         f"- Available / Unavailable: `{summary.get('available', 0)}` / "
         f"`{summary.get('unavailable', 0)}`"
     )
-    lines.append(f"- Availability Rate: `{_percent(summary.get('availability_rate'))}`")
+    lines.append(
+        f"- Availability Rate: `{_percent(summary.get('availability_rate'))}`"
+    )
     lines.append(
         f"- Contract Valid / Invalid: `{summary.get('contract_valid', 0)}` / "
         f"`{summary.get('contract_invalid', 0)}`"
     )
     lines.append(
-        f"- Contract Valid Rate: `{_percent(summary.get('contract_valid_rate'))}`"
+        f"- Contract Valid Rate: "
+        f"`{_percent(summary.get('contract_valid_rate'))}`"
     )
-    lines.append(f"- Unsafe Contracts: `{summary.get('unsafe_contract_count', 0)}`")
+    lines.append(
+        f"- Unsafe Contracts: `{summary.get('unsafe_contract_count', 0)}`"
+    )
     lines.append(
         f"- BUY / HOLD / SELL: `{counts.get('buy', 0)}` / "
         f"`{counts.get('hold', 0)}` / `{counts.get('sell', 0)}`"
     )
-    lines.append(f"- Average Agreement: `{_percent(summary.get('average_agreement'))}`")
+    lines.append(
+        f"- Average Agreement: "
+        f"`{_percent(summary.get('average_agreement'))}`"
+    )
     lines.append(
         f"- Would Pass Required Gate: "
         f"`{summary.get('would_pass_required_gate', 0)}`"
@@ -111,7 +204,9 @@ def render_curator_signals(lines: List[str], data: Dict[str, Any]) -> None:
         f"- Observation Progress: `{summary.get('ensemble_observations', 0)}` / "
         f"`{summary.get('observation_target', 50)}`"
     )
-    lines.append("- Safety: `Risk_Agent remains mandatory; direct execution forbidden`")
+    lines.append(
+        "- Safety: `Risk_Agent remains mandatory; direct execution forbidden`"
+    )
     lines.append("")
 
     lines.append(
@@ -124,9 +219,21 @@ def render_curator_signals(lines: List[str], data: Dict[str, Any]) -> None:
         codes = row.get("rejection_codes") or []
         code_text = ", ".join(str(code) for code in codes) if codes else "-"
         contract = row.get("contract_valid")
-        contract_text = "valid" if contract is True else "invalid" if contract is False else "-"
+        contract_text = (
+            "valid"
+            if contract is True
+            else "invalid"
+            if contract is False
+            else "-"
+        )
         pass_gate = row.get("would_pass_required_gate")
-        pass_text = "yes" if pass_gate is True else "no" if pass_gate is False else "-"
+        pass_text = (
+            "yes"
+            if pass_gate is True
+            else "no"
+            if pass_gate is False
+            else "-"
+        )
         lines.append(
             f"| {row.get('symbol', '-')} | {row.get('status', '-')} | "
             f"{row.get('signal', '-')} | {_percent(row.get('agreement'))} | "
@@ -146,7 +253,6 @@ def render_order_review_approval_ticket(
     ticket = _legacy.unwrap_data(ticket_response) or {}
     if not isinstance(ticket, dict):
         return
-
     summary = _legacy._dict(ticket.get("summary"))
     ready = _legacy._list(ticket.get("ready_for_manual_approval"))
     no_action = _legacy._list(ticket.get("no_action_required"))
@@ -166,8 +272,12 @@ def render_order_review_approval_ticket(
     lines.append(f"- Ticket ID: `{ticket.get('ticket_id', '-')}`")
     lines.append(f"- Ticket Status: `{ticket_status}`")
     lines.append(f"- Requires Operator Attention: `{requires_attention}`")
-    lines.append(f"- Approval Required: `{ticket.get('approval_required', False)}`")
-    lines.append(f"- Execution Enabled: `{ticket.get('execution_enabled', False)}`")
+    lines.append(
+        f"- Approval Required: `{ticket.get('approval_required', False)}`"
+    )
+    lines.append(
+        f"- Execution Enabled: `{ticket.get('execution_enabled', False)}`"
+    )
     lines.append(
         f"- Manual Confirmation Phrase: "
         f"`{ticket.get('manual_confirmation_phrase', '-')}`"
@@ -184,7 +294,9 @@ def render_order_review_approval_ticket(
         f"- No Action Required: "
         f"`{summary.get('no_action_required_count', len(no_action))}`"
     )
-    lines.append(f"- Blocked: `{summary.get('blocked_count', len(blocked))}`")
+    lines.append(
+        f"- Blocked: `{summary.get('blocked_count', len(blocked))}`"
+    )
     lines.append(f"- Next Step: `{ticket.get('next_step', '-')}`")
     lines.append(
         f"- Orders Submitted By Ticket: "
@@ -208,12 +320,14 @@ def render_order_review_approval_ticket(
             actions = _legacy._list(row.get("proposed_actions"))
             status = row.get("approval_status", "manual_approval_required")
             lines.append(
-                f"| {row.get('symbol', '-')} | {row.get('position_qty', '-')} | "
+                f"| {row.get('symbol', '-')} | "
+                f"{row.get('position_qty', '-')} | "
                 f"{row.get('current_stop_order_id', '-')} | "
                 f"{row.get('stop_price', '-')} | "
                 f"{row.get('take_profit_price', '-')} | "
                 f"{row.get('reward_risk_ratio', '-')} | "
-                f"{_legacy._status_icon(status)} `{status}` | {len(actions)} |"
+                f"{_legacy._status_icon(status)} `{status}` | "
+                f"{len(actions)} |"
             )
         lines.append("")
 
@@ -258,8 +372,8 @@ def render_order_review_approval_ticket(
     elif ticket_status == "blocked":
         lines.append("### Operator Attention Required")
         lines.append(
-            "Ticket นี้ยังมี blocker ต้องแก้ก่อน แล้วจึง refresh order review preview "
-            "รอบนี้ยังไม่มีการ cancel/replace/submit order จริง"
+            "Ticket นี้ยังมี blocker ต้องแก้ก่อน แล้วจึง refresh order review "
+            "preview รอบนี้ยังไม่มีการ cancel/replace/submit order จริง"
         )
         lines.append("")
     elif ticket_status in {"no_action_required", "empty"}:
@@ -271,9 +385,24 @@ def render_order_review_approval_ticket(
         lines.append("")
 
 
+def main() -> int:
+    report_path = Path("reports/hourly-auto-trading-report.json")
+    if not report_path.exists():
+        return _legacy.main()
+
+    raw = json.loads(report_path.read_text(encoding="utf-8"))
+    enriched = enrich_hourly_artifact(raw)
+    report_path.write_text(
+        json.dumps(enriched, ensure_ascii=False, indent=2, default=str),
+        encoding="utf-8",
+    )
+    return _legacy.main()
+
+
 _legacy.render_curator_signals = render_curator_signals
 _legacy.render_order_review_approval_ticket = render_order_review_approval_ticket
+_legacy.render_portfolio_section = render_portfolio_section
 
 
 if __name__ == "__main__":
-    raise SystemExit(_legacy.main())
+    raise SystemExit(main())
