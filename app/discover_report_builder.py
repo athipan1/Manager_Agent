@@ -3,6 +3,7 @@ from __future__ import annotations
 from decimal import Decimal
 from typing import Any, Dict, Iterable, List, Mapping
 
+from . import config
 from .discover_allocation import (
     build_discover_allocation_plan,
     choose_bucket_aware_winner,
@@ -11,6 +12,7 @@ from .discover_allocation import (
     select_candidates_by_bucket,
 )
 from .portfolio_allocation import UNASSIGNED
+from .services.investability_gate import filter_candidates_with_investability_gate
 from .services.pre_risk_capacity_service import (
     DEFAULT_MIN_INCREMENTAL_VALUE,
     apply_pre_risk_capacity_selection,
@@ -45,13 +47,9 @@ def _bucket_candidate(
     symbol: str,
     bucket: str,
 ) -> Dict[str, Any]:
-    bucket_data = (
-        (allocation_plan.get("buckets") or {}).get(bucket) or {}
-    )
+    bucket_data = (allocation_plan.get("buckets") or {}).get(bucket) or {}
     for candidate in bucket_data.get("candidates") or []:
-        if str(candidate.get("symbol") or "").upper() == str(
-            symbol or ""
-        ).upper():
+        if str(candidate.get("symbol") or "").upper() == str(symbol or "").upper():
             return candidate
     return {}
 
@@ -70,11 +68,8 @@ def _per_symbol_target_value(
     candidate_meta: Mapping[str, Any],
     bucket_plan: Mapping[str, Any],
 ) -> float | None:
-    """Return final symbol target, never the whole bucket target.
+    """Return final symbol target, never the whole bucket target."""
 
-    `bucket_plan.target_value` represents the total 50/30/20 bucket allocation
-    and must not be sent to Risk_Agent as one symbol's rebalance target.
-    """
     explicit = _positive_float(
         selected_row.get("capacity_adjusted_target_value")
         or selected_row.get("target_value")
@@ -85,9 +80,7 @@ def _per_symbol_target_value(
     candidates = [
         value
         for value in (
-            _positive_float(
-                candidate_meta.get("suggested_equal_weight_value")
-            ),
+            _positive_float(candidate_meta.get("suggested_equal_weight_value")),
             _positive_float(candidate_meta.get("suggested_max_value")),
             _positive_float(bucket_plan.get("max_symbol_value")),
         )
@@ -103,6 +96,7 @@ def build_selected_positions(
     bucket_selection: Dict[str, Any],
 ) -> List[Dict[str, Any]]:
     """Build positions that passed classification, evidence and capacity gates."""
+
     ranked_by_symbol = {
         str(item.get("symbol") or "").upper(): item
         for item in ranked
@@ -124,14 +118,8 @@ def build_selected_positions(
         ).get("strategy_bucket")
         if not bucket or bucket == UNASSIGNED:
             continue
-        bucket_plan = (
-            (allocation_plan.get("buckets") or {}).get(bucket) or {}
-        )
-        candidate_meta = _bucket_candidate(
-            allocation_plan,
-            symbol,
-            bucket,
-        )
+        bucket_plan = (allocation_plan.get("buckets") or {}).get(bucket) or {}
+        candidate_meta = _bucket_candidate(allocation_plan, symbol, bucket)
         target_weight = bucket_plan.get("target_weight") or 0
         evidence_summary = dict(item.get("evidence_summary") or {})
         target_value = _per_symbol_target_value(
@@ -159,30 +147,16 @@ def build_selected_positions(
                     "strategy_bucket_classification"
                 )
                 or {},
-                "evidence_gate_passed": item.get(
-                    "evidence_gate_passed",
-                    True,
-                ),
+                "evidence_gate_passed": item.get("evidence_gate_passed", True),
                 "evidence_summary": evidence_summary,
-                "evidence_versions": evidence_summary.get(
-                    "evidence_versions"
-                )
-                or {},
-                "evidence_statuses": evidence_summary.get(
-                    "evidence_statuses"
-                )
-                or {},
-                "source_conflicts": evidence_summary.get(
-                    "source_conflicts"
-                )
-                or [],
+                "evidence_versions": evidence_summary.get("evidence_versions") or {},
+                "evidence_statuses": evidence_summary.get("evidence_statuses") or {},
+                "source_conflicts": evidence_summary.get("source_conflicts") or [],
                 "target_weight": target_weight,
                 "allocation_pct": float(target_weight) * 100,
                 "bucket_target_value": bucket_plan.get("target_value"),
                 "target_value": target_value,
-                "suggested_max_value": candidate_meta.get(
-                    "suggested_max_value"
-                )
+                "suggested_max_value": candidate_meta.get("suggested_max_value")
                 or bucket_plan.get("max_symbol_value"),
                 "suggested_equal_weight_value": candidate_meta.get(
                     "suggested_equal_weight_value"
@@ -196,19 +170,12 @@ def build_selected_positions(
                 "capacity_policy_version": selected_row.get(
                     "capacity_policy_version"
                 ),
-                "pre_risk_capacity": selected_row.get(
-                    "pre_risk_capacity"
-                )
-                or {},
+                "pre_risk_capacity": selected_row.get("pre_risk_capacity") or {},
                 "capacity_fallback_promoted": bool(
                     selected_row.get("capacity_fallback_promoted")
                 ),
-                "final_verdict": (item.get("analysis") or {}).get(
-                    "final_verdict"
-                ),
-                "analysis_status": (item.get("analysis") or {}).get(
-                    "status"
-                ),
+                "final_verdict": (item.get("analysis") or {}).get("final_verdict"),
+                "analysis_status": (item.get("analysis") or {}).get("status"),
                 "score_breakdown": item.get("score_breakdown"),
                 "scanner_candidate": item.get("scanner_candidate"),
             }
@@ -222,6 +189,7 @@ def build_position_analysis_payloads(
     selected_positions: List[Dict[str, Any]],
 ) -> List[Dict[str, Any]]:
     """Attach allocation, classifier, evidence and capacity context for Risk."""
+
     ranked_by_symbol = {
         str(item.get("symbol") or "").upper(): item
         for item in ranked
@@ -247,9 +215,7 @@ def build_position_analysis_payloads(
         analysis["strategy_bucket_classification"] = (
             position.get("strategy_bucket_classification") or {}
         )
-        analysis["bucket_confidence"] = position.get(
-            "bucket_confidence"
-        )
+        analysis["bucket_confidence"] = position.get("bucket_confidence")
         analysis["bucket_classification_status"] = position.get(
             "bucket_classification_status"
         )
@@ -264,18 +230,14 @@ def build_position_analysis_payloads(
             True,
         )
         analysis["evidence_summary"] = evidence_summary
-        analysis["evidence_versions"] = evidence_summary.get(
-            "evidence_versions"
-        ) or {}
+        analysis["evidence_versions"] = evidence_summary.get("evidence_versions") or {}
         analysis["fundamental_evidence_status"] = (
             evidence_summary.get("evidence_statuses") or {}
         ).get("fundamental")
         analysis["technical_evidence_status"] = (
             evidence_summary.get("evidence_statuses") or {}
         ).get("technical")
-        analysis["source_conflicts"] = evidence_summary.get(
-            "source_conflicts"
-        ) or []
+        analysis["source_conflicts"] = evidence_summary.get("source_conflicts") or []
         analysis["classification_inputs"] = evidence_summary.get(
             "classification_inputs"
         ) or {}
@@ -293,31 +255,15 @@ def build_position_analysis_payloads(
             "bucket_classifier_version": position.get(
                 "bucket_classifier_version"
             ),
-            "evidence_gate_passed": position.get(
-                "evidence_gate_passed",
-                True,
-            ),
-            "evidence_versions": evidence_summary.get(
-                "evidence_versions"
-            )
-            or {},
-            "evidence_statuses": evidence_summary.get(
-                "evidence_statuses"
-            )
-            or {},
-            "source_conflicts": evidence_summary.get(
-                "source_conflicts"
-            )
-            or [],
+            "evidence_gate_passed": position.get("evidence_gate_passed", True),
+            "evidence_versions": evidence_summary.get("evidence_versions") or {},
+            "evidence_statuses": evidence_summary.get("evidence_statuses") or {},
+            "source_conflicts": evidence_summary.get("source_conflicts") or [],
             "target_weight": position.get("target_weight"),
             "allocation_pct": position.get("allocation_pct"),
-            "bucket_target_value": position.get(
-                "bucket_target_value"
-            ),
+            "bucket_target_value": position.get("bucket_target_value"),
             "target_value": position.get("target_value"),
-            "suggested_max_value": position.get(
-                "suggested_max_value"
-            ),
+            "suggested_max_value": position.get("suggested_max_value"),
             "suggested_equal_weight_value": position.get(
                 "suggested_equal_weight_value"
             ),
@@ -327,19 +273,60 @@ def build_position_analysis_payloads(
             "capacity_incremental_value": position.get(
                 "capacity_incremental_value"
             ),
-            "capacity_policy_version": position.get(
-                "capacity_policy_version"
-            ),
+            "capacity_policy_version": position.get("capacity_policy_version"),
             "capacity_fallback_promoted": position.get(
                 "capacity_fallback_promoted"
             ),
-            "pre_risk_capacity": position.get(
-                "pre_risk_capacity"
-            )
-            or {},
+            "pre_risk_capacity": position.get("pre_risk_capacity") or {},
         }
         payloads.append(analysis)
     return payloads
+
+
+def _investability_filter(
+    *,
+    selected_positions: List[Dict[str, Any]],
+    position_analysis_payloads: List[Dict[str, Any]],
+) -> Dict[str, Any]:
+    return filter_candidates_with_investability_gate(
+        selected_positions=selected_positions,
+        position_analysis_payloads=position_analysis_payloads,
+        enabled=config.INVESTABILITY_GATE_ENABLED,
+        min_price_usd=config.INVESTABILITY_MIN_PRICE_USD,
+        min_market_cap_usd=config.INVESTABILITY_MIN_MARKET_CAP_USD,
+        min_average_dollar_volume_usd=(
+            config.INVESTABILITY_MIN_AVG_DOLLAR_VOLUME_USD
+        ),
+        max_spread_bps=config.INVESTABILITY_MAX_SPREAD_BPS,
+        max_atr_pct=config.INVESTABILITY_MAX_ATR_PCT,
+        require_average_dollar_volume=(
+            config.INVESTABILITY_REQUIRE_AVG_DOLLAR_VOLUME
+        ),
+        require_spread=config.INVESTABILITY_REQUIRE_SPREAD,
+        require_atr=config.INVESTABILITY_REQUIRE_ATR,
+        block_extreme_volatility=(
+            config.INVESTABILITY_BLOCK_EXTREME_VOLATILITY
+        ),
+    )
+
+
+def _attach_investability_to_ranked_rows(
+    rows: List[Dict[str, Any]],
+    gate: Dict[str, Any],
+) -> List[Dict[str, Any]]:
+    decisions = {
+        str(row.get("symbol") or "").upper(): row
+        for row in gate.get("decisions") or []
+        if row.get("symbol")
+    }
+    result: List[Dict[str, Any]] = []
+    for row in rows:
+        next_row = dict(row)
+        decision = decisions.get(str(row.get("symbol") or "").upper())
+        if decision is not None:
+            next_row["investability_gate"] = decision
+        result.append(next_row)
+    return result
 
 
 def build_discover_allocation_report(
@@ -350,7 +337,8 @@ def build_discover_allocation_report(
     positions: Iterable[Any] | None = None,
     minimum_incremental_value: Any = DEFAULT_MIN_INCREMENTAL_VALUE,
 ) -> Dict[str, Any]:
-    """Build governed allocation, capacity selection, and winner views."""
+    """Build governed allocation and filter non-investable names pre-Backtest."""
+
     enriched_ranked = enrich_ranked_candidates_with_buckets(ranked)
     allocation_plan = build_discover_allocation_plan(
         enriched_ranked,
@@ -369,17 +357,72 @@ def build_discover_allocation_report(
         minimum_incremental_value=minimum_incremental_value,
     )
     bucket_selection = capacity_selection["bucket_selection"]
-    selected_positions = build_selected_positions(
+    selected_before_investability = build_selected_positions(
         ranked=enriched_ranked,
         allocation_plan=allocation_plan,
         bucket_selection=bucket_selection,
     )
+    payloads_before_investability = build_position_analysis_payloads(
+        ranked=enriched_ranked,
+        selected_positions=selected_before_investability,
+    )
+    investability_gate = _investability_filter(
+        selected_positions=selected_before_investability,
+        position_analysis_payloads=payloads_before_investability,
+    )
+    selected_positions = investability_gate["selected_positions"]
+    position_analysis_payloads = investability_gate[
+        "position_analysis_payloads"
+    ]
+
+    allocation_plan = dict(allocation_plan)
+    allocation_plan["investability_gate"] = investability_gate
+    bucket_selection = dict(bucket_selection)
+    bucket_summary = dict(bucket_selection.get("summary") or {})
+    bucket_summary.update(
+        {
+            "selected_before_investability": len(
+                selected_before_investability
+            ),
+            "selected_after_investability": len(selected_positions),
+            "investability_gate_enabled": investability_gate.get("enabled"),
+            "investability_gate_policy_version": investability_gate.get(
+                "policy_version"
+            ),
+            "investability_rejected_count": (
+                investability_gate.get("summary") or {}
+            ).get("rejected_count", 0),
+            "investability_rejected_symbols": [
+                row.get("symbol")
+                for row in investability_gate.get("rejected") or []
+            ],
+        }
+    )
+    bucket_selection["summary"] = bucket_summary
+
+    ranked_rows = _attach_investability_to_ranked_rows(
+        ranked_response_rows(enriched_ranked),
+        investability_gate,
+    )
     quarantined_candidates = [
         row
-        for row in ranked_response_rows(enriched_ranked)
+        for row in ranked_rows
         if row.get("strategy_bucket") == UNASSIGNED
         or not row.get("evidence_gate_passed", True)
     ]
+    selected_symbols = {
+        str(row.get("symbol") or "").upper()
+        for row in selected_positions
+    }
+    winner = next(
+        (
+            row
+            for row in ranked_rows
+            if str(row.get("symbol") or "").upper() in selected_symbols
+        ),
+        {},
+    )
+
     return {
         "allocation_plan": allocation_plan,
         "bucket_selection": bucket_selection,
@@ -390,23 +433,16 @@ def build_discover_allocation_report(
                 row.get("symbol") for row in quarantined_candidates
             ],
             "quarantined_candidates": quarantined_candidates,
+            "investability_rejected_count": (
+                investability_gate.get("summary") or {}
+            ).get("rejected_count", 0),
         },
+        "investability_gate": investability_gate,
         "pre_risk_capacity": capacity_selection,
-        "pre_risk_capacity_skips": capacity_selection.get("skipped")
-        or [],
-        "pre_risk_capacity_promotions": capacity_selection.get(
-            "promoted"
-        )
-        or [],
+        "pre_risk_capacity_skips": capacity_selection.get("skipped") or [],
+        "pre_risk_capacity_promotions": capacity_selection.get("promoted") or [],
         "selected_positions": selected_positions,
-        "position_analysis_payloads": build_position_analysis_payloads(
-            ranked=enriched_ranked,
-            selected_positions=selected_positions,
-        ),
-        "winner": (
-            ranked_response_rows(enriched_ranked)[0]
-            if selected_positions
-            else {}
-        ),
-        "ranked_candidates": ranked_response_rows(enriched_ranked),
+        "position_analysis_payloads": position_analysis_payloads,
+        "winner": winner,
+        "ranked_candidates": ranked_rows,
     }
