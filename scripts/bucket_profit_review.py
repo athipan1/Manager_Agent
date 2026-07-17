@@ -38,6 +38,8 @@ BUCKET_CONFIG: Dict[str, Dict[str, Any]] = {
 }
 KNOWN_BUCKETS = set(BUCKET_CONFIG)
 UNASSIGNED = "unassigned"
+HIGHEST_PRICE_FALLBACK_WARNING = "highest_price_since_entry unavailable; used current_price as fallback, trailing stop may be understated"
+_NON_DATABASE_PEAK_FIELDS = {"highest_price_since_entry", "highest_price"}
 
 
 def _unwrap(value: Any) -> Any:
@@ -125,6 +127,16 @@ def fetch_database_bucket_hints(database_url: str | None, account_id: int | str 
     return hints
 
 
+def fetch_database_positions(database_url: str | None, account_id: int | str = 1, api_key: str | None = None) -> List[Dict[str, Any]]:
+    if not database_url:
+        return []
+    response = _request_json(database_url.rstrip("/"), f"/accounts/{account_id}/positions", api_key=api_key, timeout=20)
+    data = _unwrap(response)
+    if not isinstance(data, list):
+        return []
+    return [row for row in data if isinstance(row, dict) and _symbol(row)]
+
+
 def merge_bucket_sources(database_hints: Optional[Dict[str, str]] = None, fallback_hints: Optional[Dict[str, str]] = None) -> Dict[str, str]:
     merged: Dict[str, str] = {}
     merged.update(fallback_hints or {})
@@ -147,7 +159,7 @@ def _orders_from_broker_snapshot(snapshot: Any) -> List[Dict[str, Any]]:
     return [o for o in _unwrap(data.get("orders")) or [] if isinstance(o, dict)]
 
 
-def _merge_positions(dashboard_positions: Iterable[Dict[str, Any]], broker_positions: Iterable[Dict[str, Any]], bucket_hints: Optional[Dict[str, str]] = None, database_bucket_hints: Optional[Dict[str, str]] = None) -> Dict[str, Dict[str, Any]]:
+def _merge_positions(dashboard_positions: Iterable[Dict[str, Any]], broker_positions: Iterable[Dict[str, Any]], bucket_hints: Optional[Dict[str, str]] = None, database_bucket_hints: Optional[Dict[str, str]] = None, database_positions: Optional[Iterable[Dict[str, Any]]] = None) -> Dict[str, Dict[str, Any]]:
     merged: Dict[str, Dict[str, Any]] = {}
     for source_name, rows in (("dashboard", dashboard_positions), ("broker", broker_positions)):
         for row in rows:
@@ -155,8 +167,18 @@ def _merge_positions(dashboard_positions: Iterable[Dict[str, Any]], broker_posit
             if symbol:
                 current = merged.setdefault(symbol, {"symbol": symbol})
                 current.setdefault("sources", []).append(source_name)
-                current.update({k: v for k, v in row.items() if v not in (None, "")})
+                current.update({k: v for k, v in row.items() if v not in (None, "") and k not in _NON_DATABASE_PEAK_FIELDS})
                 current["symbol"] = symbol
+    for row in database_positions or []:
+        symbol = _symbol(row)
+        if symbol:
+            current = merged.setdefault(symbol, {"symbol": symbol})
+            current.setdefault("sources", []).append("database_agent")
+            current.update({k: v for k, v in row.items() if v not in (None, "")})
+            current["symbol"] = symbol
+            current["highest_price_since_entry_source"] = "database_agent" if _as_float(row.get("highest_price_since_entry")) is not None else "database_agent_missing"
+            if _bucket(row) != UNASSIGNED:
+                current["strategy_bucket_source"] = "database_agent"
     for symbol, bucket in (bucket_hints or {}).items():
         if symbol in merged and _bucket(merged[symbol]) == UNASSIGNED:
             merged[symbol]["strategy_bucket"] = bucket
@@ -176,14 +198,21 @@ def _find_stop_order(symbol: str, orders: Iterable[Dict[str, Any]]) -> Optional[
     return None
 
 
-def _position_prices(position: Dict[str, Any], stop_row: Optional[Dict[str, Any]]) -> Dict[str, Optional[float]]:
-    entry = _as_float(position.get("entry_price") or position.get("avg_entry_price") or position.get("average_entry_price") or position.get("avg_price"))
+def _position_prices(position: Dict[str, Any], stop_row: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    entry = _as_float(position.get("entry_price") or position.get("avg_entry_price") or position.get("average_entry_price") or position.get("average_cost") or position.get("avg_price"))
     current = _as_float(position.get("current_price") or position.get("current_market_price") or position.get("market_price") or position.get("last_price"))
     if current is None:
         qty, market_value = _as_float(position.get("qty") or position.get("quantity")), _as_float(position.get("market_value"))
         current = market_value / qty if qty and market_value else None
     stop = _as_float((stop_row or {}).get("stop_price") or (stop_row or {}).get("trigger_price")) if stop_row else None
-    return {"entry_price": entry, "current_price": current, "stop_loss": stop, "highest_price_since_entry": _as_float(position.get("highest_price_since_entry") or position.get("highest_price")) or current, "risk_per_share": (entry - stop) if entry and stop and entry > stop else None}
+    peak = _as_float(position.get("highest_price_since_entry"))
+    warnings: List[str] = []
+    peak_source = position.get("highest_price_since_entry_source") or "database_agent"
+    if peak is None:
+        peak = current
+        peak_source = "current_price_fallback"
+        warnings.append(HIGHEST_PRICE_FALLBACK_WARNING)
+    return {"entry_price": entry, "current_price": current, "stop_loss": stop, "highest_price_since_entry": peak, "highest_price_since_entry_source": peak_source, "warnings": warnings, "risk_per_share": (entry - stop) if entry and stop and entry > stop else None}
 
 
 def build_profit_request(bucket_name: str, position: Dict[str, Any], stop_order: Optional[Dict[str, Any]]) -> Dict[str, Any]:
@@ -192,7 +221,7 @@ def build_profit_request(bucket_name: str, position: Dict[str, Any], stop_order:
     unrealized_pct = _as_float(position.get("unrealized_plpc") or position.get("unrealized_pl_pct"))
     if unrealized_pct is None and entry and current:
         unrealized_pct = (current - entry) / entry
-    return {"position": {"symbol": _symbol(position), "quantity": _as_int(position.get("qty") or position.get("quantity")), "entry_price": entry or 0, "current_price": current or entry or 0, "stop_loss": prices["stop_loss"], "highest_price_since_entry": prices["highest_price_since_entry"], "risk_per_share": prices["risk_per_share"], "unrealized_pl_pct": unrealized_pct}, **BUCKET_CONFIG[bucket_name]["profit_rules"], "exit_on_stop_breach": True}
+    return {"position": {"symbol": _symbol(position), "quantity": _as_int(position.get("qty") or position.get("quantity")), "entry_price": entry or 0, "current_price": current or entry or 0, "stop_loss": prices["stop_loss"], "highest_price_since_entry": prices["highest_price_since_entry"], "risk_per_share": prices["risk_per_share"], "unrealized_pl_pct": unrealized_pct}, **BUCKET_CONFIG[bucket_name]["profit_rules"], "exit_on_stop_breach": True, "warnings": list(prices["warnings"]), "metadata": {"highest_price_since_entry_source": prices["highest_price_since_entry_source"], "cross_repo_fix_part": 2}}
 
 
 def fallback_profit_plan(bucket_name: str, position: Dict[str, Any], stop_order: Optional[Dict[str, Any]]) -> Dict[str, Any]:
@@ -211,7 +240,8 @@ def fallback_profit_plan(bucket_name: str, position: Dict[str, Any], stop_order:
         action, reason, confidence = "partial_exit", "Value rebound position has meaningful unrealized profit; review partial take-profit", 0.64
     elif bucket_name == "quality_growth" and unrealized_pct >= 0.15:
         action, reason, confidence = "partial_exit", "Quality growth position has extended unrealized profit; review modest partial take-profit", 0.62
-    return {"symbol": symbol, "primary_action": action, "current_r_multiple": None, "unrealized_pl_pct": round(unrealized_pct, 6), "actions": [{"action": action, "symbol": symbol, "quantity": 0, "recommended_stop": stop, "reason": reason, "confidence_score": confidence}], "warnings": ["Profit_Agent was unavailable; used Manager_Agent fallback advisory rules"], "metadata": {"advisory_only": True, "fallback": True}}
+    warnings = ["Profit_Agent was unavailable; used Manager_Agent fallback advisory rules", *prices["warnings"]]
+    return {"symbol": symbol, "primary_action": action, "current_r_multiple": None, "unrealized_pl_pct": round(unrealized_pct, 6), "actions": [{"action": action, "symbol": symbol, "quantity": 0, "recommended_stop": stop, "reason": reason, "confidence_score": confidence}], "warnings": warnings, "metadata": {"advisory_only": True, "fallback": True, "highest_price_since_entry_source": prices["highest_price_since_entry_source"]}}
 
 
 def call_profit_agent(profit_agent_url: str, request_payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -229,15 +259,16 @@ def _bucket_distribution(positions: Dict[str, Dict[str, Any]]) -> Dict[str, int]
     return dict(sorted(output.items()))
 
 
-def review_bucket(bucket_name: str, dashboard: Any, broker_snapshot: Any, profit_agent_url: str | None, bucket_hints: Optional[Dict[str, str]] = None, database_bucket_hints: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
+def review_bucket(bucket_name: str, dashboard: Any, broker_snapshot: Any, profit_agent_url: str | None, bucket_hints: Optional[Dict[str, str]] = None, database_bucket_hints: Optional[Dict[str, str]] = None, database_positions: Optional[Iterable[Dict[str, Any]]] = None) -> Dict[str, Any]:
     if bucket_name not in BUCKET_CONFIG:
         raise ValueError(f"unknown bucket: {bucket_name}")
-    rows_by_symbol = _merge_positions(_positions_from_dashboard(dashboard), _positions_from_broker_snapshot(broker_snapshot), bucket_hints, database_bucket_hints)
+    rows_by_symbol = _merge_positions(_positions_from_dashboard(dashboard), _positions_from_broker_snapshot(broker_snapshot), bucket_hints, database_bucket_hints, database_positions)
     orders = _orders_from_broker_snapshot(broker_snapshot)
     reviewed: List[Dict[str, Any]] = []
     for position in sorted([p for p in rows_by_symbol.values() if _bucket(p) == bucket_name], key=_symbol):
         stop_row = _find_stop_order(_symbol(position), orders)
         request_payload = build_profit_request(bucket_name, position, stop_row)
+        request_warnings = list(request_payload.get("warnings") or [])
         if profit_agent_url:
             plan = call_profit_agent(profit_agent_url, request_payload)
             source = "profit_agent" if plan.get("status") != "error" else "fallback_after_profit_agent_error"
@@ -245,13 +276,22 @@ def review_bucket(bucket_name: str, dashboard: Any, broker_snapshot: Any, profit
                 plan = fallback_profit_plan(bucket_name, position, stop_row)
         else:
             plan, source = fallback_profit_plan(bucket_name, position, stop_row), "fallback"
-        reviewed.append({"symbol": _symbol(position), "bucket": bucket_name, "bucket_source": position.get("strategy_bucket_source") or "position_data", "quantity": request_payload["position"]["quantity"], "entry_price": request_payload["position"]["entry_price"], "current_price": request_payload["position"]["current_price"], "stop_loss": request_payload["position"].get("stop_loss"), "has_protective_stop": stop_row is not None, "profit_source": source, "profit_request": request_payload, "profit_plan": plan, "risk_status": "not_submitted", "execution_status": "not_submitted", "safety": "report_only_no_orders_submitted"})
-    return {"generated_at": datetime.now(timezone.utc).isoformat(), "bucket": bucket_name, "config": BUCKET_CONFIG[bucket_name], "mode": "BUCKET_PROFIT_REVIEW_REPORT_ONLY", "bucket_hints": bucket_hints or {}, "database_bucket_hints": database_bucket_hints or {}, "bucket_distribution": _bucket_distribution(rows_by_symbol), "reviewed_positions": reviewed, "summary": {"positions_seen": len(rows_by_symbol), "reviewed_positions": len(reviewed), "positions_without_protective_stop": sum(1 for row in reviewed if not row["has_protective_stop"]), "positions_without_stop": sum(1 for row in reviewed if not row["has_protective_stop"]), "bucket_hints_applied": sum(1 for row in rows_by_symbol.values() if row.get("strategy_bucket_source") == "bucket_hint"), "database_bucket_hints_applied": sum(1 for row in rows_by_symbol.values() if row.get("strategy_bucket_source") == "database_agent"), "profit_agent_used": sum(1 for row in reviewed if row["profit_source"] == "profit_agent"), "risk_submissions": 0, "execution_submissions": 0}, "safety": {"advisory_only": True, "orders_submitted": False, "risk_agent_submitted": False, "execution_agent_submitted": False}}
+        plan_warnings = list(plan.get("warnings") or [])
+        for warning in request_warnings:
+            if warning not in plan_warnings:
+                plan_warnings.append(warning)
+        plan["warnings"] = plan_warnings
+        reviewed.append({"symbol": _symbol(position), "bucket": bucket_name, "bucket_source": position.get("strategy_bucket_source") or "position_data", "quantity": request_payload["position"]["quantity"], "entry_price": request_payload["position"]["entry_price"], "current_price": request_payload["position"]["current_price"], "stop_loss": request_payload["position"].get("stop_loss"), "highest_price_since_entry": request_payload["position"].get("highest_price_since_entry"), "highest_price_since_entry_source": request_payload.get("metadata", {}).get("highest_price_since_entry_source"), "warnings": request_warnings, "has_protective_stop": stop_row is not None, "profit_source": source, "profit_request": request_payload, "profit_plan": plan, "risk_status": "not_submitted", "execution_status": "not_submitted", "safety": "report_only_no_orders_submitted"})
+    report_warnings = sorted({warning for row in reviewed for warning in row.get("warnings", []) if warning})
+    return {"generated_at": datetime.now(timezone.utc).isoformat(), "bucket": bucket_name, "config": BUCKET_CONFIG[bucket_name], "mode": "BUCKET_PROFIT_REVIEW_REPORT_ONLY", "bucket_hints": bucket_hints or {}, "database_bucket_hints": database_bucket_hints or {}, "bucket_distribution": _bucket_distribution(rows_by_symbol), "warnings": report_warnings, "reviewed_positions": reviewed, "summary": {"positions_seen": len(rows_by_symbol), "reviewed_positions": len(reviewed), "positions_without_protective_stop": sum(1 for row in reviewed if not row["has_protective_stop"]), "positions_without_stop": sum(1 for row in reviewed if not row["has_protective_stop"]), "position_peak_fallbacks": sum(1 for row in reviewed if row.get("highest_price_since_entry_source") == "current_price_fallback"), "bucket_hints_applied": sum(1 for row in rows_by_symbol.values() if row.get("strategy_bucket_source") == "bucket_hint"), "database_bucket_hints_applied": sum(1 for row in rows_by_symbol.values() if row.get("strategy_bucket_source") == "database_agent"), "profit_agent_used": sum(1 for row in reviewed if row["profit_source"] == "profit_agent"), "risk_submissions": 0, "execution_submissions": 0}, "safety": {"advisory_only": True, "orders_submitted": False, "risk_agent_submitted": False, "execution_agent_submitted": False}}
 
 
 def render_markdown(report: Dict[str, Any]) -> str:
     config, summary = report.get("config") or {}, report.get("summary") or {}
-    lines = [f"# {config.get('review_title', 'Bucket Profit Review')}", "", f"Generated at UTC: `{report.get('generated_at', '-')}`", f"Bucket: `{report.get('bucket', '-')}`", f"Frequency: `{config.get('frequency', '-')}`", f"Mode: `{report.get('mode', '-')}`", "", "## Safety", "- Advisory only: `true`", "- Risk submissions: `0`", "- Execution submissions: `0`", "- Orders submitted: `false`", "", "## Summary", f"- Positions Seen: `{summary.get('positions_seen', 0)}`", f"- Reviewed Positions: `{summary.get('reviewed_positions', 0)}`", f"- Positions Without Protective Stop: `{summary.get('positions_without_protective_stop', summary.get('positions_without_stop', 0))}`", f"- Database Bucket Hints Applied: `{summary.get('database_bucket_hints_applied', 0)}`", f"- Fallback Bucket Hints Applied: `{summary.get('bucket_hints_applied', 0)}`", f"- Profit Agent Used: `{summary.get('profit_agent_used', 0)}`", "", "## Bucket Distribution", "```json", json.dumps(report.get("bucket_distribution") or {}, ensure_ascii=False, indent=2, default=str), "```", "", "## Review Checks"]
+    lines = [f"# {config.get('review_title', 'Bucket Profit Review')}", "", f"Generated at UTC: `{report.get('generated_at', '-')}`", f"Bucket: `{report.get('bucket', '-')}`", f"Frequency: `{config.get('frequency', '-')}`", f"Mode: `{report.get('mode', '-')}`", "", "## Safety", "- Advisory only: `true`", "- Risk submissions: `0`", "- Execution submissions: `0`", "- Orders submitted: `false`", "", "## Summary", f"- Positions Seen: `{summary.get('positions_seen', 0)}`", f"- Reviewed Positions: `{summary.get('reviewed_positions', 0)}`", f"- Positions Without Protective Stop: `{summary.get('positions_without_protective_stop', summary.get('positions_without_stop', 0))}`", f"- Position Peak Fallbacks: `{summary.get('position_peak_fallbacks', 0)}`", f"- Database Bucket Hints Applied: `{summary.get('database_bucket_hints_applied', 0)}`", f"- Fallback Bucket Hints Applied: `{summary.get('bucket_hints_applied', 0)}`", f"- Profit Agent Used: `{summary.get('profit_agent_used', 0)}`"]
+    if report.get("warnings"):
+        lines.extend(["", "## Warnings", *[f"- {warning}" for warning in report["warnings"]]])
+    lines.extend(["", "## Bucket Distribution", "```json", json.dumps(report.get("bucket_distribution") or {}, ensure_ascii=False, indent=2, default=str), "```", "", "## Review Checks"])
     for check in config.get("checks") or []:
         lines.append(f"- `{check}`")
     lines.extend(["", "## Reviewed Positions"])
@@ -259,14 +299,14 @@ def render_markdown(report: Dict[str, Any]) -> str:
     if not reviewed:
         lines.append("No open positions matched this bucket.")
     else:
-        lines.append("| Symbol | Bucket Source | Qty | Entry | Current | Stop | Protective Stop | Profit Source | Primary Action | Reason |")
-        lines.append("|---|---|---:|---:|---:|---:|---|---|---|---|")
+        lines.append("| Symbol | Bucket Source | Qty | Entry | Current | Peak | Peak Source | Stop | Protective Stop | Profit Source | Primary Action | Reason |")
+        lines.append("|---|---|---:|---:|---:|---:|---|---:|---|---|---|---|")
         for row in reviewed:
             plan = row.get("profit_plan") or {}
             actions = plan.get("actions") or []
             first_action = actions[0] if actions and isinstance(actions[0], dict) else {}
             reason = str(first_action.get("reason") or "-").replace("|", "/")
-            lines.append(f"| {row.get('symbol', '-')} | {row.get('bucket_source', '-')} | {row.get('quantity', '-')} | {row.get('entry_price', '-')} | {row.get('current_price', '-')} | {row.get('stop_loss', '-')} | {row.get('has_protective_stop', '-')} | {row.get('profit_source', '-')} | {plan.get('primary_action', '-')} | {reason} |")
+            lines.append(f"| {row.get('symbol', '-')} | {row.get('bucket_source', '-')} | {row.get('quantity', '-')} | {row.get('entry_price', '-')} | {row.get('current_price', '-')} | {row.get('highest_price_since_entry', '-')} | {row.get('highest_price_since_entry_source', '-')} | {row.get('stop_loss', '-')} | {row.get('has_protective_stop', '-')} | {row.get('profit_source', '-')} | {plan.get('primary_action', '-')} | {reason} |")
     lines.extend(["", "## Raw JSON", "```json", json.dumps(report, ensure_ascii=False, indent=2, default=str), "```"])
     return "\n".join(lines)
 
@@ -298,8 +338,11 @@ def main(argv: List[str] | None = None) -> int:
         dashboard = _request_json(base, f"/dashboard{path}")
     broker_snapshot = _load_json_file(args.broker_snapshot_json) if args.broker_snapshot_json else {"positions": _request_json(args.execution_url.rstrip("/"), "/positions", api_key=args.execution_api_key), "orders": _request_json(args.execution_url.rstrip("/"), "/orders", api_key=args.execution_api_key), "account": _request_json(args.execution_url.rstrip("/"), "/account", api_key=args.execution_api_key)}
     fallback_hints = parse_bucket_hints(args.bucket_hints)
-    database_hints = fetch_database_bucket_hints(args.database_url.strip() or None, args.account_id, args.database_api_key.strip() or None)
-    report = review_bucket(args.bucket, dashboard, broker_snapshot, args.profit_url.strip() or None, bucket_hints=fallback_hints, database_bucket_hints=database_hints)
+    database_url = args.database_url.strip() or None
+    database_api_key = args.database_api_key.strip() or None
+    database_positions = fetch_database_positions(database_url, args.account_id, database_api_key)
+    database_hints = fetch_database_bucket_hints(database_url, args.account_id, database_api_key)
+    report = review_bucket(args.bucket, dashboard, broker_snapshot, args.profit_url.strip() or None, bucket_hints=fallback_hints, database_bucket_hints=database_hints, database_positions=database_positions)
     args.output_json.parent.mkdir(parents=True, exist_ok=True)
     args.output_json.write_text(json.dumps(report, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
     args.output_md.write_text(render_markdown(report), encoding="utf-8")
