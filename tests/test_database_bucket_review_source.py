@@ -1,4 +1,9 @@
-from scripts.bucket_profit_review import fetch_database_bucket_hints, merge_bucket_sources, review_bucket
+from scripts.bucket_profit_review import (
+    fetch_database_bucket_hints,
+    fetch_database_positions,
+    merge_bucket_sources,
+    review_bucket,
+)
 
 
 def test_database_bucket_hints_override_fallback(monkeypatch):
@@ -45,3 +50,27 @@ def test_fetch_database_bucket_hints(monkeypatch):
     monkeypatch.setattr("scripts.bucket_profit_review._request_json", fake_request_json)
 
     assert fetch_database_bucket_hints("http://database-agent:8004", 1, "test-key") == {"ACGL": "value_rebound"}
+
+
+def test_fetch_database_positions_reads_canonical_peak_field(monkeypatch):
+    def fake_request_json(base_url, path, **kwargs):
+        assert base_url == "http://database-agent:8004"
+        assert path == "/accounts/1/positions"
+        assert kwargs["api_key"] == "test-key"
+        return {
+            "data": [
+                {
+                    "symbol": "ACGL",
+                    "quantity": 5,
+                    "average_cost": 100,
+                    "current_market_price": 110,
+                    "highest_price_since_entry": 125,
+                    "strategy_bucket": "value_rebound",
+                }
+            ]
+        }
+
+    monkeypatch.setattr("scripts.bucket_profit_review._request_json", fake_request_json)
+
+    rows = fetch_database_positions("http://database-agent:8004", 1, "test-key")
+    assert rows[0]["highest_price_since_entry"] == 125
