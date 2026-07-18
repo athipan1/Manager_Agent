@@ -24,6 +24,7 @@ jobs:
     timeout-minutes: 45
 
     env:
+      COMPOSE_FILE: docker-compose.yml:docker-compose.broker-sync.yml
       BROKER_MODE: ${{ github.event.inputs.broker_mode || 'ALPACA' }}
       DRY_RUN: "false"
       TRADING_ENABLED: "false"
