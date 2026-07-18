@@ -8,6 +8,7 @@ services:
       PERFORMANCE_AGENT_ENABLED: ${PERFORMANCE_AGENT_ENABLED:-true}
       MARKET_REGIME_AGENT_URL: http://market-regime-agent:8014
       PORTFOLIO_AGENT_URL: http://portfolio-agent:8012
+      PORTFOLIO_AGENT_API_KEY: ${PORTFOLIO_AGENT_API_KEY:-dev_portfolio_key}
       PROFIT_AGENT_URL: http://profit-agent:8011
       PERFORMANCE_AGENT_URL: http://performance-agent:8013
     depends_on:
@@ -53,6 +54,7 @@ services:
       start_period: 30s
     environment:
       PYTHONPATH: /app
+      PORTFOLIO_AGENT_API_KEY: ${PORTFOLIO_AGENT_API_KEY:-dev_portfolio_key}
 
   profit-agent:
     build:
