@@ -72,6 +72,22 @@ jobs:
           path: Database_Agent
           fetch-depth: 1
 
+      - name: Checkout Risk_Agent
+        uses: actions/checkout@v4
+        with:
+          repository: athipan1/Risk_Agent
+          ref: main
+          path: Risk_Agent
+          fetch-depth: 1
+
+      - name: Checkout Performance_Agent
+        uses: actions/checkout@v4
+        with:
+          repository: athipan1/Performance_Agent
+          ref: main
+          path: Performance_Agent
+          fetch-depth: 1
+
       - name: Checkout Learning_Agent
         uses: actions/checkout@v4
         with:
@@ -95,6 +111,8 @@ jobs:
           echo "Technical_Agent=$(git -C Technical_Agent rev-parse HEAD)"
           echo "Fundamental_Agent=$(git -C Fundamental_Agent rev-parse HEAD)"
           echo "Database_Agent=$(git -C Database_Agent rev-parse HEAD)"
+          echo "Risk_Agent=$(git -C Risk_Agent rev-parse HEAD)"
+          echo "Performance_Agent=$(git -C Performance_Agent rev-parse HEAD)"
           echo "Learning_Agent=$(git -C Learning_Agent rev-parse HEAD)"
           echo "Execution_Agent=$(git -C Execution_Agent rev-parse HEAD)"
           echo "BROKER_MODE=${BROKER_MODE}"
