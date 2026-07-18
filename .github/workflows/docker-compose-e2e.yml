@@ -20,6 +20,7 @@ jobs:
       PERFORMANCE_AGENT_ENABLED: "true"
       PORTFOLIO_AGENT_ENABLED: "true"
       PROFIT_AGENT_ENABLED: "true"
+      PORTFOLIO_AGENT_API_KEY: dev_portfolio_key
       RUNTIME_SERVICES: database-agent technical-agent scanner-agent fundamental-agent risk-agent backtest-agent market-regime-agent performance-agent learning-agent execution-agent curator-agent portfolio-agent profit-agent manager-agent db
 
     steps:
@@ -119,6 +120,7 @@ jobs:
             manager-agent:
               environment:
                 PORTFOLIO_AGENT_URL: http://portfolio-agent:8012
+                PORTFOLIO_AGENT_API_KEY: ${PORTFOLIO_AGENT_API_KEY:-dev_portfolio_key}
                 PROFIT_AGENT_URL: http://profit-agent:8011
                 CURATOR_AGENT_URL: http://curator-agent:8010
               depends_on:
@@ -181,6 +183,7 @@ jobs:
                 start_period: 30s
               environment:
                 PYTHONPATH: /app
+                PORTFOLIO_AGENT_API_KEY: ${PORTFOLIO_AGENT_API_KEY:-dev_portfolio_key}
           YAML
           docker compose -f docker-compose.yml -f /tmp/agent-contract-compose.yml --profile backtest config
 
@@ -442,7 +445,17 @@ jobs:
               ],
               "mode": "normal",
           }
-          portfolio = request_json("POST", "http://localhost:8012/portfolio/exposure", portfolio_payload)
+          portfolio_correlation_id = "agent-contract-e2e-portfolio"
+          portfolio = request_json(
+              "POST",
+              "http://localhost:8012/portfolio/exposure",
+              portfolio_payload,
+              {
+                  "X-API-KEY": "dev_portfolio_key",
+                  "X-Correlation-ID": portfolio_correlation_id,
+              },
+          )
+          assert portfolio.get("correlation_id") in {None, portfolio_correlation_id}, portfolio
           portfolio_data = portfolio.get("data") or {}
           assert "bucket_exposure" in portfolio_data, portfolio
           assert "position_exposure" in portfolio_data, portfolio

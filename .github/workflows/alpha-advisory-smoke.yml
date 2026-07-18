@@ -16,6 +16,7 @@ jobs:
       PORTFOLIO_AGENT_ENABLED: "true"
       PROFIT_AGENT_ENABLED: "true"
       PERFORMANCE_AGENT_ENABLED: "true"
+      PORTFOLIO_AGENT_API_KEY: dev_portfolio_key
 
     steps:
       - name: Checkout Manager_Agent
@@ -66,7 +67,9 @@ jobs:
       - name: Start alpha agents
         run: |
           docker run -d --name market-regime-agent -p 8014:8014 painaidee/market-regime-agent:latest
-          docker run -d --name portfolio-agent -p 8012:8012 painaidee/portfolio-agent:latest
+          docker run -d --name portfolio-agent -p 8012:8012 \
+            -e PORTFOLIO_AGENT_API_KEY="$PORTFOLIO_AGENT_API_KEY" \
+            painaidee/portfolio-agent:latest
           docker run -d --name profit-agent -p 8011:8011 painaidee/profit-agent:latest
           docker run -d --name performance-agent -p 8013:8013 painaidee/performance-agent:latest
 
@@ -96,7 +99,9 @@ jobs:
             -d '{"symbol":"SPY","price":550,"sma_50":530,"sma_200":500,"atr_pct":0.015,"vix":15,"market_breadth_pct":0.7}'
           curl -fsS http://localhost:8012/portfolio/exposure \
             -H "Content-Type: application/json" \
-            -d '{"equity":100000,"cash":20000,"mode":"normal","positions":[{"symbol":"ACGL","market_value":10000,"strategy_bucket":"value_rebound"}]}'
+            -H "X-API-KEY: $PORTFOLIO_AGENT_API_KEY" \
+            -H "X-Correlation-ID: alpha-smoke-portfolio" \
+            -d '{"equity":100000,"cash":20000,"mode":"normal","positions":[{"symbol":"ACGL","market_value":10000,"strategy_bucket":"value_rebound"},{"symbol":"SPY","market_value":70000,"strategy_bucket":"core_dividend"}]}'
           curl -fsS http://localhost:8011/profit/plan \
             -H "Content-Type: application/json" \
             -d '{"position":{"symbol":"ADBE","quantity":20,"entry_price":100,"current_price":120,"stop_loss":90}}'
