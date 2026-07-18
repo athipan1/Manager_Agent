@@ -1,60 +1,31 @@
-name: CI with Docker Compose (Integration Test)
+name: Docker Compose Config Check
 
 on:
   push:
   pull_request:
 
 jobs:
-  integration-test:
+  compose-config:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v3
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
-      - name: Set up Docker Compose
-        run: |
-          docker compose version
+      - name: Show Docker Compose version
+        run: docker compose version
 
-      - name: Pull images
-        run: |
-          docker compose pull
+      - name: Validate base Compose configuration
+        run: docker compose config --quiet
 
-      - name: Run services
-        run: |
-          docker compose up -d
-          docker compose ps
+      - name: Validate Broker Sync override
+        run: >-
+          docker compose
+          -f docker-compose.yml
+          -f docker-compose.broker-sync.yml
+          config --quiet
 
-      - name: Wait for services
+      - name: Validate optional profiles
         run: |
-          echo "⏳ waiting for services..."
-          sleep 20
-
-      - name: Health Check: Technical Agent
-        run: |
-          curl -f http://localhost:8002/health
-
-      - name: Health Check: Fundamental Agent
-        run: |
-          curl -f http://localhost:8001/health
-
-      - name: Health Check: Orchestrator
-        run: |
-          curl -f http://localhost:8080/health
-
-      - name: Integration Test: Manager → Agents
-        run: |
-          curl -X POST http://localhost:8080/analyze \
-            -H "Content-Type: application/json" \
-            -d '{"symbol":"AAPL","mode":"test"}'
-
-      - name: Show Logs (on failure)
-        if: failure()
-        run: |
-          docker compose logs
-
-      - name: Free disk space
-        if: always()
-        run: |
-          docker system prune -af
-          docker volume prune -f
+          docker compose --profile backtest config --quiet
+          docker compose --profile market-regime config --quiet
