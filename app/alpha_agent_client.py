@@ -12,6 +12,7 @@ from .config import (
     PERFORMANCE_AGENT_ENABLED,
     PERFORMANCE_AGENT_TIMEOUT,
     PERFORMANCE_AGENT_URL,
+    PORTFOLIO_AGENT_API_KEY,
     PORTFOLIO_AGENT_ENABLED,
     PORTFOLIO_AGENT_TIMEOUT,
     PORTFOLIO_AGENT_URL,
@@ -31,6 +32,7 @@ class AlphaAgentSpec:
     timeout: int
     advisory_endpoint: str
     payload_key: str
+    api_key: Optional[str] = None
 
 
 ALPHA_AGENT_SPECS = {
@@ -49,6 +51,7 @@ ALPHA_AGENT_SPECS = {
         timeout=PORTFOLIO_AGENT_TIMEOUT,
         advisory_endpoint="/portfolio/exposure",
         payload_key="portfolio",
+        api_key=PORTFOLIO_AGENT_API_KEY,
     ),
     "profit": AlphaAgentSpec(
         name="profit",
@@ -69,19 +72,33 @@ ALPHA_AGENT_SPECS = {
 }
 
 
+def _client_headers(spec: AlphaAgentSpec) -> Dict[str, str] | None:
+    if not spec.api_key:
+        return None
+    return {"X-API-KEY": spec.api_key}
+
+
+def _client_for_spec(spec: AlphaAgentSpec) -> ResilientAgentClient:
+    return ResilientAgentClient(
+        base_url=spec.base_url,
+        timeout=spec.timeout,
+        headers=_client_headers(spec),
+    )
+
+
 async def _call_alpha_agent(
     spec: AlphaAgentSpec,
     correlation_id: str,
     payload: Dict[str, Any],
 ) -> Dict[str, Any]:
-    async with ResilientAgentClient(base_url=spec.base_url, timeout=spec.timeout) as client:
+    async with _client_for_spec(spec) as client:
         response = await client._post(spec.advisory_endpoint, correlation_id, payload)
         validated = client.validate_standard_response(response)
         return validated.model_dump(mode="json")
 
 
 async def _health_alpha_agent(spec: AlphaAgentSpec, correlation_id: str) -> Dict[str, Any]:
-    async with ResilientAgentClient(base_url=spec.base_url, timeout=spec.timeout) as client:
+    async with _client_for_spec(spec) as client:
         response = await client._get("/health", correlation_id)
         validated = client.validate_standard_response(response)
         return validated.model_dump(mode="json")
@@ -98,7 +115,6 @@ async def recommend_market_strategy(
             "skipped": "MARKET_REGIME_AGENT_ENABLED is false",
             "recommendation": None,
         }
-
     async with ResilientAgentClient(base_url=MARKET_REGIME_AGENT_URL, timeout=MARKET_REGIME_AGENT_TIMEOUT) as client:
         response = await client._post("/market/strategy", correlation_id, request_payload)
         validated = client.validate_standard_response(response)
