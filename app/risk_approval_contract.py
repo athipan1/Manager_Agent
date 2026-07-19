@@ -68,6 +68,25 @@ async def persist_risk_approval(
             "portfolio_context": trade_decision.get("portfolio_context") or {},
         },
     }
+    get_existing = getattr(db_client, "get_risk_approval", None)
+    if callable(get_existing):
+        existing = await get_existing(approval_id, correlation_id)
+        if isinstance(existing, dict) and existing:
+            exact_identity = (
+                str(existing.get("account_id")) == str(account_id)
+                and str(existing.get("symbol") or "").upper() == payload["symbol"]
+                and str(existing.get("side") or "").lower() == side
+                and int(existing.get("approved_quantity") or 0) == quantity
+            )
+            if not exact_identity:
+                raise RiskApprovalContractError(
+                    "Existing risk approval identity does not match this order."
+                )
+            if existing.get("used") or existing.get("used_at") or existing.get("order_id"):
+                raise RiskApprovalContractError("Risk approval was already consumed.")
+            trade_decision["risk_approval_id"] = approval_id
+            trade_decision["strategy_bucket"] = strategy_bucket
+            return approval_id
     await db_client.create_risk_approval(payload, correlation_id)
     trade_decision["risk_approval_id"] = approval_id
     trade_decision["strategy_bucket"] = strategy_bucket

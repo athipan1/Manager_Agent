@@ -12,9 +12,11 @@ from typing import Any, Dict, List, Optional, Union
 from .. import config
 from ..database_client import DatabaseAgentClient
 from ..execution_client import ExecutionAgentClient
+from ..hourly_paper_runtime import deterministic_order_idempotency_key
 from ..logger import report_logger
 from ..risk_approval_contract import persist_risk_approval
 from ..services.order_builder import order_request_from_decision
+from ..services.order_builder import side_from_action, strategy_bucket_from_decision
 from ..services.serialization_service import response_to_dict
 
 
@@ -128,8 +130,70 @@ async def execute_portfolio_batch(
     """Persist approvals, validate, and submit a batch of approved decisions."""
     order_requests = []
     failed_to_build: List[Dict[str, Any]] = []
+    duplicate_orders: List[Dict[str, Any]] = []
+    seen_order_keys: set[str] = set()
     for decision in decisions:
         try:
+            symbol = str(decision.get("symbol") or "").upper()
+            automated_cycle = correlation_id.startswith("hourly-paper-")
+            side = side_from_action(decision.get("action"))
+            if automated_cycle and side == "sell":
+                failed_to_build.append(
+                    {
+                        "symbol": symbol,
+                        "reason": "automatic PARTIAL_EXIT and EXIT_ALL are blocked; manual approval ticket required",
+                    }
+                )
+                continue
+            ensure_risk_approval_id(decision, correlation_id)
+            metadata = dict(decision.get("metadata") or {})
+            strategy_id = str(
+                metadata.get("strategy_id")
+                or decision.get("strategy_id")
+                or config.BACKTEST_GATE_STRATEGY_ID
+            )
+            stock_context = decision.get("stock_risk_context") or {}
+            position_lifecycle_id = str(
+                metadata.get("position_lifecycle_id")
+                or stock_context.get("position_lifecycle_id")
+                or stock_context.get("position_id")
+                or f"{symbol}-new-position"
+            )
+            order_key = None
+            if automated_cycle:
+                order_key = deterministic_order_idempotency_key(
+                    portfolio_cycle_id=correlation_id,
+                    account_id=str(account_id),
+                    symbol=symbol,
+                    side=side,
+                    strategy_id=strategy_id,
+                    position_lifecycle_id=position_lifecycle_id,
+                )
+                if order_key in seen_order_keys:
+                    duplicate_orders.append(
+                        {
+                            "symbol": symbol,
+                            "client_order_id": order_key,
+                            "status": "duplicate_in_batch",
+                            "reason": "duplicate deterministic order in this portfolio batch",
+                        }
+                    )
+                    continue
+                existing_order = await db_client.get_order_by_trade_id(
+                    order_key,
+                    correlation_id,
+                )
+                if existing_order:
+                    duplicate_orders.append(
+                        {
+                            "symbol": symbol,
+                            "client_order_id": order_key,
+                            "status": existing_order.get("status"),
+                            "reason": "deterministic portfolio cycle order already exists",
+                        }
+                    )
+                    continue
+                seen_order_keys.add(order_key)
             decision["risk_approval_id"] = await persist_risk_approval(
                 db_client=db_client,
                 trade_decision=decision,
@@ -153,7 +217,25 @@ async def execute_portfolio_batch(
                     }
                 )
                 continue
-            order_requests.append(order_request_from_decision(decision, account_id))
+            decision["metadata"] = dict(metadata)
+            if automated_cycle:
+                decision["metadata"].update(
+                    {
+                        "portfolio_cycle_id": correlation_id,
+                        "strategy_id": strategy_id,
+                        "position_lifecycle_id": position_lifecycle_id,
+                        "idempotency_key": order_key,
+                    }
+                )
+            order_requests.append(
+                order_request_from_decision(
+                    decision,
+                    account_id,
+                    client_order_id_factory=(
+                        (lambda value=order_key: value) if order_key else None
+                    ),
+                )
+            )
         except Exception as exc:
             failed_to_build.append({"symbol": decision.get("symbol"), "reason": str(exc)})
 
@@ -165,6 +247,7 @@ async def execute_portfolio_batch(
             "failed": failed_to_build,
             "failed_to_build": failed_to_build,
             "skipped_open_order_conflicts": [],
+            "duplicate_orders": duplicate_orders,
         }
 
     validation = await exec_client.validate_order_batch(order_requests, correlation_id)
@@ -253,4 +336,5 @@ async def execute_portfolio_batch(
         **data,
         "failed_to_build": failed_to_build,
         "skipped_open_order_conflicts": skipped_open_order_conflicts,
+        "duplicate_orders": duplicate_orders,
     }

@@ -99,6 +99,7 @@ def evaluate_single_trade_risk(
         margin_multiplier=Decimal(str(config.DEFAULT_MARGIN_MULTIPLIER)),
         session_risk_context=session_context,
         account_id=account_id,
+        correlation_id=correlation_id,
     )
     ensure_risk_approval_id(decision, correlation_id)
     return decision
@@ -130,6 +131,7 @@ def evaluate_portfolio_risk(
         margin_multiplier=Decimal(str(config.DEFAULT_MARGIN_MULTIPLIER)),
         session_risk_context=session_context,
         account_id=account_id,
+        correlation_id=correlation_id,
     )
     for decision in decisions:
         ensure_risk_approval_id(decision, correlation_id)

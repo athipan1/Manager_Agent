@@ -1,0 +1,34 @@
+services:
+  manager-agent:
+    environment:
+      TRADING_ENABLED: "true"
+      TRADING_MODE: PAPER
+      BROKER_MODE: SIMULATOR
+      DRY_RUN: "true"
+      ALLOW_LIVE_TRADING: "false"
+      DATABASE_AGENT_URL: http://database-agent:8004
+      DATABASE_AGENT_API_KEY: ${DATABASE_AGENT_API_KEY:?DATABASE_AGENT_API_KEY is required}
+      EXECUTION_API_KEY: ${EXECUTION_API_KEY:?EXECUTION_API_KEY is required}
+      PORTFOLIO_AGENT_API_KEY: ${PORTFOLIO_AGENT_API_KEY:?PORTFOLIO_AGENT_API_KEY is required}
+
+  database-agent:
+    environment:
+      DATABASE_AGENT_API_KEY: ${DATABASE_AGENT_API_KEY:?DATABASE_AGENT_API_KEY is required}
+      DATABASE_DEV_MODE: "true"
+      USE_SQLITE: "true"
+
+  execution-agent:
+    environment:
+      API_KEY: ${EXECUTION_API_KEY:?EXECUTION_API_KEY is required}
+      EXECUTION_AGENT_API_KEY: ${EXECUTION_API_KEY:?EXECUTION_API_KEY is required}
+      DB_AGENT_URL: http://database-agent:8004
+      DATABASE_AGENT_API_KEY: ${DATABASE_AGENT_API_KEY:?DATABASE_AGENT_API_KEY is required}
+      TRADING_ENABLED: "true"
+      TRADING_MODE: PAPER
+      BROKER_MODE: SIMULATOR
+      DRY_RUN: "true"
+      ALLOW_LIVE_TRADING: "false"
+
+  portfolio-agent:
+    environment:
+      PORTFOLIO_AGENT_API_KEY: ${PORTFOLIO_AGENT_API_KEY:?PORTFOLIO_AGENT_API_KEY is required}

@@ -23,11 +23,21 @@ def sync_payload(status, action="refresh_broker_sync"):
     }
 
 
-def test_database_sync_allows_synced_and_legacy_unknown_payloads():
+def test_database_sync_allows_synced_and_legacy_unknown_payloads(monkeypatch):
+    monkeypatch.setattr("app.config.BROKER_RECONCILE_REQUIRED", False)
+    monkeypatch.setattr("app.config.BROKER_RECONCILE_CONTEXT_REQUIRED", False)
     assert database_sync_allows_automation({}) is True
     assert database_sync_allows_automation(None) is True
     assert database_sync_allows_automation(sync_payload("synced", "none")) is True
     assert database_sync_status(sync_payload("synced", "none")) == "synced"
+
+
+def test_database_sync_unknown_fails_closed_when_reconciliation_required(monkeypatch):
+    monkeypatch.setattr("app.config.BROKER_RECONCILE_REQUIRED", True)
+    monkeypatch.setattr("app.config.BROKER_RECONCILE_CONTEXT_REQUIRED", True)
+    assert database_sync_allows_automation({}) is False
+    assert database_sync_allows_automation(None) is False
+    assert database_sync_allows_automation(sync_payload("unexpected")) is False
 
 
 def test_database_sync_blocks_known_unsafe_statuses():

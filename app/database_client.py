@@ -1,4 +1,5 @@
 import os
+import httpx
 from typing import List, Any, Dict, Union, Type, TypeVar, Optional
 from decimal import Decimal
 from urllib.parse import quote
@@ -176,6 +177,25 @@ class DatabaseAgentClient(ResilientAgentClient):
             return broker_orders
         return db_orders
 
+    async def get_order_by_trade_id(
+        self,
+        trade_id: str,
+        correlation_id: str,
+    ) -> Optional[Dict[str, Any]]:
+        """Return an idempotent order record; only a verified 404 means absent."""
+        encoded_trade_id = quote(str(trade_id), safe="")
+        try:
+            response_data = await self._get(
+                f"/orders/trade/{encoded_trade_id}",
+                correlation_id,
+            )
+        except httpx.HTTPStatusError as exc:
+            if exc.response.status_code == 404:
+                return None
+            raise
+        standard_resp = self.validate_standard_response(response_data)
+        return _coerce_dict(standard_resp.data)
+
     async def get_session_risk_snapshot(self, account_id: Union[int, str], correlation_id: str, symbol: Optional[str] = None) -> Dict[str, Any]:
         await self._reconcile_broker_before_context(account_id, correlation_id)
         params = {"symbol": symbol} if symbol else None
@@ -245,6 +265,24 @@ class DatabaseAgentClient(ResilientAgentClient):
 
     async def create_risk_approval(self, approval_payload: Dict[str, Any], correlation_id: str) -> Dict[str, Any]:
         response_data = await self._post(DatabaseEndpoints.RISK_APPROVALS, correlation_id, json_data=approval_payload)
+        standard_resp = self.validate_standard_response(response_data)
+        return _coerce_dict(standard_resp.data)
+
+    async def get_risk_approval(
+        self,
+        approval_id: str,
+        correlation_id: str,
+    ) -> Optional[Dict[str, Any]]:
+        encoded_approval_id = quote(str(approval_id), safe="")
+        try:
+            response_data = await self._get(
+                f"/risk-approvals/{encoded_approval_id}",
+                correlation_id,
+            )
+        except httpx.HTTPStatusError as exc:
+            if exc.response.status_code == 404:
+                return None
+            raise
         standard_resp = self.validate_standard_response(response_data)
         return _coerce_dict(standard_resp.data)
 

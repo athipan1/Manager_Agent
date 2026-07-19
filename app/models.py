@@ -78,6 +78,13 @@ class DiscoverAnalyzeTradeRequest(BaseModel):
     max_workers: int = Field(default=10, ge=1, le=20)
     min_final_score: float = Field(default=0.55, ge=0.0, le=1.0)
     execute: bool = True
+    portfolio_cycle_id: Optional[str] = Field(
+        default=None,
+        min_length=8,
+        max_length=160,
+        pattern=r"^[A-Za-z0-9][A-Za-z0-9._:-]+$",
+        exclude=True,
+    )
 
     @field_validator('account_id', mode='before')
     @classmethod

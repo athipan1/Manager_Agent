@@ -11,6 +11,7 @@ RISK_AGENT_URL = os.getenv("RISK_AGENT_URL", "http://risk-agent:8007")
 RISK_AGENT_TIMEOUT = float(os.getenv("RISK_AGENT_TIMEOUT", "10"))
 RISK_AGENT_FAILURE_THRESHOLD = int(os.getenv("RISK_AGENT_FAILURE_THRESHOLD", "3"))
 RISK_AGENT_COOLDOWN_SECONDS = float(os.getenv("RISK_AGENT_COOLDOWN_SECONDS", "30"))
+RISK_AGENT_MAX_ATTEMPTS = int(os.getenv("RISK_AGENT_MAX_ATTEMPTS", "3"))
 
 _failure_count = 0
 _circuit_open_until = 0.0
@@ -41,6 +42,38 @@ def _correlation_headers(correlation_id: str | None = None) -> Dict[str, str]:
     return {"X-Correlation-ID": correlation_id} if correlation_id else {}
 
 
+async def _request_with_bounded_retry(
+    client: httpx.AsyncClient,
+    method: str,
+    path: str,
+    *,
+    headers: Dict[str, str],
+    json_payload: Dict[str, Any] | None = None,
+) -> httpx.Response:
+    last_error: BaseException | None = None
+    for attempt in range(1, max(1, RISK_AGENT_MAX_ATTEMPTS) + 1):
+        try:
+            response = await client.request(
+                method,
+                path,
+                headers=headers,
+                json=json_payload,
+            )
+            response.raise_for_status()
+            return response
+        except httpx.HTTPStatusError as exc:
+            last_error = exc
+            if exc.response.status_code < 500:
+                raise
+        except (httpx.TimeoutException, httpx.RequestError) as exc:
+            last_error = exc
+        if attempt < RISK_AGENT_MAX_ATTEMPTS:
+            await asyncio.sleep(min(0.25 * (2 ** (attempt - 1)), 1.0))
+    if last_error is not None:
+        raise last_error
+    raise RuntimeError("Risk_Agent request failed without a response.")
+
+
 async def check_risk_agent_health_async(correlation_id: str | None = None) -> Dict[str, Any]:
     """Return Risk_Agent health without applying StandardAgentResponse validation.
 
@@ -53,8 +86,12 @@ async def check_risk_agent_health_async(correlation_id: str | None = None) -> Di
 
     try:
         async with httpx.AsyncClient(base_url=RISK_AGENT_URL, timeout=RISK_AGENT_TIMEOUT) as client:
-            response = await client.get("/health", headers=_correlation_headers(correlation_id))
-            response.raise_for_status()
+            response = await _request_with_bounded_retry(
+                client,
+                "GET",
+                "/health",
+                headers=_correlation_headers(correlation_id),
+            )
             result = response.json()
             _record_success()
             return result
@@ -83,8 +120,13 @@ async def evaluate_risk_async(payload: Dict[str, Any], correlation_id: str | Non
                 "protection_price": payload["protection_price"],
                 "equity": payload["equity"],
             }
-            sizing_response = await client.post("/risk/position-size", json=sizing_payload, headers=headers)
-            sizing_response.raise_for_status()
+            sizing_response = await _request_with_bounded_retry(
+                client,
+                "POST",
+                "/risk/position-size",
+                headers=headers,
+                json_payload=sizing_payload,
+            )
             sizing = sizing_response.json()
             if sizing.get("status") != "success":
                 _record_failure()
@@ -94,8 +136,13 @@ async def evaluate_risk_async(payload: Dict[str, Any], correlation_id: str | Non
             requested_quantity = int(payload.get("requested_quantity") or 0)
             payload["requested_quantity"] = min(requested_quantity, safe_quantity) if requested_quantity else safe_quantity
 
-            check_response = await client.post("/risk/check", json=payload, headers=headers)
-            check_response.raise_for_status()
+            check_response = await _request_with_bounded_retry(
+                client,
+                "POST",
+                "/risk/check",
+                headers=headers,
+                json_payload=payload,
+            )
             result = check_response.json()
             _record_success()
             return result

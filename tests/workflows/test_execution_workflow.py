@@ -375,3 +375,55 @@ async def test_execute_portfolio_batch_skips_zero_position_size(monkeypatch):
         }
     ]
     assert exec_client.validated_batches == []
+
+
+@pytest.mark.asyncio
+async def test_hourly_retry_reuses_deterministic_order_and_does_not_submit(monkeypatch):
+    class ExistingOrderDb(FakeDbClient):
+        async def get_order_by_trade_id(self, trade_id, correlation_id):
+            return {"trade_id": trade_id, "status": "placed"}
+
+    async def unexpected_persist(**kwargs):
+        raise AssertionError("risk approval must not be recreated for duplicate cycle")
+
+    monkeypatch.setattr(
+        "app.workflows.execution_workflow.persist_risk_approval",
+        unexpected_persist,
+    )
+    exec_client = FakeExecutionClient()
+    result = await execute_portfolio_batch(
+        exec_client=exec_client,
+        decisions=[execution_ready_decision(symbol="AAPL")],
+        account_id=1,
+        correlation_id="hourly-paper-account-20260719T12-123",
+        db_client=ExistingOrderDb(),
+    )
+    assert result["status"] == "not_attempted"
+    assert result["duplicate_orders"][0]["symbol"] == "AAPL"
+    assert exec_client.validated_batches == []
+    assert exec_client.executed_batches == []
+
+
+@pytest.mark.asyncio
+async def test_hourly_automatic_sell_is_blocked_before_execution(monkeypatch):
+    class EmptyOrderDb(FakeDbClient):
+        async def get_order_by_trade_id(self, trade_id, correlation_id):
+            return None
+
+    exec_client = FakeExecutionClient()
+    result = await execute_portfolio_batch(
+        exec_client=exec_client,
+        decisions=[
+            execution_ready_decision(
+                symbol="AAPL",
+                action="sell",
+                strategy_bucket="unassigned",
+            )
+        ],
+        account_id=1,
+        correlation_id="hourly-paper-account-20260719T12-123",
+        db_client=EmptyOrderDb(),
+    )
+    assert result["status"] == "not_attempted"
+    assert "automatic PARTIAL_EXIT and EXIT_ALL are blocked" in result["failed"][0]["reason"]
+    assert exec_client.executed_batches == []

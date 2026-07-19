@@ -31,9 +31,10 @@ def test_versioned_registry_matches_compose_seed():
     assert registry["safety"]["manual_review_required_for_changes"] is True
 
 
-def test_hourly_workflow_uses_curator_compose_override():
+def test_hourly_paper_workflow_does_not_start_local_curator_or_database_seed():
     workflow_text = Path(".github/workflows/hourly-auto-trading.yml").read_text(
         encoding="utf-8"
     )
 
-    assert "docker-compose.curator.yml" in workflow_text
+    assert "docker-compose.curator.yml" not in workflow_text
+    assert "docker-compose.hourly-paper.yml" in workflow_text

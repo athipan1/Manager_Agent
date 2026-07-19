@@ -159,7 +159,7 @@ async def run_gated_guarded_discover_analyze_trade_flow(
     request: DiscoverAnalyzeTradeRequest,
 ) -> StandardAgentResponse:
     """Run broker sync safety, exposure gating, risk and optional execution."""
-    correlation_id = "database-sync-gate"
+    correlation_id = request.portfolio_cycle_id or "database-sync-gate"
     account_id = request.account_id if request.account_id is not None else 1
 
     previous_database_sync = (

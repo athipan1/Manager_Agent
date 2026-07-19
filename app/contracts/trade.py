@@ -152,6 +152,7 @@ class TradePlan(BaseModel):
             final_quantity=self.final_quantity or self.quantity,
             guard_plan=self.guard_plan,
             protective_exit=self.exit.model_dump(mode="json"),
+            metadata=self.metadata,
         )
 
 class CreateOrderRequest(BaseModel):
@@ -168,6 +169,7 @@ class CreateOrderRequest(BaseModel):
     final_quantity: int
     guard_plan: Optional[Dict[str, Any]] = None
     protective_exit: Optional[Dict[str, Any]] = None
+    metadata: Dict[str, Any] = Field(default_factory=dict)
 
     @field_validator('account_id', mode='before')
     @classmethod

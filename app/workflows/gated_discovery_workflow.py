@@ -124,7 +124,7 @@ async def run_gated_discover_analyze_trade_flow(
     max_snapshot_age_seconds: float = 60.0,
 ) -> StandardAgentResponse:
     """Run discovery with exposure capacity and protection gates before Risk."""
-    correlation_id = str(uuid.uuid4())
+    correlation_id = request.portfolio_cycle_id or str(uuid.uuid4())
     account_id = (
         request.account_id
         if request.account_id is not None

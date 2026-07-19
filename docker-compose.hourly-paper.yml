@@ -1,0 +1,84 @@
+services:
+  manager-agent:
+    environment:
+      TRADING_ENABLED: "true"
+      TRADING_MODE: PAPER
+      BROKER_MODE: ALPACA
+      DRY_RUN: "false"
+      ALLOW_LIVE_TRADING: "false"
+      DATABASE_AGENT_URL: ${DATABASE_AGENT_URL:?DATABASE_AGENT_URL is required}
+      DATABASE_AGENT_API_KEY: ${DATABASE_AGENT_API_KEY:?DATABASE_AGENT_API_KEY is required}
+      EXECUTION_API_KEY: ${EXECUTION_API_KEY:?EXECUTION_API_KEY is required}
+      PORTFOLIO_AGENT_API_KEY: ${PORTFOLIO_AGENT_API_KEY:?PORTFOLIO_AGENT_API_KEY is required}
+      BACKTEST_AGENT_ENABLED: "true"
+      BACKTEST_EXECUTION_GATE_REQUIRED: "true"
+      BROKER_RECONCILE_BEFORE_EXECUTION: "true"
+      BROKER_RECONCILE_BEFORE_CONTEXT: "true"
+      BROKER_RECONCILE_PUSH_TO_DATABASE: "true"
+      BROKER_RECONCILE_REQUIRED: "true"
+      BROKER_RECONCILE_CONTEXT_REQUIRED: "true"
+      PERFORMANCE_AGENT_ENABLED: "true"
+      PERFORMANCE_SESSION_RISK_ENABLED: "true"
+      PERFORMANCE_SESSION_RISK_REQUIRED: "true"
+      MARKET_REGIME_AGENT_ENABLED: "true"
+      PORTFOLIO_AGENT_ENABLED: "true"
+      PROFIT_AGENT_ENABLED: "true"
+      MARKET_REGIME_AGENT_URL: http://market-regime-agent:8014
+      PORTFOLIO_AGENT_URL: http://portfolio-agent:8012
+      PROFIT_AGENT_URL: http://profit-agent:8011
+      PERFORMANCE_AGENT_URL: http://performance-agent:8013
+      AUTO_LEARNING_ENABLED: "false"
+      MANUAL_APPROVAL_REQUIRED: "false"
+      CURATOR_AGENT_ENABLED: "false"
+    depends_on: !override
+      scanner-agent:
+        condition: service_healthy
+      technical-agent:
+        condition: service_healthy
+      fundamental-agent:
+        condition: service_healthy
+      risk-agent:
+        condition: service_healthy
+      backtest-agent:
+        condition: service_healthy
+      market-regime-agent:
+        condition: service_healthy
+      portfolio-agent:
+        condition: service_healthy
+      profit-agent:
+        condition: service_healthy
+      performance-agent:
+        condition: service_healthy
+      execution-agent:
+        condition: service_healthy
+
+  execution-agent:
+    environment:
+      API_KEY: ${EXECUTION_API_KEY:?EXECUTION_API_KEY is required}
+      EXECUTION_AGENT_API_KEY: ${EXECUTION_API_KEY:?EXECUTION_API_KEY is required}
+      DB_AGENT_URL: ${DATABASE_AGENT_URL:?DATABASE_AGENT_URL is required}
+      DATABASE_AGENT_API_KEY: ${DATABASE_AGENT_API_KEY:?DATABASE_AGENT_API_KEY is required}
+      TRADING_ENABLED: "true"
+      TRADING_MODE: PAPER
+      BROKER_MODE: ALPACA
+      DRY_RUN: "false"
+      ALLOW_LIVE_TRADING: "false"
+      ALPACA_API_KEY_ID: ${ALPACA_API_KEY_ID:?ALPACA_API_KEY_ID is required}
+      ALPACA_SECRET_KEY: ${ALPACA_SECRET_KEY:?ALPACA_SECRET_KEY is required}
+      ALPACA_API_URL: ${ALPACA_API_URL:?ALPACA_API_URL is required}
+      FAIL_RECONCILE_WHEN_DB_SYNC_FAILS: "true"
+    depends_on: !override {}
+
+  risk-agent:
+    environment:
+      ADMIN_TOKEN: ${RISK_ADMIN_TOKEN:?RISK_ADMIN_TOKEN is required}
+      EMERGENCY_HALT: "false"
+
+  portfolio-agent:
+    environment:
+      PORTFOLIO_AGENT_API_KEY: ${PORTFOLIO_AGENT_API_KEY:?PORTFOLIO_AGENT_API_KEY is required}
+
+  performance-agent:
+    environment:
+      DATABASE_AGENT_URL: ${DATABASE_AGENT_URL:?DATABASE_AGENT_URL is required}
+      DATABASE_AGENT_API_KEY: ${DATABASE_AGENT_API_KEY:?DATABASE_AGENT_API_KEY is required}

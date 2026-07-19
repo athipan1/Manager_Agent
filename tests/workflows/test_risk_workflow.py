@@ -132,6 +132,7 @@ def test_evaluate_single_trade_risk_calls_assess_trade(monkeypatch):
     assert calls[0]["technical_stop_loss"] == Decimal("95")
     assert calls[0]["open_orders_exposure"] == Decimal("20")
     assert calls[0]["current_symbol_exposure"] == Decimal("100")
+    assert calls[0]["correlation_id"] == "cid"
 
 
 def test_evaluate_portfolio_risk_calls_assess_portfolio_and_adds_approval_ids(monkeypatch):
@@ -170,3 +171,4 @@ def test_evaluate_portfolio_risk_calls_assess_portfolio_and_adds_approval_ids(mo
     assert calls[0]["cash_balance"] == Decimal("10000")
     assert calls[0]["open_orders_exposure"] == Decimal("30")
     assert calls[0]["session_risk_context"] == {"trades_today": 1}
+    assert calls[0]["correlation_id"] == "cid"

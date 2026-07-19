@@ -25,6 +25,21 @@ jobs:
         pip install --upgrade wheel setuptools
         pip install -r requirements.txt
 
+    - name: Compile Python and validate hourly compose contracts
+      env:
+        ALPACA_API_KEY_ID: ci-paper-key
+        ALPACA_SECRET_KEY: ci-paper-secret
+        ALPACA_API_URL: https://paper-api.alpaca.markets
+        EXECUTION_API_KEY: ci-execution-key
+        DATABASE_AGENT_URL: https://database-agent.example.invalid
+        DATABASE_AGENT_API_KEY: ci-database-key
+        RISK_ADMIN_TOKEN: ci-risk-token
+        PORTFOLIO_AGENT_API_KEY: ci-portfolio-key
+      run: |
+        python -m compileall -q .
+        docker compose -f docker-compose.yml -f docker-compose.risk.yml -f docker-compose.alpha.yml -f docker-compose.hourly-paper.yml config --quiet
+        docker compose -f docker-compose.yml -f docker-compose.risk.yml -f docker-compose.alpha.yml -f docker-compose.hourly-simulator.yml config --quiet
+
     - name: Run tests with pytest
       id: pytest
       continue-on-error: true

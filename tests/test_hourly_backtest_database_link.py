@@ -15,24 +15,25 @@ def test_hourly_workflow_checks_out_backtest_agent():
     assert "path: Backtest_Agent" in text
 
 
-def test_backtest_publishes_to_database_container_and_fails_closed():
+def test_backtest_publishes_to_runtime_database_and_fails_closed():
     text = workflow_text()
-    assert "DATABASE_AGENT_URL: http://localhost:8004" in text
+    assert "DATABASE_AGENT_URL: ${{ env.RUNTIME_DATABASE_AGENT_URL }}" in text
     assert 'PUBLISH_TO_DATABASE: "true"' in text
     assert "python scripts/verify_backtest_publish.py reports/hourly-backtest-result.json" in text
 
 
 def test_hourly_flow_scans_then_batch_backtests_then_executes_with_exact_gate():
     text = workflow_text()
-    scanner = text.index("Run Scanner preselection for batch Backtest")
+    review = text.index("Review existing positions, orders, regime, exposure and protection")
+    scanner = text.index("Run Scanner preselection after portfolio review")
     batch = text.index(
-        "Run batch Backtest and publish to in-stack Database Agent"
+        "Run exact Backtest and publish to Railway Database_Agent"
     )
     execution = text.index(
-        "Run hourly portfolio discovery, risk checks, execution, and broker snapshot"
+        "Run Manager candidate, Risk and guarded Execution cycle"
     )
 
-    assert scanner < batch < execution
+    assert review < scanner < batch < execution
     assert "python scripts/run_scanner_preselection.py" in text
     assert (
         "BACKTEST_SYMBOLS: "
@@ -47,8 +48,8 @@ def test_hourly_scanner_preselection_can_reach_manager_from_runner():
 
     assert '- "8000:80"' in compose
     assert '- "8000:8000"' not in compose
-    assert "manager_host=$(curl -fsS http://localhost:8000/health" in text
-    assert "manager_host=$manager_host" in text
+    assert "MANAGER_AGENT_URL: http://localhost:8000" in text
+    assert "python scripts/hourly_portfolio_cycle.py wait" in text
 
 def test_database_container_and_backtest_use_the_same_api_key():
     compose = Path("docker-compose.yml").read_text(encoding="utf-8")
@@ -66,9 +67,9 @@ def test_hourly_workflow_requires_exact_backtest_execution_gate():
     compose = Path("docker-compose.yml").read_text(encoding="utf-8")
 
     assert 'BACKTEST_EXECUTION_GATE_REQUIRED: "true"' in text
-    assert "BACKTEST_GATE_SKILL_ID: hourly-sma-crossover" in text
-    assert "BACKTEST_GATE_STRATEGY_ID: hourly-sma-crossover" in text
-    assert "BACKTEST_GATE_TIMEFRAME: 1d" in text
+    assert "BACKTEST_SKILL_ID: ${{ vars.BACKTEST_SKILL_ID" in text
+    assert "BACKTEST_STRATEGY_ID: ${{ vars.BACKTEST_STRATEGY_ID" in text
+    assert "BACKTEST_TIMEFRAME: ${{ vars.BACKTEST_TIMEFRAME" in text
     assert (
         "BACKTEST_EXECUTION_GATE_REQUIRED: "
         "${BACKTEST_EXECUTION_GATE_REQUIRED:-false}"
