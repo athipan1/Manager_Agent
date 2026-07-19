@@ -100,7 +100,8 @@ After an explicitly authorized merge, first dispatch with `dry_run=true` and
 `broker_mode=SIMULATOR`. Inspect all artifacts. Then dispatch with
 `dry_run=false`, `broker_mode=ALPACA`; the runtime remains locked to
 `TRADING_MODE=PAPER` and `ALLOW_LIVE_TRADING=false`. Do not rely on the hourly
-schedule until both manual checks pass.
+schedule until both manual checks pass. Only then set the repository variable
+`HOURLY_PAPER_SCHEDULE_ENABLED=true` to activate scheduled jobs.
 
 ## Rollback
 
