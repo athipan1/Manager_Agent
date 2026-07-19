@@ -41,6 +41,7 @@ permissions:
 
 jobs:
   hourly-portfolio-cycle:
+    if: ${{ github.event_name != 'schedule' || vars.HOURLY_PAPER_SCHEDULE_ENABLED == 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 55
     env:
