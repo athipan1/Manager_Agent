@@ -37,8 +37,8 @@ jobs:
         PORTFOLIO_AGENT_API_KEY: ci-portfolio-key
       run: |
         python -m compileall -q .
-        docker compose -f docker-compose.yml -f docker-compose.risk.yml -f docker-compose.alpha.yml -f docker-compose.hourly-paper.yml --profile backtest config --quiet
-        docker compose -f docker-compose.yml -f docker-compose.risk.yml -f docker-compose.alpha.yml -f docker-compose.hourly-simulator.yml --profile backtest config --quiet
+        docker compose -f docker-compose.yml -f docker-compose.risk.yml -f docker-compose.alpha.yml -f docker-compose.hourly-paper.yml config --quiet
+        docker compose -f docker-compose.yml -f docker-compose.risk.yml -f docker-compose.alpha.yml -f docker-compose.hourly-simulator.yml config --quiet
 
     - name: Run tests with pytest
       id: pytest
