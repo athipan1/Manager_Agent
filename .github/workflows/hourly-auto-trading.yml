@@ -41,6 +41,7 @@ permissions:
 
 jobs:
   hourly-portfolio-cycle:
+    if: github.event_name != 'schedule' || vars.HOURLY_PAPER_SCHEDULE_ENABLED == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 55
     env:
@@ -205,7 +206,7 @@ jobs:
 
       - name: Validate compose model before startup
         working-directory: Manager_Agent
-        run: docker compose config --quiet
+        run: docker compose --profile backtest config --quiet
 
       - name: Start required agent stack
         working-directory: Manager_Agent

@@ -20,6 +20,12 @@ def test_hourly_schedule_and_concurrency_contract():
     assert '- cron: "5 * * * *"' in workflow
     assert "group: hourly-alpaca-paper-portfolio" in workflow
     assert "cancel-in-progress: false" in workflow
+    assert "vars.HOURLY_PAPER_SCHEDULE_ENABLED == 'true'" in workflow
+
+
+def test_compose_validation_activates_required_backtest_profile():
+    workflow = workflow_text()
+    assert "docker compose --profile backtest config --quiet" in workflow
 
 
 def test_hourly_manual_dispatch_defaults_to_simulator_dry_run():

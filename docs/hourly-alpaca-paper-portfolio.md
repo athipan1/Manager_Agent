@@ -23,7 +23,9 @@ the Alpaca live endpoint or submit real-money orders.
 ## Scheduled sequence
 
 The cron is `5 * * * *` and concurrency is serialized with
-`hourly-alpaca-paper-portfolio`.
+`hourly-alpaca-paper-portfolio`. Scheduled events remain fail-closed until the
+repository variable `HOURLY_PAPER_SCHEDULE_ENABLED=true` is set after both
+manual validations pass.
 
 1. Validate exact Paper flags and reject missing/placeholder credentials.
 2. Verify Railway Database_Agent `/health`, `/ready`, and `/version`.
@@ -99,6 +101,7 @@ After an explicitly authorized merge, first dispatch with `dry_run=true` and
 `dry_run=false`, `broker_mode=ALPACA`; the runtime remains locked to
 `TRADING_MODE=PAPER` and `ALLOW_LIVE_TRADING=false`. Do not rely on the hourly
 schedule until both manual checks pass.
+Only then set `HOURLY_PAPER_SCHEDULE_ENABLED=true` to activate scheduled runs.
 
 ## Rollback
 

@@ -37,8 +37,8 @@ jobs:
         PORTFOLIO_AGENT_API_KEY: ci-portfolio-key
       run: |
         python -m compileall -q .
-        docker compose -f docker-compose.yml -f docker-compose.risk.yml -f docker-compose.alpha.yml -f docker-compose.hourly-paper.yml config --quiet
-        docker compose -f docker-compose.yml -f docker-compose.risk.yml -f docker-compose.alpha.yml -f docker-compose.hourly-simulator.yml config --quiet
+        docker compose --profile backtest -f docker-compose.yml -f docker-compose.risk.yml -f docker-compose.alpha.yml -f docker-compose.hourly-paper.yml config --quiet
+        docker compose --profile backtest -f docker-compose.yml -f docker-compose.risk.yml -f docker-compose.alpha.yml -f docker-compose.hourly-simulator.yml config --quiet
 
     - name: Run tests with pytest
       id: pytest
@@ -47,7 +47,7 @@ jobs:
         PYTHONPATH=. python -m pytest --maxfail=5 --disable-warnings -q > pytest-results.txt 2>&1
 
     - name: Upload pytest results
-      if: always()
+      if: always() && hashFiles('pytest-results.txt') != ''
       uses: actions/upload-artifact@v4
       with:
         name: manager-pytest-results
