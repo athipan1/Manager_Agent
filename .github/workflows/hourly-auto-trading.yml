@@ -94,12 +94,14 @@ jobs:
         run: python scripts/hourly_paper_preflight.py
 
       - name: Configure isolated runtime stack
+        working-directory: Manager_Agent
         run: |
           if [ "${{ steps.preflight.outputs.paper_automation }}" = "true" ]; then
             echo "COMPOSE_FILE=docker-compose.yml:docker-compose.risk.yml:docker-compose.alpha.yml:docker-compose.hourly-paper.yml" >> "$GITHUB_ENV"
             echo "RUNTIME_DATABASE_AGENT_URL=${DATABASE_AGENT_URL}" >> "$GITHUB_ENV"
             echo "EXECUTE_PAPER_PROTECTION_RECONCILIATION=true" >> "$GITHUB_ENV"
           else
+            python scripts/configure_simulator_runtime.py
             echo "COMPOSE_FILE=docker-compose.yml:docker-compose.risk.yml:docker-compose.alpha.yml:docker-compose.hourly-simulator.yml" >> "$GITHUB_ENV"
             echo "RUNTIME_DATABASE_AGENT_URL=http://localhost:8004" >> "$GITHUB_ENV"
             echo "EXECUTE_PAPER_PROTECTION_RECONCILIATION=false" >> "$GITHUB_ENV"
@@ -261,7 +263,7 @@ jobs:
             --output reports/hourly-pre-backtest-discovery.json \
             --github-output "$GITHUB_OUTPUT"
 
-      - name: Run exact Backtest and publish to Railway Database_Agent
+      - name: Run exact Backtest and publish to runtime Database_Agent
         if: steps.scanner_preselection.outputs.backtest_symbols != ''
         working-directory: Manager_Agent
         env:
@@ -339,5 +341,6 @@ jobs:
 
       - name: Stop stack
         if: always()
+        continue-on-error: true
         working-directory: Manager_Agent
         run: docker compose down -v
