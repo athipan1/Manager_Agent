@@ -4,7 +4,8 @@ import yaml
 
 
 def load_compose(path):
-    return yaml.safe_load(Path(path).read_text(encoding="utf-8"))
+    content = Path(path).read_text(encoding="utf-8").replace("!override", "")
+    return yaml.safe_load(content)
 
 
 def test_frontend_is_an_optional_dashboard_profile():
@@ -34,3 +35,17 @@ def test_hourly_runtime_has_no_frontend_dependency():
     assert "trading-frontend" not in hourly_workflow
     assert "trading-frontend" not in paper_compose
     assert "trading-frontend" not in simulator_compose
+
+
+def test_full_system_e2e_starts_manager_health_dependencies():
+    compose = load_compose("docker-compose.frontend-e2e.yml")
+    manager_dependencies = compose["services"]["manager-agent"]["depends_on"]
+    workflow = Path(".github/workflows/frontend-dashboard-e2e.yml").read_text(encoding="utf-8")
+
+    assert manager_dependencies == {
+        "database-agent": {"condition": "service_healthy"},
+        "execution-agent": {"condition": "service_healthy"},
+        "risk-agent": {"condition": "service_healthy"},
+    }
+    assert "repository: athipan1/Risk_Agent" in workflow
+    assert "database-agent execution-agent risk-agent manager-agent trading-frontend" in workflow
