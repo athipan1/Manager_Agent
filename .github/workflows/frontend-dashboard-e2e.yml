@@ -57,6 +57,12 @@ jobs:
           repository: athipan1/Execution_Agent
           path: Execution_Agent
 
+      - name: Checkout Risk_Agent
+        uses: actions/checkout@v4
+        with:
+          repository: athipan1/Risk_Agent
+          path: Risk_Agent
+
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
@@ -78,7 +84,7 @@ jobs:
       - name: Build and start dashboard stack
         run: >-
           docker compose $COMPOSE_FILES --profile dashboard up --detach --build
-          database-agent execution-agent manager-agent trading-frontend
+          database-agent execution-agent risk-agent manager-agent trading-frontend
 
       - name: Wait for Manager and Frontend health
         run: |
