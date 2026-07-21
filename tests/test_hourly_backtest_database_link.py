@@ -27,7 +27,7 @@ def test_hourly_flow_scans_then_batch_backtests_then_executes_with_exact_gate():
     review = text.index("Review existing positions, orders, regime, exposure and protection")
     scanner = text.index("Run Scanner preselection after portfolio review")
     batch = text.index(
-        "Run exact Backtest and publish to Railway Database_Agent"
+        "Run exact Backtest and publish to runtime Database_Agent"
     )
     execution = text.index(
         "Run Manager candidate, Risk and guarded Execution cycle"
@@ -50,6 +50,7 @@ def test_hourly_scanner_preselection_can_reach_manager_from_runner():
     assert '- "8000:8000"' not in compose
     assert "MANAGER_AGENT_URL: http://localhost:8000" in text
     assert "python scripts/hourly_portfolio_cycle.py wait" in text
+
 
 def test_database_container_and_backtest_use_the_same_api_key():
     compose = Path("docker-compose.yml").read_text(encoding="utf-8")
