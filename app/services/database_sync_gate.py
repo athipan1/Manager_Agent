@@ -9,6 +9,7 @@ from __future__ import annotations
 from typing import Any, Dict
 
 UNSAFE_DATABASE_SYNC_STATUSES = {"mismatch", "no_snapshot", "unavailable", "error", "failed"}
+SAFE_DATABASE_SYNC_STATUSES = {"synced", "in_sync", "ok", "matched"}
 
 
 def database_sync_summary(database_sync: Dict[str, Any] | None) -> Dict[str, Any]:
@@ -22,10 +23,20 @@ def database_sync_status(database_sync: Dict[str, Any] | None) -> str:
 
 
 def database_sync_allows_automation(database_sync: Dict[str, Any] | None) -> bool:
-    """Return True when the sync status is safe or unknown for legacy clients."""
+    """Require an explicit safe status when broker reconciliation is required."""
+    from .. import config
+
+    required = (
+        config.BROKER_RECONCILE_REQUIRED
+        or config.BROKER_RECONCILE_CONTEXT_REQUIRED
+    )
     status = database_sync_status(database_sync)
     if not status:
+        return not required
+    if status in SAFE_DATABASE_SYNC_STATUSES:
         return True
+    if required:
+        return False
     return status not in UNSAFE_DATABASE_SYNC_STATUSES
 
 

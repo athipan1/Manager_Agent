@@ -10,13 +10,22 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterable, List
 
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from scripts.hourly_runtime_loader import runtime
+
+is_placeholder_secret = runtime.is_placeholder_secret
+
 EXECUTION_CONFIRMATION_PHRASE = "EXECUTE_PAPER_PROTECTION_RECONCILIATION"
 ATTENTION_STATUSES = {"partially_protected", "unprotected", "stop_only"}
 FULLY_PROTECTED_STATUSES = {"bracket_protected", "tp_sl_protected"}
 
 EXECUTION_URL = os.getenv("EXECUTION_AGENT_URL", "http://localhost:8006").rstrip("/")
 RISK_URL = os.getenv("RISK_AGENT_URL", "http://localhost:8007").rstrip("/")
-EXECUTION_API_KEY = os.getenv("EXECUTION_API_KEY", "dev_execution_key").strip()
+EXECUTION_API_KEY = os.getenv("EXECUTION_API_KEY", "").strip()
+CORRELATION_ID = os.getenv("PORTFOLIO_CYCLE_ID", "paper-protection-reconciliation").strip()
 EXECUTE_PAPER = os.getenv("EXECUTE_PAPER_PROTECTION_RECONCILIATION", "false").strip().lower() == "true"
 REWARD_RISK_RATIO = float(os.getenv("PROTECTION_REWARD_RISK_RATIO", "2.0"))
 REPORT_PATH = Path(os.getenv("PROTECTION_REPORT_PATH", "reports/paper-protection-reconciliation.json"))
@@ -30,31 +39,38 @@ def request_json(
     method: str = "GET",
     api_key: str | None = None,
     timeout: int = 120,
+    max_attempts: int = 3,
 ) -> Dict[str, Any]:
     body = None
-    headers: Dict[str, str] = {}
+    headers: Dict[str, str] = {"X-Correlation-ID": CORRELATION_ID}
     if payload is not None:
         body = json.dumps(payload).encode("utf-8")
         headers["Content-Type"] = "application/json"
     if api_key:
         headers["X-API-KEY"] = api_key
-    request = urllib.request.Request(
-        f"{base_url}{path}",
-        data=body,
-        headers=headers,
-        method=method,
+    last_error = "request failed"
+    for attempt in range(1, max(1, max_attempts) + 1):
+        request = urllib.request.Request(
+            f"{base_url}{path}",
+            data=body,
+            headers=headers,
+            method=method,
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=timeout) as response:
+                raw = response.read().decode("utf-8")
+                return json.loads(raw) if raw else {}
+        except urllib.error.HTTPError as exc:
+            last_error = f"HTTP {exc.code}"
+            if exc.code < 500:
+                break
+        except Exception as exc:
+            last_error = type(exc).__name__
+        if attempt < max_attempts:
+            time.sleep(min(2 ** (attempt - 1), 2))
+    raise RuntimeError(
+        f"{method} {path} failed after bounded retries: {last_error}"
     )
-    try:
-        with urllib.request.urlopen(request, timeout=timeout) as response:
-            raw = response.read().decode("utf-8")
-            return json.loads(raw) if raw else {}
-    except urllib.error.HTTPError as exc:
-        raw = exc.read().decode("utf-8", errors="replace")
-        raise RuntimeError(
-            f"{method} {path} failed with HTTP {exc.code}: {raw}"
-        ) from exc
-    except Exception as exc:
-        raise RuntimeError(f"{method} {path} failed: {exc}") from exc
 
 
 def unwrap(value: Any) -> Dict[str, Any]:
@@ -233,6 +249,12 @@ def write_report(report: Dict[str, Any]) -> None:
 
 
 def main() -> int:
+    if EXECUTE_PAPER and is_placeholder_secret(EXECUTION_API_KEY):
+        print(
+            "Paper protection reconciliation refused a missing or placeholder Execution key.",
+            file=sys.stderr,
+        )
+        return 1
     before = fetch_diagnostics()
     attention = _attention_rows(before)
     report: Dict[str, Any] = {

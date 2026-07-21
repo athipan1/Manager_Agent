@@ -171,7 +171,7 @@ async def fetch_session_risk_context(
             )
             return _merge_session_context(snapshot, performance_metrics)
         except Exception as perf_exc:
-            if config.TRADING_MODE == "LIVE" and config.PERFORMANCE_SESSION_RISK_REQUIRED:
+            if config.TRADING_MODE in {"PAPER", "LIVE"} and config.PERFORMANCE_SESSION_RISK_REQUIRED:
                 raise AgentUnavailable(f"Required performance session risk metrics unavailable for {symbol}: {perf_exc}") from perf_exc
             report_logger.warning(
                 f"Performance session risk metrics unavailable for {symbol}; using Database session snapshot. "
@@ -179,7 +179,7 @@ async def fetch_session_risk_context(
             )
             return snapshot
     except Exception as exc:
-        if config.TRADING_MODE == "LIVE":
+        if config.TRADING_MODE == "LIVE" or config.PERFORMANCE_SESSION_RISK_REQUIRED:
             raise AgentUnavailable(f"Required session risk context unavailable for {symbol}: {exc}") from exc
         report_logger.warning(
             f"Session risk context unavailable in PAPER mode for {symbol}; "

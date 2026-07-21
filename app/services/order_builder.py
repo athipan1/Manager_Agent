@@ -163,6 +163,9 @@ def order_request_from_decision(
     """Build a fail-closed `CreateOrderRequest` from an approved risk decision."""
     trade_plan_order = order_request_from_trade_plan_decision(decision)
     if trade_plan_order is not None:
+        if client_order_id_factory is not None:
+            trade_plan_order.client_order_id = client_order_id_factory()
+        trade_plan_order.metadata.update(decision.get("metadata") or {})
         return trade_plan_order
 
     quantity = int(
@@ -202,4 +205,5 @@ def order_request_from_decision(
         risk_approval_id=str(risk_approval_id),
         final_quantity=quantity,
         guard_plan=guard_plan_for_execution(decision),
+        metadata=dict(decision.get("metadata") or {}),
     )

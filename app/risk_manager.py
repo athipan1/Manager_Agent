@@ -178,6 +178,7 @@ def assess_trade(
     session_risk_context: Optional[Dict[str, Any]] = None,
     stock_risk_context: Optional[Dict[str, Any]] = None,
     account_id: Optional[Union[int, str]] = None,
+    correlation_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     side = _normalise_action(action)
     session_risk_context = session_risk_context or {}
@@ -241,7 +242,11 @@ def assess_trade(
     }
 
     try:
-        risk_response = evaluate_risk(payload)
+        risk_response = (
+            evaluate_risk(payload, correlation_id)
+            if correlation_id
+            else evaluate_risk(payload)
+        )
     except Exception as exc:
         return _build_result(False, f"Risk_Agent unavailable, circuit open, or returned invalid response: {exc}", symbol, side, entry_price, protection_price=protection_price, session_risk_context=session_risk_context, stock_risk_context=stock_risk_context)
 
