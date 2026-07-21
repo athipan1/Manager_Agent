@@ -26,7 +26,8 @@ FORBIDDEN_VALUE_MARKERS = (
 
 def request(url: str) -> tuple[int, str, Dict[str, str]]:
     with urllib.request.urlopen(url, timeout=15) as response:
-        return response.status, response.read().decode("utf-8"), dict(response.headers.items())
+        headers = {key.lower(): value for key, value in response.headers.items()}
+        return response.status, response.read().decode("utf-8"), headers
 
 
 def assert_safe(value: Any, path: str = "root") -> None:
@@ -74,7 +75,7 @@ def main() -> int:
         status, body, headers = request(f"{args.manager_url.rstrip('/')}/dashboard/snapshot")
         if status != 200:
             raise AssertionError(f"Manager snapshot returned HTTP {status}")
-        if "no-store" not in headers.get("Cache-Control", ""):
+        if "no-store" not in headers.get("cache-control", ""):
             raise AssertionError("Manager snapshot must be no-store")
         payload = json.loads(body)
         validate_snapshot(payload)
