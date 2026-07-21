@@ -1,0 +1,144 @@
+name: Frontend Dashboard E2E
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "app/**"
+      - "scripts/verify_frontend_dashboard_e2e.py"
+      - "docker-compose.frontend*.yml"
+      - ".github/workflows/frontend-dashboard-e2e.yml"
+      - "tests/test_dashboard*.py"
+      - "tests/test_frontend*.py"
+      - "tests/test_verify_frontend_dashboard_e2e.py"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: frontend-dashboard-e2e-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  COMPOSE_FILES: -f Manager_Agent/docker-compose.yml -f Manager_Agent/docker-compose.frontend.yml -f Manager_Agent/docker-compose.frontend-e2e.yml
+  DATABASE_AGENT_API_KEY: e2e_database_key
+  EXECUTION_API_KEY: e2e_execution_key
+  PORTFOLIO_AGENT_API_KEY: e2e_portfolio_key
+  ALPACA_SECRET_KEY: dashboard-e2e-secret-must-not-leak
+
+jobs:
+  dashboard-e2e:
+    name: Manager and Frontend browser E2E
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout Manager_Agent
+        uses: actions/checkout@v4
+        with:
+          path: Manager_Agent
+
+      - name: Checkout Trading_Frontend
+        uses: actions/checkout@v4
+        with:
+          repository: athipan1/Trading_Frontend
+          ref: ${{ github.event_name == 'pull_request' && 'agent/production-safe-manager-dashboard' || 'main' }}
+          path: Trading_Frontend
+
+      - name: Checkout Database_Agent
+        uses: actions/checkout@v4
+        with:
+          repository: athipan1/Database_Agent
+          path: Database_Agent
+
+      - name: Checkout Execution_Agent
+        uses: actions/checkout@v4
+        with:
+          repository: athipan1/Execution_Agent
+          path: Execution_Agent
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22.17.0
+          cache: npm
+          cache-dependency-path: Trading_Frontend/package-lock.json
+
+      - name: Install locked frontend dependencies
+        working-directory: Trading_Frontend
+        run: npm ci --ignore-scripts
+
+      - name: Install pinned Chromium
+        working-directory: Trading_Frontend
+        run: npx playwright install --with-deps chromium
+
+      - name: Validate Compose model
+        run: docker compose $COMPOSE_FILES --profile dashboard config --quiet
+
+      - name: Build and start dashboard stack
+        run: >-
+          docker compose $COMPOSE_FILES --profile dashboard up --detach --build
+          database-agent execution-agent manager-agent trading-frontend
+
+      - name: Wait for Manager and Frontend health
+        run: |
+          for attempt in {1..120}; do
+            manager=wait
+            frontend=wait
+            curl --fail --silent http://127.0.0.1:8000/health >/dev/null && manager=ok || true
+            curl --fail --silent http://127.0.0.1:5173/healthz >/dev/null && frontend=ok || true
+            if [ "$manager" = ok ] && [ "$frontend" = ok ]; then
+              exit 0
+            fi
+            if [ "$attempt" = 120 ]; then
+              exit 1
+            fi
+            sleep 2
+          done
+
+      - name: Verify Manager HTTP contract and refresh
+        run: python Manager_Agent/scripts/verify_frontend_dashboard_e2e.py --output dashboard-e2e-artifacts
+
+      - name: Run real Manager browser E2E
+        working-directory: Trading_Frontend
+        env:
+          PLAYWRIGHT_BASE_URL: http://127.0.0.1:5173
+        run: npx playwright test --config playwright.compose.config.js
+
+      - name: Extract and scan production JavaScript bundle
+        run: |
+          frontend_container=$(docker compose $COMPOSE_FILES --profile dashboard ps --quiet trading-frontend)
+          docker cp "$frontend_container:/usr/share/nginx/html" /tmp/frontend-dist
+          cd Trading_Frontend
+          BUNDLE_FORBIDDEN_VALUES=dashboard-e2e-secret-must-not-leak npm run check:bundle -- /tmp/frontend-dist
+
+      - name: Stop Manager and prove Frontend remains available
+        run: |
+          docker compose $COMPOSE_FILES --profile dashboard stop manager-agent
+          curl --fail --silent http://127.0.0.1:5173/ >/dev/null
+
+      - name: Verify browser error state without crash
+        working-directory: Trading_Frontend
+        env:
+          EXPECT_API_DOWN: "true"
+          PLAYWRIGHT_BASE_URL: http://127.0.0.1:5173
+        run: npx playwright test --config playwright.compose.config.js
+
+      - name: Collect failure logs
+        if: failure()
+        run: |
+          mkdir -p dashboard-e2e-artifacts
+          docker compose $COMPOSE_FILES --profile dashboard ps > dashboard-e2e-artifacts/compose-ps.txt
+          docker compose $COMPOSE_FILES --profile dashboard logs --no-color trading-frontend > dashboard-e2e-artifacts/frontend.log
+
+      - name: Upload failure artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: frontend-dashboard-e2e-failure
+          path: dashboard-e2e-artifacts
+          if-no-files-found: ignore
+
+      - name: Stop dashboard stack
+        if: always()
+        run: docker compose $COMPOSE_FILES --profile dashboard down --volumes --remove-orphans
