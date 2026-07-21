@@ -2,14 +2,17 @@ import datetime
 import uuid
 from typing import Any, Dict, List, Optional, Union
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Depends, Query, Response
 from fastapi.responses import HTMLResponse
 
 from .alerts import alert_service
 from .config_manager import config_manager
 from .contracts import StandardAgentResponse
 from .database_client import DatabaseAgentClient
+from .dashboard_security import enforce_dashboard_rate_limit
+from .dashboard_snapshot import build_dashboard_snapshot, unavailable_dashboard_payload
 from .execution_client import ExecutionAgentClient
+from .contracts.dashboard import DashboardSnapshot
 
 router = APIRouter(tags=["Thai Trading Dashboard"])
 
@@ -86,14 +89,20 @@ def _db_context_looks_stale(balance: Any, positions: List[Any], orders: List[Dic
     return bool(broker_cash and db_cash and broker_cash != db_cash)
 
 
-async def _load_broker_state(account_id: Union[int, str], correlation_id: str) -> Dict[str, Any]:
+async def _load_broker_state(
+    account_id: Union[int, str],
+    correlation_id: str,
+    *,
+    reconcile: bool = True,
+) -> Dict[str, Any]:
     try:
         async with ExecutionAgentClient() as exec_client:
-            reconcile = await exec_client.reconcile_broker_state(account_id, correlation_id)
-            reconcile_payload = _broker_state_from_response(reconcile)
-            broker_state = reconcile_payload.get("broker_state") or {}
-            if broker_state:
-                return {"status": "success", "mode": "reconcile", "payload": reconcile_payload, "broker_state": broker_state}
+            if reconcile:
+                reconcile_response = await exec_client.reconcile_broker_state(account_id, correlation_id)
+                reconcile_payload = _broker_state_from_response(reconcile_response)
+                broker_state = reconcile_payload.get("broker_state") or {}
+                if broker_state:
+                    return {"status": "success", "mode": "reconcile", "payload": reconcile_payload, "broker_state": broker_state}
             state = await exec_client.broker_state(account_id, correlation_id)
             state_payload = _broker_state_from_response(state)
             return {"status": "success", "mode": "state", "payload": state_payload, "broker_state": state_payload}
@@ -131,7 +140,12 @@ def _broker_fallback_alert(broker_sync: Dict[str, Any], database_sync: Dict[str,
     }
 
 
-async def _dashboard_payload(account_id: Optional[Union[int, str]], correlation_id: str) -> Dict[str, Any]:
+async def _dashboard_payload(
+    account_id: Optional[Union[int, str]],
+    correlation_id: str,
+    *,
+    reconcile_broker: bool = True,
+) -> Dict[str, Any]:
     account_id = account_id if account_id is not None else config_manager.get("DEFAULT_ACCOUNT_ID")
     problems = alert_service.list_events(limit=50)
     balance = None
@@ -141,7 +155,7 @@ async def _dashboard_payload(account_id: Optional[Union[int, str]], correlation_
     data_errors: List[str] = []
     database_sync: Dict[str, Any] = {}
 
-    broker_sync = await _load_broker_state(account_id, correlation_id)
+    broker_sync = await _load_broker_state(account_id, correlation_id, reconcile=reconcile_broker)
     broker_state = broker_sync.get("broker_state") or {}
 
     try:
@@ -214,6 +228,26 @@ async def _dashboard_payload(account_id: Optional[Union[int, str]], correlation_
 async def dashboard_data(account_id: Optional[str] = Query(default=None)):
     correlation_id = str(uuid.uuid4())
     return _response(await _dashboard_payload(account_id, correlation_id))
+
+
+@router.get("/dashboard/snapshot", response_model=DashboardSnapshot)
+async def dashboard_snapshot(
+    response: Response,
+    _: None = Depends(enforce_dashboard_rate_limit),
+):
+    """Return a versioned, read-only, browser-safe portfolio snapshot."""
+    correlation_id = str(uuid.uuid4())
+    try:
+        payload = await _dashboard_payload(None, correlation_id, reconcile_broker=False)
+    except Exception:
+        # Do not expose internal exception strings, URLs, or credentials.
+        payload = unavailable_dashboard_payload()
+    snapshot = build_dashboard_snapshot(payload)
+    response.headers["Cache-Control"] = "no-store, max-age=0"
+    response.headers["Pragma"] = "no-cache"
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Request-ID"] = correlation_id
+    return snapshot
 
 
 @router.get("/dashboard", response_class=HTMLResponse)

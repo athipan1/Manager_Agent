@@ -1,0 +1,33 @@
+services:
+  manager-agent:
+    environment:
+      ENVIRONMENT: ${ENVIRONMENT:-development}
+      DASHBOARD_CORS_ALLOWED_ORIGINS: ${DASHBOARD_CORS_ALLOWED_ORIGINS:-http://localhost:5173}
+      DASHBOARD_RATE_LIMIT_PER_MINUTE: ${DASHBOARD_RATE_LIMIT_PER_MINUTE:-120}
+
+  trading-frontend:
+    profiles:
+      - dashboard
+    build:
+      context: ../Trading_Frontend
+      dockerfile: Dockerfile
+      args:
+        VITE_DATA_SOURCE: manager-api
+        VITE_MANAGER_API_URL: /api
+        VITE_DASHBOARD_SNAPSHOT_URL: ""
+        VITE_REFRESH_INTERVAL_MS: ${VITE_REFRESH_INTERVAL_MS:-60000}
+    image: athipan1/trading-frontend:dashboard-v1
+    environment:
+      MANAGER_UPSTREAM: http://manager-agent:80
+    ports:
+      - "5173:8080"
+    depends_on:
+      manager-agent:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/healthz"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 15s
+    restart: unless-stopped

@@ -40,3 +40,13 @@ from .learning import (
     InternalPolicyDeltas,
     LearningResponseBody
 )
+from .dashboard import (
+    DASHBOARD_SCHEMA_VERSION,
+    DashboardAccount,
+    DashboardCuratorSignal,
+    DashboardOrder,
+    DashboardPosition,
+    DashboardProtection,
+    DashboardSnapshot,
+    DashboardSummary,
+)

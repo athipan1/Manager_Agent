@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from fastapi import FastAPI
 
+from .dashboard_security import configure_dashboard_cors
+
 from .routes.wiring import (
     register_alpha_agent_routes,
     register_discovery_routes,
@@ -24,6 +26,7 @@ def create_app(
     include_alpha_agents: bool = True,
 ) -> FastAPI:
     app = FastAPI()
+    configure_dashboard_cors(app)
 
     if include_system:
         register_system_routes(app)

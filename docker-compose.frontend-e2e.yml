@@ -1,0 +1,44 @@
+services:
+  manager-agent:
+    environment:
+      TRADING_ENABLED: "true"
+      TRADING_MODE: PAPER
+      BROKER_MODE: SIMULATOR
+      DRY_RUN: "true"
+      ALLOW_LIVE_TRADING: "false"
+      DATABASE_AGENT_URL: http://database-agent:8004
+      DATABASE_AGENT_API_KEY: ${DATABASE_AGENT_API_KEY:?DATABASE_AGENT_API_KEY is required}
+      EXECUTION_AGENT_URL: http://execution-agent:8006
+      EXECUTION_API_KEY: ${EXECUTION_API_KEY:?EXECUTION_API_KEY is required}
+      ENVIRONMENT: development
+      DASHBOARD_CORS_ALLOWED_ORIGINS: http://localhost:5173
+      DASHBOARD_RATE_LIMIT_PER_MINUTE: "120"
+    depends_on: !override
+      database-agent:
+        condition: service_healthy
+      execution-agent:
+        condition: service_healthy
+      risk-agent:
+        condition: service_healthy
+
+  database-agent:
+    environment:
+      DATABASE_AGENT_API_KEY: ${DATABASE_AGENT_API_KEY:?DATABASE_AGENT_API_KEY is required}
+      DATABASE_DEV_MODE: "true"
+      USE_SQLITE: "true"
+
+  execution-agent:
+    environment:
+      API_KEY: ${EXECUTION_API_KEY:?EXECUTION_API_KEY is required}
+      EXECUTION_AGENT_API_KEY: ${EXECUTION_API_KEY:?EXECUTION_API_KEY is required}
+      DB_AGENT_URL: http://database-agent:8004
+      DATABASE_AGENT_API_KEY: ${DATABASE_AGENT_API_KEY:?DATABASE_AGENT_API_KEY is required}
+      TRADING_ENABLED: "true"
+      TRADING_MODE: PAPER
+      BROKER_MODE: SIMULATOR
+      DRY_RUN: "true"
+      ALLOW_LIVE_TRADING: "false"
+
+  trading-frontend:
+    environment:
+      MANAGER_UPSTREAM: http://manager-agent:80
