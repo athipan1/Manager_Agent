@@ -86,11 +86,24 @@ def test_paper_runtime_uses_railway_and_not_local_database_service():
     assert " db" not in start
 
 
+def test_manual_simulator_uses_ephemeral_keys_and_local_database_only():
+    workflow = workflow_text()
+    configure = workflow.split("      - name: Configure isolated runtime stack", 1)[1].split(
+        "      - name: Checkout Scanner_Agent", 1
+    )[0]
+    simulator = configure.split("          else", 1)[1].split("          fi", 1)[0]
+    assert "python scripts/configure_simulator_runtime.py" in simulator
+    assert "docker-compose.hourly-simulator.yml" in simulator
+    assert "RUNTIME_DATABASE_AGENT_URL=http://localhost:8004" in simulator
+    assert "EXECUTE_PAPER_PROTECTION_RECONCILIATION=false" in simulator
+    assert "RUNTIME_DATABASE_AGENT_URL=${DATABASE_AGENT_URL}" not in simulator
+
+
 def test_position_review_precedes_scanner_backtest_and_execution():
     workflow = workflow_text()
     review = workflow.index("Review existing positions, orders, regime, exposure and protection")
     scanner = workflow.index("Run Scanner preselection after portfolio review")
-    backtest = workflow.index("Run exact Backtest and publish to Railway Database_Agent")
+    backtest = workflow.index("Run exact Backtest and publish to runtime Database_Agent")
     execution = workflow.index("Run Manager candidate, Risk and guarded Execution cycle")
     final = workflow.index("Verify fills, protection and post-execution reconciliation")
     assert review < scanner < backtest < execution < final
@@ -99,6 +112,7 @@ def test_position_review_precedes_scanner_backtest_and_execution():
 def test_large_runtime_logic_is_not_embedded_in_yaml():
     workflow = workflow_text()
     assert "python scripts/hourly_paper_preflight.py" in workflow
+    assert "python scripts/configure_simulator_runtime.py" in workflow
     assert "python scripts/hourly_portfolio_cycle.py prepare" in workflow
     assert "python scripts/hourly_portfolio_cycle.py trade" in workflow
     assert "python scripts/hourly_portfolio_cycle.py finalize" in workflow
@@ -115,3 +129,11 @@ def test_simulator_and_paper_use_explicit_runtime_overrides():
     workflow = workflow_text()
     assert "docker-compose.hourly-simulator.yml" in workflow
     assert "docker-compose.hourly-paper.yml" in workflow
+
+
+def test_cleanup_failure_cannot_mask_the_primary_workflow_failure():
+    workflow = workflow_text()
+    cleanup = workflow.split("      - name: Stop stack", 1)[1]
+    assert "if: always()" in cleanup
+    assert "continue-on-error: true" in cleanup
+    assert "docker compose down -v" in cleanup
