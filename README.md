@@ -80,6 +80,21 @@ PROFIT_AUTO_EXIT_ALL_ENABLED=false
 
 `exit_all` ยังต้อง manual approval จนกว่าจะเปิด flag เฉพาะใน PAPER/SIMULATOR.
 
+Profit Agent calls use the authenticated `profit-decision.v2` contract.
+Manager sends the shared service secret and one correlation ID on every call:
+
+```env
+PROFIT_AGENT_ENABLED=true
+PROFIT_AGENT_URL=http://profit-agent:8011
+PROFIT_AGENT_API_KEY=
+```
+
+Do not commit the key or place it in request/report data. Production Manager
+startup fails when Profit is enabled without the key. Legacy Profit responses
+remain advisory-display compatible during migration, but Manager logs a
+deprecation warning and will not auto-execute a response without deterministic
+lifecycle identity.
+
 ---
 
 ## 📡 รายการ Endpoints

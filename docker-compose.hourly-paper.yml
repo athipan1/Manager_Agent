@@ -26,6 +26,7 @@ services:
       MARKET_REGIME_AGENT_URL: http://market-regime-agent:8014
       PORTFOLIO_AGENT_URL: http://portfolio-agent:8012
       PROFIT_AGENT_URL: http://profit-agent:8011
+      PROFIT_AGENT_API_KEY: ${PROFIT_AGENT_API_KEY:?PROFIT_AGENT_API_KEY is required}
       PROFIT_DECISION_EXECUTION_ENABLED: ${PROFIT_DECISION_EXECUTION_ENABLED:-false}
       PROFIT_AUTO_EXIT_ALL_ENABLED: ${PROFIT_AUTO_EXIT_ALL_ENABLED:-false}
       PERFORMANCE_AGENT_URL: http://performance-agent:8013
@@ -79,6 +80,10 @@ services:
   portfolio-agent:
     environment:
       PORTFOLIO_AGENT_API_KEY: ${PORTFOLIO_AGENT_API_KEY:?PORTFOLIO_AGENT_API_KEY is required}
+
+  profit-agent:
+    environment:
+      PROFIT_AGENT_API_KEY: ${PROFIT_AGENT_API_KEY:?PROFIT_AGENT_API_KEY is required}
 
   performance-agent:
     environment:

@@ -178,6 +178,11 @@ class CycleClients:
         self.profit = JsonHttpClient(
             os.getenv("PROFIT_AGENT_URL", "http://localhost:8010"),
             "Profit_Agent",
+            (
+                {"X-API-KEY": os.getenv("PROFIT_AGENT_API_KEY", "")}
+                if os.getenv("PROFIT_AGENT_API_KEY", "")
+                else {}
+            ),
             timeout_seconds=30,
         )
         self.performance = JsonHttpClient(
@@ -405,6 +410,7 @@ def review_existing_positions(
             max(entry, current),
         )
         profit_request = {
+            "schema_version": "profit-decision.v2",
             "position": {
                 "symbol": symbol,
                 "side": "long",

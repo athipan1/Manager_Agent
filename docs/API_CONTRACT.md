@@ -122,6 +122,27 @@ The PR2 implementation supports whole-share exits in PAPER/SIMULATOR only.
 Fractional quantities and market increments are intentionally deferred to the
 Decimal/tick-size contract. `exit_all` remains blocked by default.
 
+## Authenticated Profit Agent contract
+
+Manager sends `X-API-KEY` from `PROFIT_AGENT_API_KEY` and the current
+`X-Correlation-ID` to Profit Agent. The same correlation ID continues through
+Database decision reservation/transitions, Risk, and Execution. Keys are never
+written to reports, logs, request metadata, or response bodies.
+
+Manager accepts both numeric legacy schema versions and named versions such as
+`profit-decision.v2`. A mismatched response correlation ID fails closed. A
+legacy Profit response without `profit-decision.v2` is allowed only for the
+temporary advisory migration path and emits a deprecation warning. It remains
+ineligible for automatic execution without deterministic lifecycle identity.
+
+Compatibility timeline:
+
+- `profit-decision.v2` is current from 2026-07-22.
+- `profit-plan.v1`/missing request schema remains readable through the announced
+  migration target of 2026-10-31.
+- Removing legacy support requires a separate breaking-change release and will
+  not happen silently.
+
 ## Manager_Agent Baseline
 
 `Manager_Agent` now exposes the required operational endpoint set:

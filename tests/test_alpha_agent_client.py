@@ -1,3 +1,5 @@
+from dataclasses import replace
+
 import pytest
 
 import app.alpha_agent_client as alpha_agent_client
@@ -90,3 +92,37 @@ async def test_portfolio_health_client_uses_same_api_key(monkeypatch):
     assert captured["headers"] == {"X-API-KEY": "dev_portfolio_key"}
     assert captured["endpoint"] == "/health"
     assert captured["correlation_id"] == "health-correlation"
+
+
+@pytest.mark.asyncio
+async def test_profit_advisory_client_sets_api_key_and_correlation_id(monkeypatch):
+    captured = {}
+
+    class FakeClient:
+        def __init__(self, *, base_url, timeout, headers=None):
+            captured["headers"] = headers
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc_val, exc_tb):
+            return None
+
+        async def _post(self, endpoint, correlation_id, payload):
+            captured.update(
+                endpoint=endpoint,
+                correlation_id=correlation_id,
+                payload=payload,
+            )
+            return {"status": "success"}
+
+        def validate_standard_response(self, response):
+            return _ValidatedResponse(response)
+
+    monkeypatch.setattr(alpha_agent_client, "ResilientAgentClient", FakeClient)
+    spec = replace(ALPHA_AGENT_SPECS["profit"], api_key="profit-service-key")
+    await _call_alpha_agent(spec, "profit-correlation-id", {"position": {}})
+
+    assert captured["headers"] == {"X-API-KEY": "profit-service-key"}
+    assert captured["correlation_id"] == "profit-correlation-id"
+    assert captured["endpoint"] == "/profit/plan"

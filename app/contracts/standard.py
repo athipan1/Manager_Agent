@@ -1,6 +1,7 @@
 from pydantic import BaseModel, Field, field_validator, ConfigDict
 from typing import Literal, Optional, Dict, Any, Union, List
 import datetime
+import re
 
 # Import other data models for the Union
 from .trade import (
@@ -58,6 +59,7 @@ class StandardAgentResponse(BaseModel):
     ] = None
     metadata: Dict[str, Any] = Field(default_factory=dict)
     error: Optional[Dict[str, Any]] = None
+    confidence_score: Optional[float] = Field(default=None, ge=0, le=1)
 
     @field_validator('version')
     @classmethod
@@ -72,8 +74,12 @@ class StandardAgentResponse(BaseModel):
     @classmethod
     def schema_version_must_be_semantic(cls, v):
         parts = v.split('.')
-        if not all(part.isdigit() for part in parts):
-            raise ValueError('Schema version must be in semantic format (e.g., "1.0")')
+        numeric_version = len(parts) >= 2 and all(part.isdigit() for part in parts)
+        named_version = re.fullmatch(r"[a-z][a-z0-9-]*\.v[1-9][0-9]*", v) is not None
+        if not numeric_version and not named_version:
+            raise ValueError(
+                'Schema version must be numeric or a named contract (e.g., "profit-decision.v2")'
+            )
         return v
 
     @field_validator('timestamp', mode='before')

@@ -6,6 +6,7 @@ import pytest
 
 from scripts.bucket_profit_review import build_profit_request
 from scripts.profit_decision_orchestrator import (
+    correlation_id_for_report,
     GatewayError,
     GatewayTimeout,
     ProfitDecisionOrchestrator,
@@ -193,6 +194,29 @@ def test_manager_forwards_database_lifecycle_to_profit_request():
     }
 
 
+def test_orchestration_reuses_profit_review_correlation_id():
+    report = {
+        "correlation_id": "profit-review-correlation-1",
+        "generated_at": "2026-07-22T00:00:00Z",
+        "bucket": "value_rebound",
+    }
+
+    assert correlation_id_for_report(report) == "profit-review-correlation-1"
+
+
+def test_orchestration_derives_stable_correlation_id_for_legacy_report():
+    report = {
+        "generated_at": "2026-07-22T00:00:00Z",
+        "bucket": "value_rebound",
+    }
+
+    first = correlation_id_for_report(report)
+    second = correlation_id_for_report(report)
+
+    assert first == second
+    assert first.startswith("profit-review-")
+
+
 def test_risk_approved_decision_executes_once_and_marks_fill():
     gateway = FakeGateway()
     manager = orchestrator(gateway)
@@ -209,6 +233,12 @@ def test_risk_approved_decision_executes_once_and_marks_fill():
         request["correlation_id"] == "corr-profit-1"
         for request in gateway.requests
     )
+    reserve = next(
+        request
+        for request in gateway.requests
+        if request["path"].endswith("/profit-decisions/reserve")
+    )
+    assert reserve["payload"]["metadata"]["correlation_id"] == "corr-profit-1"
 
 
 def test_risk_rejection_is_terminal_and_never_calls_execution():
