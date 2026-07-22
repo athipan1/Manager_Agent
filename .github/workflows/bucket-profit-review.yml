@@ -48,6 +48,7 @@ jobs:
       DATABASE_AGENT_API_KEY: ${{ secrets.DATABASE_AGENT_API_KEY || 'dev_database_key' }}
       DEFAULT_ACCOUNT_ID: 1
       PROFIT_AGENT_URL: http://localhost:8011
+      PROFIT_AGENT_API_KEY: ${{ secrets.PROFIT_AGENT_API_KEY }}
       RISK_AGENT_URL: http://localhost:8007
       EXECUTION_AGENT_URL: http://localhost:8006
       DEFAULT_BUCKET_REVIEW_HINTS: '{"ADBE":"core_dividend","ACGL":"value_rebound","BKNG":"quality_growth","CINF":"value_rebound"}'
@@ -194,8 +195,8 @@ jobs:
             echo "Bucket Profit Review must stay in PAPER mode"
             exit 1
           fi
-          if [ -z "${ALPACA_API_KEY_ID}" ] || [ -z "${ALPACA_SECRET_KEY}" ]; then
-            echo "Missing GitHub Secrets: ALPACA_API_KEY_ID or ALPACA_SECRET_KEY"
+          if [ -z "${ALPACA_API_KEY_ID}" ] || [ -z "${ALPACA_SECRET_KEY}" ] || [ -z "${PROFIT_AGENT_API_KEY}" ]; then
+            echo "Missing GitHub Secrets: ALPACA_API_KEY_ID, ALPACA_SECRET_KEY, or PROFIT_AGENT_API_KEY"
             exit 1
           fi
           echo "Paper-only safety settings validated."
@@ -209,7 +210,9 @@ jobs:
         working-directory: Profit_Agent
         run: |
           docker build -t profit-agent-review .
-          docker run -d --name profit-agent-review -p 8011:8011 profit-agent-review
+          docker run -d --name profit-agent-review -p 8011:8011 \
+            -e PROFIT_AGENT_API_KEY="${PROFIT_AGENT_API_KEY}" \
+            profit-agent-review
 
       - name: Wait for services
         working-directory: Manager_Agent

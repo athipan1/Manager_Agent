@@ -49,6 +49,24 @@ def test_standard_response_contract_defaults_are_backward_compatible():
     assert payload["correlation_id"] is None
 
 
+def test_standard_response_accepts_named_profit_contract_version():
+    response = StandardAgentResponse(
+        status="success",
+        agent_type="profit-agent",
+        version="0.2.0",
+        schema_version="profit-decision.v2",
+        timestamp="2026-07-22T00:00:00Z",
+        correlation_id="profit-correlation-id",
+        data={},
+        metadata={},
+        error=None,
+        confidence_score=0.9,
+    )
+
+    assert response.schema_version == "profit-decision.v2"
+    assert response.confidence_score == 0.9
+
+
 def test_version_endpoint_uses_standard_response_contract():
     client = TestClient(make_app())
     response = client.get("/version")

@@ -17,6 +17,7 @@ from .config import (
     PORTFOLIO_AGENT_TIMEOUT,
     PORTFOLIO_AGENT_URL,
     PROFIT_AGENT_ENABLED,
+    PROFIT_AGENT_API_KEY,
     PROFIT_AGENT_TIMEOUT,
     PROFIT_AGENT_URL,
 )
@@ -60,6 +61,7 @@ ALPHA_AGENT_SPECS = {
         timeout=PROFIT_AGENT_TIMEOUT,
         advisory_endpoint="/profit/plan",
         payload_key="profit",
+        api_key=PROFIT_AGENT_API_KEY,
     ),
     "performance": AlphaAgentSpec(
         name="performance",
@@ -93,6 +95,19 @@ async def _call_alpha_agent(
 ) -> Dict[str, Any]:
     async with _client_for_spec(spec) as client:
         response = await client._post(spec.advisory_endpoint, correlation_id, payload)
+        if spec.name == "profit":
+            schema_version = str(response.get("schema_version") or "1.0")
+            if schema_version != "profit-decision.v2":
+                from .logger import report_logger
+
+                report_logger.warning(
+                    "Profit Agent returned deprecated schema_version=%s, correlation_id=%s",
+                    schema_version,
+                    correlation_id,
+                )
+            response_correlation_id = response.get("correlation_id")
+            if response_correlation_id not in {None, correlation_id}:
+                raise ValueError("Profit Agent correlation_id did not match the request")
         validated = client.validate_standard_response(response)
         return validated.model_dump(mode="json")
 

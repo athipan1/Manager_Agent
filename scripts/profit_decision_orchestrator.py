@@ -230,6 +230,7 @@ class ProfitDecisionOrchestrator:
                 "symbol": row.get("symbol"),
                 "bucket": row.get("bucket"),
                 "advisory_only": True,
+                "correlation_id": self.correlation_id,
             },
         }
         response = self._request(
@@ -524,6 +525,9 @@ def orchestrate_report(
 
 
 def correlation_id_for_report(report: Dict[str, Any]) -> str:
+    report_correlation_id = str(report.get("correlation_id") or "").strip()
+    if report_correlation_id:
+        return report_correlation_id
     generated = str(report.get("generated_at") or datetime.now(timezone.utc).isoformat())
     bucket = str(report.get("bucket") or "unassigned")
     digest = hashlib.sha256(f"{bucket}:{generated}".encode("utf-8")).hexdigest()[:20]

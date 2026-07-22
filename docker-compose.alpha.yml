@@ -10,6 +10,7 @@ services:
       PORTFOLIO_AGENT_URL: http://portfolio-agent:8012
       PORTFOLIO_AGENT_API_KEY: ${PORTFOLIO_AGENT_API_KEY:-dev_portfolio_key}
       PROFIT_AGENT_URL: http://profit-agent:8011
+      PROFIT_AGENT_API_KEY: ${PROFIT_AGENT_API_KEY:-}
       PROFIT_DECISION_EXECUTION_ENABLED: ${PROFIT_DECISION_EXECUTION_ENABLED:-false}
       PROFIT_AUTO_EXIT_ALL_ENABLED: ${PROFIT_AUTO_EXIT_ALL_ENABLED:-false}
       PERFORMANCE_AGENT_URL: http://performance-agent:8013
@@ -74,6 +75,7 @@ services:
       start_period: 30s
     environment:
       PYTHONPATH: /app
+      PROFIT_AGENT_API_KEY: ${PROFIT_AGENT_API_KEY:-}
 
   performance-agent:
     build:

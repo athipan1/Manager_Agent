@@ -147,6 +147,7 @@ MARKET_REGIME_AGENT_URL = os.getenv("MARKET_REGIME_AGENT_URL", "http://market-re
 PORTFOLIO_AGENT_URL = os.getenv("PORTFOLIO_AGENT_URL", "http://portfolio-agent:8012")
 PORTFOLIO_AGENT_API_KEY = os.getenv("PORTFOLIO_AGENT_API_KEY", "dev_portfolio_key")
 PROFIT_AGENT_URL = os.getenv("PROFIT_AGENT_URL", "http://profit-agent:8011")
+PROFIT_AGENT_API_KEY = os.getenv("PROFIT_AGENT_API_KEY", "").strip()
 PROFIT_DECISION_EXECUTION_ENABLED = _env_bool(
     "PROFIT_DECISION_EXECUTION_ENABLED", False
 )
@@ -158,6 +159,14 @@ PORTFOLIO_AGENT_TIMEOUT = int(os.getenv("PORTFOLIO_AGENT_TIMEOUT", 10))
 PROFIT_AGENT_TIMEOUT = int(os.getenv("PROFIT_AGENT_TIMEOUT", 10))
 PERFORMANCE_AGENT_TIMEOUT = int(os.getenv("PERFORMANCE_AGENT_TIMEOUT", 10))
 CURATOR_AGENT_TIMEOUT = int(os.getenv("CURATOR_AGENT_TIMEOUT", 10))
+
+if (
+    os.getenv("APP_ENV", os.getenv("ENVIRONMENT", "development")).strip().lower()
+    in {"production", "prod"}
+    and PROFIT_AGENT_ENABLED
+    and not PROFIT_AGENT_API_KEY
+):
+    raise RuntimeError("PROFIT_AGENT_API_KEY is required when Profit Agent is enabled in production.")
 
 if TRADING_MODE == "LIVE" and PROFIT_DECISION_EXECUTION_ENABLED:
     raise RuntimeError(

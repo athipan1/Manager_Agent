@@ -1,9 +1,35 @@
 from scripts.bucket_profit_review import (
     HIGHEST_PRICE_FALLBACK_WARNING,
     build_profit_request,
+    call_profit_agent,
     parse_bucket_hints,
     review_bucket,
 )
+
+
+def test_profit_call_forwards_api_key_and_correlation_id(monkeypatch):
+    captured = {}
+
+    def fake_request(base_url, path, **kwargs):
+        captured.update(base_url=base_url, path=path, **kwargs)
+        return {
+            "status": "success",
+            "data": {"symbol": "ACGL", "primary_action": "hold", "actions": []},
+        }
+
+    monkeypatch.setattr("scripts.bucket_profit_review._request_json", fake_request)
+
+    result = call_profit_agent(
+        "http://profit-agent:8011",
+        {"position": {"symbol": "ACGL"}},
+        "profit-key",
+        "bucket-correlation-id",
+    )
+
+    assert result["symbol"] == "ACGL"
+    assert captured["api_key"] == "profit-key"
+    assert captured["correlation_id"] == "bucket-correlation-id"
+    assert captured["path"] == "/profit/plan"
 
 
 def test_review_bucket_uses_profit_agent_for_matching_bucket(monkeypatch):
@@ -36,7 +62,7 @@ def test_review_bucket_uses_profit_agent_for_matching_bucket(monkeypatch):
         "positions": {"data": []},
     }
 
-    def fake_profit_agent(url, payload):
+    def fake_profit_agent(url, payload, *_args):
         return {
             "symbol": payload["position"]["symbol"],
             "primary_action": "partial_exit",
@@ -73,6 +99,7 @@ def test_build_profit_request_uses_bucket_specific_rules():
     payload = build_profit_request("news_momentum", position, stop_order)
 
     assert payload["position"]["symbol"] == "ABCD"
+    assert payload["schema_version"] == "profit-decision.v2"
     assert payload["position"]["risk_per_share"] == 2
     assert payload["first_take_profit_r"] == 1.0
     assert payload["second_take_profit_r"] == 1.75
@@ -130,7 +157,7 @@ def test_review_bucket_uses_bucket_hints_when_position_bucket_missing(monkeypatc
         },
     }
 
-    def fake_profit_agent(url, payload):
+    def fake_profit_agent(url, payload, *_args):
         return {
             "symbol": payload["position"]["symbol"],
             "primary_action": "hold",
@@ -186,7 +213,7 @@ def test_review_bucket_uses_database_highest_price_and_ignores_broker_guess(monk
 
     monkeypatch.setattr(
         "scripts.bucket_profit_review.call_profit_agent",
-        lambda url, payload: {
+        lambda url, payload, *_args: {
             "symbol": payload["position"]["symbol"],
             "primary_action": "hold",
             "actions": [],
@@ -225,7 +252,7 @@ def test_review_bucket_warns_when_database_highest_price_is_unavailable(monkeypa
 
     monkeypatch.setattr(
         "scripts.bucket_profit_review.call_profit_agent",
-        lambda url, payload: {
+        lambda url, payload, *_args: {
             "symbol": payload["position"]["symbol"],
             "primary_action": "hold",
             "actions": [],

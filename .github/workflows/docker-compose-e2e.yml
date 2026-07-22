@@ -21,6 +21,7 @@ jobs:
       PORTFOLIO_AGENT_ENABLED: "true"
       PROFIT_AGENT_ENABLED: "true"
       PORTFOLIO_AGENT_API_KEY: dev_portfolio_key
+      PROFIT_AGENT_API_KEY: e2e_profit_contract_key
       RUNTIME_SERVICES: database-agent technical-agent scanner-agent fundamental-agent risk-agent backtest-agent market-regime-agent performance-agent learning-agent execution-agent curator-agent portfolio-agent profit-agent manager-agent db
 
     steps:
@@ -122,6 +123,7 @@ jobs:
                 PORTFOLIO_AGENT_URL: http://portfolio-agent:8012
                 PORTFOLIO_AGENT_API_KEY: ${PORTFOLIO_AGENT_API_KEY:-dev_portfolio_key}
                 PROFIT_AGENT_URL: http://profit-agent:8011
+                PROFIT_AGENT_API_KEY: ${PROFIT_AGENT_API_KEY}
                 CURATOR_AGENT_URL: http://curator-agent:8010
               depends_on:
                 portfolio-agent:
@@ -166,6 +168,7 @@ jobs:
                 start_period: 30s
               environment:
                 PYTHONPATH: /app
+                PROFIT_AGENT_API_KEY: ${PROFIT_AGENT_API_KEY}
 
             portfolio-agent:
               build:
@@ -462,6 +465,7 @@ jobs:
           assert "rebalance_required" in portfolio_data, portfolio
 
           profit_payload = {
+              "schema_version": "profit-decision.v2",
               "position": {
                   "symbol": "AAPL",
                   "side": "long",
@@ -473,7 +477,18 @@ jobs:
                   "strategy_bucket": "core_dividend",
               }
           }
-          profit = request_json("POST", "http://localhost:8011/profit/plan", profit_payload)
+          profit_correlation_id = "agent-contract-e2e-profit"
+          profit = request_json(
+              "POST",
+              "http://localhost:8011/profit/plan",
+              profit_payload,
+              {
+                  "X-API-KEY": "e2e_profit_contract_key",
+                  "X-Correlation-ID": profit_correlation_id,
+              },
+          )
+          assert profit.get("schema_version") == "profit-decision.v2", profit
+          assert profit.get("correlation_id") == profit_correlation_id, profit
           profit_data = profit.get("data") or {}
           assert profit_data.get("symbol") == "AAPL", profit
           assert profit_data.get("primary_action") in {"hold", "move_stop", "partial_exit", "exit_all", "review"}, profit

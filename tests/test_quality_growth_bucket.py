@@ -32,7 +32,7 @@ def test_quality_growth_review_selects_bkng(monkeypatch):
         "orders": {"data": [{"symbol": "BKNG", "side": "sell", "type": "stop", "status": "new", "stop_price": 170.00}]},
     }
 
-    def fake_plan(url, payload):
+    def fake_plan(url, payload, *_args):
         return {
             "symbol": payload["position"]["symbol"],
             "primary_action": "hold",

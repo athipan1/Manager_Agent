@@ -6,6 +6,7 @@ import os
 import sys
 import urllib.error
 import urllib.request
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional
@@ -60,11 +61,13 @@ def _as_int(value: Any, default: int = 0) -> int:
         return default
 
 
-def _request_json(base_url: str, path: str, *, payload: Any = None, method: str = "GET", api_key: str | None = None, timeout: int = 120) -> Any:
+def _request_json(base_url: str, path: str, *, payload: Any = None, method: str = "GET", api_key: str | None = None, correlation_id: str | None = None, timeout: int = 120) -> Any:
     data = json.dumps(payload).encode("utf-8") if payload is not None else None
     headers: Dict[str, str] = {"Content-Type": "application/json"} if payload is not None else {}
     if api_key:
         headers["X-API-KEY"] = api_key
+    if correlation_id:
+        headers["X-Correlation-ID"] = correlation_id
     req = urllib.request.Request(f"{base_url}{path}", data=data, headers=headers, method=method)
     try:
         with urllib.request.urlopen(req, timeout=timeout) as resp:
@@ -243,7 +246,7 @@ def build_profit_request(bucket_name: str, position: Dict[str, Any], stop_order:
     unrealized_pct = _as_float(position.get("unrealized_plpc") or position.get("unrealized_pl_pct"))
     if unrealized_pct is None and entry and current:
         unrealized_pct = (current - entry) / entry
-    payload = {"position": {"symbol": _symbol(position), "quantity": quantity, "entry_price": entry or 0, "current_price": current or entry or 0, "stop_loss": prices["stop_loss"], "highest_price_since_entry": prices["highest_price_since_entry"], "risk_per_share": prices["risk_per_share"], "unrealized_pl_pct": unrealized_pct}, **BUCKET_CONFIG[bucket_name]["profit_rules"], "exit_on_stop_breach": True, "warnings": list(prices["warnings"]), "metadata": {"highest_price_since_entry_source": prices["highest_price_since_entry_source"], "cross_repo_fix_part": 2}}
+    payload = {"schema_version": "profit-decision.v2", "position": {"symbol": _symbol(position), "quantity": quantity, "entry_price": entry or 0, "current_price": current or entry or 0, "stop_loss": prices["stop_loss"], "highest_price_since_entry": prices["highest_price_since_entry"], "risk_per_share": prices["risk_per_share"], "unrealized_pl_pct": unrealized_pct}, **BUCKET_CONFIG[bucket_name]["profit_rules"], "exit_on_stop_breach": True, "warnings": list(prices["warnings"]), "metadata": {"highest_price_since_entry_source": prices["highest_price_since_entry_source"], "cross_repo_fix_part": 3}}
     lifecycle = _profit_lifecycle(position, quantity)
     if lifecycle is not None:
         payload["lifecycle"] = lifecycle
@@ -270,9 +273,34 @@ def fallback_profit_plan(bucket_name: str, position: Dict[str, Any], stop_order:
     return {"symbol": symbol, "primary_action": action, "current_r_multiple": None, "unrealized_pl_pct": round(unrealized_pct, 6), "actions": [{"action": action, "symbol": symbol, "quantity": 0, "recommended_stop": stop, "reason": reason, "confidence_score": confidence}], "warnings": warnings, "metadata": {"advisory_only": True, "fallback": True, "highest_price_since_entry_source": prices["highest_price_since_entry_source"]}}
 
 
-def call_profit_agent(profit_agent_url: str, request_payload: Dict[str, Any]) -> Dict[str, Any]:
-    response = _request_json(profit_agent_url.rstrip("/"), "/profit/plan", payload=request_payload, method="POST", timeout=60)
+def call_profit_agent(
+    profit_agent_url: str,
+    request_payload: Dict[str, Any],
+    api_key: str | None = None,
+    correlation_id: str | None = None,
+) -> Dict[str, Any]:
+    response = _request_json(
+        profit_agent_url.rstrip("/"),
+        "/profit/plan",
+        payload=request_payload,
+        method="POST",
+        api_key=api_key,
+        correlation_id=correlation_id,
+        timeout=60,
+    )
+    if isinstance(response, dict) and response.get("status") == "success":
+        response_correlation_id = response.get("correlation_id")
+        if response_correlation_id not in {None, correlation_id}:
+            return {"status": "error", "error": "Profit_Agent correlation_id mismatch"}
     data = _unwrap(response)
+    if isinstance(data, dict) and isinstance(response, dict):
+        schema_version = str(response.get("schema_version") or "profit-plan.v1")
+        if schema_version != "profit-decision.v2":
+            warnings = list(data.get("warnings") or [])
+            warnings.append(
+                f"deprecated Profit_Agent schema {schema_version}; migrate to profit-decision.v2"
+            )
+            data["warnings"] = list(dict.fromkeys(warnings))
     if isinstance(data, dict) and data.get("status") == "error":
         return {"status": "error", "error": data}
     return data if isinstance(data, dict) else {"status": "error", "error": "unexpected Profit_Agent response", "raw": response}
@@ -285,18 +313,24 @@ def _bucket_distribution(positions: Dict[str, Dict[str, Any]]) -> Dict[str, int]
     return dict(sorted(output.items()))
 
 
-def review_bucket(bucket_name: str, dashboard: Any, broker_snapshot: Any, profit_agent_url: str | None, bucket_hints: Optional[Dict[str, str]] = None, database_bucket_hints: Optional[Dict[str, str]] = None, database_positions: Optional[Iterable[Dict[str, Any]]] = None) -> Dict[str, Any]:
+def review_bucket(bucket_name: str, dashboard: Any, broker_snapshot: Any, profit_agent_url: str | None, bucket_hints: Optional[Dict[str, str]] = None, database_bucket_hints: Optional[Dict[str, str]] = None, database_positions: Optional[Iterable[Dict[str, Any]]] = None, profit_api_key: str | None = None, correlation_id: str | None = None) -> Dict[str, Any]:
     if bucket_name not in BUCKET_CONFIG:
         raise ValueError(f"unknown bucket: {bucket_name}")
     rows_by_symbol = _merge_positions(_positions_from_dashboard(dashboard), _positions_from_broker_snapshot(broker_snapshot), bucket_hints, database_bucket_hints, database_positions)
     orders = _orders_from_broker_snapshot(broker_snapshot)
+    review_correlation_id = correlation_id or str(uuid.uuid4())
     reviewed: List[Dict[str, Any]] = []
     for position in sorted([p for p in rows_by_symbol.values() if _bucket(p) == bucket_name], key=_symbol):
         stop_row = _find_stop_order(_symbol(position), orders)
         request_payload = build_profit_request(bucket_name, position, stop_row)
         request_warnings = list(request_payload.get("warnings") or [])
         if profit_agent_url:
-            plan = call_profit_agent(profit_agent_url, request_payload)
+            plan = call_profit_agent(
+                profit_agent_url,
+                request_payload,
+                profit_api_key,
+                review_correlation_id,
+            )
             source = "profit_agent" if plan.get("status") != "error" else "fallback_after_profit_agent_error"
             if plan.get("status") == "error":
                 plan = fallback_profit_plan(bucket_name, position, stop_row)
@@ -309,7 +343,7 @@ def review_bucket(bucket_name: str, dashboard: Any, broker_snapshot: Any, profit
         plan["warnings"] = plan_warnings
         reviewed.append({"symbol": _symbol(position), "bucket": bucket_name, "bucket_source": position.get("strategy_bucket_source") or "position_data", "quantity": request_payload["position"]["quantity"], "entry_price": request_payload["position"]["entry_price"], "current_price": request_payload["position"]["current_price"], "stop_loss": request_payload["position"].get("stop_loss"), "highest_price_since_entry": request_payload["position"].get("highest_price_since_entry"), "highest_price_since_entry_source": request_payload.get("metadata", {}).get("highest_price_since_entry_source"), "warnings": request_warnings, "has_protective_stop": stop_row is not None, "profit_source": source, "profit_request": request_payload, "profit_plan": plan, "risk_status": "not_submitted", "execution_status": "not_submitted", "safety": "report_only_no_orders_submitted"})
     report_warnings = sorted({warning for row in reviewed for warning in row.get("warnings", []) if warning})
-    return {"generated_at": datetime.now(timezone.utc).isoformat(), "bucket": bucket_name, "config": BUCKET_CONFIG[bucket_name], "mode": "BUCKET_PROFIT_REVIEW_REPORT_ONLY", "bucket_hints": bucket_hints or {}, "database_bucket_hints": database_bucket_hints or {}, "bucket_distribution": _bucket_distribution(rows_by_symbol), "warnings": report_warnings, "reviewed_positions": reviewed, "summary": {"positions_seen": len(rows_by_symbol), "reviewed_positions": len(reviewed), "positions_without_protective_stop": sum(1 for row in reviewed if not row["has_protective_stop"]), "positions_without_stop": sum(1 for row in reviewed if not row["has_protective_stop"]), "position_peak_fallbacks": sum(1 for row in reviewed if row.get("highest_price_since_entry_source") == "current_price_fallback"), "bucket_hints_applied": sum(1 for row in rows_by_symbol.values() if row.get("strategy_bucket_source") == "bucket_hint"), "database_bucket_hints_applied": sum(1 for row in rows_by_symbol.values() if row.get("strategy_bucket_source") == "database_agent"), "profit_agent_used": sum(1 for row in reviewed if row["profit_source"] == "profit_agent"), "risk_submissions": 0, "execution_submissions": 0}, "safety": {"advisory_only": True, "orders_submitted": False, "risk_agent_submitted": False, "execution_agent_submitted": False}}
+    return {"generated_at": datetime.now(timezone.utc).isoformat(), "correlation_id": review_correlation_id, "bucket": bucket_name, "config": BUCKET_CONFIG[bucket_name], "mode": "BUCKET_PROFIT_REVIEW_REPORT_ONLY", "bucket_hints": bucket_hints or {}, "database_bucket_hints": database_bucket_hints or {}, "bucket_distribution": _bucket_distribution(rows_by_symbol), "warnings": report_warnings, "reviewed_positions": reviewed, "summary": {"positions_seen": len(rows_by_symbol), "reviewed_positions": len(reviewed), "positions_without_protective_stop": sum(1 for row in reviewed if not row["has_protective_stop"]), "positions_without_stop": sum(1 for row in reviewed if not row["has_protective_stop"]), "position_peak_fallbacks": sum(1 for row in reviewed if row.get("highest_price_since_entry_source") == "current_price_fallback"), "bucket_hints_applied": sum(1 for row in rows_by_symbol.values() if row.get("strategy_bucket_source") == "bucket_hint"), "database_bucket_hints_applied": sum(1 for row in rows_by_symbol.values() if row.get("strategy_bucket_source") == "database_agent"), "profit_agent_used": sum(1 for row in reviewed if row["profit_source"] == "profit_agent"), "risk_submissions": 0, "execution_submissions": 0}, "safety": {"advisory_only": True, "orders_submitted": False, "risk_agent_submitted": False, "execution_agent_submitted": False}}
 
 
 def render_markdown(report: Dict[str, Any]) -> str:
@@ -343,6 +377,8 @@ def parse_args(argv: List[str]) -> argparse.Namespace:
     parser.add_argument("--dashboard-url", default=os.getenv("MANAGER_DASHBOARD_URL", "http://localhost/dashboard/data?account_id=1"))
     parser.add_argument("--execution-url", default=os.getenv("EXECUTION_AGENT_URL", "http://localhost:8006"))
     parser.add_argument("--profit-url", default=os.getenv("PROFIT_AGENT_URL", ""))
+    parser.add_argument("--profit-api-key", default=os.getenv("PROFIT_AGENT_API_KEY", ""))
+    parser.add_argument("--correlation-id", default=os.getenv("CORRELATION_ID", ""))
     parser.add_argument("--database-url", default=os.getenv("DATABASE_AGENT_URL", ""))
     parser.add_argument("--database-api-key", default=os.getenv("DATABASE_AGENT_API_KEY", ""))
     parser.add_argument("--account-id", default=os.getenv("DEFAULT_ACCOUNT_ID", "1"))
@@ -368,7 +404,7 @@ def main(argv: List[str] | None = None) -> int:
     database_api_key = args.database_api_key.strip() or None
     database_positions = fetch_database_positions(database_url, args.account_id, database_api_key)
     database_hints = fetch_database_bucket_hints(database_url, args.account_id, database_api_key)
-    report = review_bucket(args.bucket, dashboard, broker_snapshot, args.profit_url.strip() or None, bucket_hints=fallback_hints, database_bucket_hints=database_hints, database_positions=database_positions)
+    report = review_bucket(args.bucket, dashboard, broker_snapshot, args.profit_url.strip() or None, bucket_hints=fallback_hints, database_bucket_hints=database_hints, database_positions=database_positions, profit_api_key=args.profit_api_key.strip() or None, correlation_id=args.correlation_id.strip() or None)
     args.output_json.parent.mkdir(parents=True, exist_ok=True)
     args.output_json.write_text(json.dumps(report, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
     args.output_md.write_text(render_markdown(report), encoding="utf-8")

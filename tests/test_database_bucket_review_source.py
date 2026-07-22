@@ -15,7 +15,7 @@ def test_database_bucket_hints_override_fallback(monkeypatch):
 
     monkeypatch.setattr(
         "scripts.bucket_profit_review.call_profit_agent",
-        lambda url, payload: {"symbol": payload["position"]["symbol"], "primary_action": "hold", "actions": []},
+        lambda url, payload, *_args: {"symbol": payload["position"]["symbol"], "primary_action": "hold", "actions": []},
     )
 
     report = review_bucket(

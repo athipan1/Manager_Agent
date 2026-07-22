@@ -1,4 +1,5 @@
 from scripts.hourly_portfolio_cycle import (
+    CycleClients,
     classify_position_action,
     profit_lifecycle_payload,
     protection_gaps,
@@ -8,6 +9,14 @@ from scripts.hourly_portfolio_cycle import (
 import pytest
 
 from app.hourly_paper_runtime import RuntimeSafetyError
+
+
+def test_hourly_profit_client_uses_api_key(monkeypatch):
+    monkeypatch.setenv("PROFIT_AGENT_API_KEY", "hourly-profit-key")
+
+    clients = CycleClients("hourly-correlation-id")
+
+    assert clients.profit.headers == {"X-API-KEY": "hourly-profit-key"}
 
 
 def test_unprotected_position_is_detected_and_replace_is_selected():
