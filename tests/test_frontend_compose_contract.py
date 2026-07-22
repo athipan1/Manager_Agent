@@ -47,5 +47,8 @@ def test_full_system_e2e_starts_manager_health_dependencies():
         "execution-agent": {"condition": "service_healthy"},
         "risk-agent": {"condition": "service_healthy"},
     }
+    assert "repository: athipan1/Trading_Frontend" in workflow
+    assert "ref: main" in workflow
+    assert "agent/production-safe-manager-dashboard" not in workflow
     assert "repository: athipan1/Risk_Agent" in workflow
     assert "database-agent execution-agent risk-agent manager-agent trading-frontend" in workflow

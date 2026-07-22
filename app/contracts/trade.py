@@ -192,10 +192,19 @@ class AccountBalance(BaseModel):
     cash_balance: Decimal
 
 class Position(BaseModel):
+    position_id: Optional[int] = None
+    account_id: Optional[Union[int, str]] = None
     symbol: str
     quantity: int
     average_cost: Decimal
     current_market_price: Optional[Decimal] = None
+    highest_price_since_entry: Optional[Decimal] = None
+    position_version: int = 1
+    first_target_executed: bool = False
+    second_target_executed: bool = False
+    total_exited_quantity: Decimal = Decimal("0")
+    last_profit_decision_id: Optional[str] = None
+    last_profit_decision_status: Optional[str] = None
 
 class Order(BaseModel):
     order_id: Union[int, str]

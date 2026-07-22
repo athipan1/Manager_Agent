@@ -1,5 +1,6 @@
 from scripts.hourly_portfolio_cycle import (
     classify_position_action,
+    profit_lifecycle_payload,
     protection_gaps,
     require_safe_broker_sync,
 )
@@ -68,3 +69,37 @@ def test_verified_database_sync_allows_progress():
         stage="pre-execution",
     )
     assert result["mismatch"]["summary"]["status"] == "synced"
+
+
+def test_hourly_profit_request_uses_database_lifecycle_identity():
+    lifecycle = profit_lifecycle_payload(
+        {
+            "position_id": 42,
+            "position_version": 7,
+            "first_target_executed": True,
+            "second_target_executed": False,
+            "total_exited_quantity": 3,
+        },
+        account_id="1",
+        remaining_quantity=7,
+    )
+
+    assert lifecycle == {
+        "position_id": "account-1:position-42",
+        "position_version": 7,
+        "first_target_executed": True,
+        "second_target_executed": False,
+        "total_exited_quantity": 3,
+        "remaining_quantity": 7,
+    }
+
+
+def test_hourly_profit_request_does_not_invent_missing_lifecycle():
+    assert (
+        profit_lifecycle_payload(
+            {"position_id": 42},
+            account_id="1",
+            remaining_quantity=7,
+        )
+        is None
+    )

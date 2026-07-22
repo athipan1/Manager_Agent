@@ -42,7 +42,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: athipan1/Trading_Frontend
-          ref: ${{ github.event_name == 'pull_request' && 'agent/production-safe-manager-dashboard' || 'main' }}
+          ref: main
           path: Trading_Frontend
 
       - name: Checkout Database_Agent
