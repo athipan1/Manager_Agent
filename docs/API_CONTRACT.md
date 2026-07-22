@@ -99,6 +99,29 @@ Every agent should return this response envelope:
 7. Mock/dev fallback behavior is forbidden in `LIVE` mode.
 8. Backtest and performance gates should validate strategy or policy changes before promotion.
 
+## Profit decision orchestration contract
+
+Manager reads the Database-owned lifecycle, forwards it to Profit_Agent, and
+requires a deterministic advisory `decision_id` before any exit execution.
+Legacy Profit responses without lifecycle identity remain readable during
+migration but are blocked from automatic execution.
+
+Manager reserves the decision through Database_Agent before Risk submission,
+persists `RISK_APPROVED` before execution, and persists `EXECUTION_PENDING`
+before calling Execution_Agent. The same `decision_id` is used as the execution
+`trade_id` and `Idempotency-Key`. A retry first reads both the decision record
+and the Database order record, so an accepted order is not submitted twice.
+
+Only a broker-confirmed filled/executed order advances the decision to
+`EXECUTED` and applies target lifecycle changes. Rejections are terminal;
+timeouts and ambiguous server errors stay `EXECUTION_PENDING` for safe
+reconciliation. Manager carries one correlation ID through Database, Risk, and
+Execution calls.
+
+The PR2 implementation supports whole-share exits in PAPER/SIMULATOR only.
+Fractional quantities and market increments are intentionally deferred to the
+Decimal/tick-size contract. `exit_all` remains blocked by default.
+
 ## Manager_Agent Baseline
 
 `Manager_Agent` now exposes the required operational endpoint set:

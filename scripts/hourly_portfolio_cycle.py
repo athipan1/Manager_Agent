@@ -15,7 +15,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from scripts.hourly_runtime_loader import runtime
+from scripts.hourly_runtime_loader import runtime  # noqa: E402
 
 JsonHttpClient = runtime.JsonHttpClient
 RuntimeSafetyError = runtime.RuntimeSafetyError
@@ -45,6 +45,29 @@ def number(value: Any, default: float = 0.0) -> float:
         return float(value) if value not in (None, "") else default
     except (TypeError, ValueError):
         return default
+
+
+def profit_lifecycle_payload(
+    durable: dict[str, Any],
+    *,
+    account_id: str,
+    remaining_quantity: float,
+) -> dict[str, Any] | None:
+    raw_position_id = durable.get("position_id")
+    version = int(number(durable.get("position_version"), 0))
+    if raw_position_id in (None, "") or version < 1 or remaining_quantity <= 0:
+        return None
+    position_id = str(raw_position_id)
+    if position_id.isdigit():
+        position_id = f"account-{account_id}:position-{position_id}"
+    return {
+        "position_id": position_id,
+        "position_version": version,
+        "first_target_executed": bool(durable.get("first_target_executed", False)),
+        "second_target_executed": bool(durable.get("second_target_executed", False)),
+        "total_exited_quantity": number(durable.get("total_exited_quantity"), 0),
+        "remaining_quantity": remaining_quantity,
+    }
 
 
 def broker_sync_status(value: Any) -> str:
@@ -381,23 +404,31 @@ def review_existing_positions(
             durable.get("highest_price_since_entry"),
             max(entry, current),
         )
+        profit_request = {
+            "position": {
+                "symbol": symbol,
+                "side": "long",
+                "quantity": quantity,
+                "entry_price": entry,
+                "current_price": current,
+                "stop_loss": stop_price or None,
+                "highest_price_since_entry": max(entry, current, highest),
+                "strategy_bucket": durable.get("strategy_bucket") or "unassigned",
+            }
+        }
+        lifecycle = profit_lifecycle_payload(
+            durable,
+            account_id=account_id,
+            remaining_quantity=quantity,
+        )
+        if lifecycle is not None:
+            profit_request["lifecycle"] = lifecycle
         profit_plan = as_dict(
             unwrap(
                 clients.post(
                     clients.profit,
                     "/profit/plan",
-                    {
-                        "position": {
-                            "symbol": symbol,
-                            "side": "long",
-                            "quantity": quantity,
-                            "entry_price": entry,
-                            "current_price": current,
-                            "stop_loss": stop_price or None,
-                            "highest_price_since_entry": max(entry, current, highest),
-                            "strategy_bucket": durable.get("strategy_bucket") or "unassigned",
-                        }
-                    },
+                    profit_request,
                 )
             )
         )

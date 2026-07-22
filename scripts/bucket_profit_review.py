@@ -215,13 +215,39 @@ def _position_prices(position: Dict[str, Any], stop_row: Optional[Dict[str, Any]
     return {"entry_price": entry, "current_price": current, "stop_loss": stop, "highest_price_since_entry": peak, "highest_price_since_entry_source": peak_source, "warnings": warnings, "risk_per_share": (entry - stop) if entry and stop and entry > stop else None}
 
 
+def _profit_lifecycle(position: Dict[str, Any], quantity: int) -> Optional[Dict[str, Any]]:
+    if "database_agent" not in (position.get("sources") or []):
+        return None
+    raw_position_id = position.get("position_id")
+    account_id = position.get("account_id")
+    version = _as_int(position.get("position_version"), 0)
+    if raw_position_id in (None, "") or account_id in (None, "") or version < 1:
+        return None
+    position_id = str(raw_position_id)
+    if position_id.isdigit():
+        position_id = f"account-{account_id}:position-{position_id}"
+    return {
+        "position_id": position_id,
+        "position_version": version,
+        "first_target_executed": bool(position.get("first_target_executed", False)),
+        "second_target_executed": bool(position.get("second_target_executed", False)),
+        "total_exited_quantity": _as_float(position.get("total_exited_quantity"), 0) or 0,
+        "remaining_quantity": quantity,
+    }
+
+
 def build_profit_request(bucket_name: str, position: Dict[str, Any], stop_order: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     prices = _position_prices(position, stop_order)
     entry, current = prices["entry_price"], prices["current_price"]
+    quantity = _as_int(position.get("qty") or position.get("quantity"))
     unrealized_pct = _as_float(position.get("unrealized_plpc") or position.get("unrealized_pl_pct"))
     if unrealized_pct is None and entry and current:
         unrealized_pct = (current - entry) / entry
-    return {"position": {"symbol": _symbol(position), "quantity": _as_int(position.get("qty") or position.get("quantity")), "entry_price": entry or 0, "current_price": current or entry or 0, "stop_loss": prices["stop_loss"], "highest_price_since_entry": prices["highest_price_since_entry"], "risk_per_share": prices["risk_per_share"], "unrealized_pl_pct": unrealized_pct}, **BUCKET_CONFIG[bucket_name]["profit_rules"], "exit_on_stop_breach": True, "warnings": list(prices["warnings"]), "metadata": {"highest_price_since_entry_source": prices["highest_price_since_entry_source"], "cross_repo_fix_part": 2}}
+    payload = {"position": {"symbol": _symbol(position), "quantity": quantity, "entry_price": entry or 0, "current_price": current or entry or 0, "stop_loss": prices["stop_loss"], "highest_price_since_entry": prices["highest_price_since_entry"], "risk_per_share": prices["risk_per_share"], "unrealized_pl_pct": unrealized_pct}, **BUCKET_CONFIG[bucket_name]["profit_rules"], "exit_on_stop_breach": True, "warnings": list(prices["warnings"]), "metadata": {"highest_price_since_entry_source": prices["highest_price_since_entry_source"], "cross_repo_fix_part": 2}}
+    lifecycle = _profit_lifecycle(position, quantity)
+    if lifecycle is not None:
+        payload["lifecycle"] = lifecycle
+    return payload
 
 
 def fallback_profit_plan(bucket_name: str, position: Dict[str, Any], stop_order: Optional[Dict[str, Any]]) -> Dict[str, Any]:

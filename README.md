@@ -49,6 +49,37 @@
 *   รวมผลลัพธ์กลับมาเป็น advisory metadata
 *   ไม่ส่งคำสั่งซื้อขายเอง และไม่ bypass Risk/Execution guardrail
 
+### 5. Idempotent Profit Decision Flow
+
+สำหรับ position ที่มี lifecycle จาก Database Agent, Manager ส่ง
+`position_id`, `position_version` และ target flags ไป Profit Agent แล้วใช้
+`decision_id` แบบ deterministic ตามลำดับต่อไปนี้:
+
+```text
+Database lifecycle -> Profit advisory -> reserve PROPOSED
+-> Risk gate -> RISK_APPROVED -> EXECUTION_PENDING
+-> Execution (Idempotency-Key = decision_id) -> broker-confirmed EXECUTED
+```
+
+Manager จะไม่ mark target ว่า executed ก่อนมี fill ยืนยัน และ retry จะอ่าน
+decision/order เดิมก่อนส่งซ้ำ ใช้คำสั่ง orchestration แบบ explicit ได้ด้วย:
+
+```bash
+python scripts/profit_decision_orchestrator.py \
+  --input-json reports/bucket-profit-review-value_rebound.json \
+  --output-json reports/bucket-profit-orchestration-value_rebound.json \
+  --trading-mode SIMULATOR
+```
+
+ตัว orchestration นี้ปฏิเสธ `LIVE`; ค่า rollout เริ่มต้นยังปิด execution:
+
+```env
+PROFIT_DECISION_EXECUTION_ENABLED=false
+PROFIT_AUTO_EXIT_ALL_ENABLED=false
+```
+
+`exit_all` ยังต้อง manual approval จนกว่าจะเปิด flag เฉพาะใน PAPER/SIMULATOR.
+
 ---
 
 ## 📡 รายการ Endpoints

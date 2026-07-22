@@ -8,7 +8,6 @@ from pydantic import BaseModel
 from .contracts import (
     AccountBalance,
     Position,
-    Order,
     CreateOrderRequest,
     CreateOrderResponse,
     Trade,
@@ -163,6 +162,68 @@ class DatabaseAgentClient(ResilientAgentClient):
             report_logger.warning(f"Database positions look stale for account {account_id}; using broker positions for trade context. broker_positions={len(broker_positions)}, correlation_id={correlation_id}")
             return [_broker_position_to_position(position) for position in broker_positions]
         return db_positions
+
+    async def get_profit_lifecycles(
+        self,
+        account_id: Union[int, str],
+        correlation_id: str,
+    ) -> List[Dict[str, Any]]:
+        response_data = await self._get(
+            f"/accounts/{account_id}/profit-lifecycles",
+            correlation_id,
+        )
+        standard_resp = self.validate_standard_response(response_data)
+        return [_coerce_dict(row) for row in (standard_resp.data or [])]
+
+    async def reserve_profit_decision(
+        self,
+        account_id: Union[int, str],
+        payload: Dict[str, Any],
+        correlation_id: str,
+    ) -> Dict[str, Any]:
+        response_data = await self._post(
+            f"/accounts/{account_id}/profit-decisions/reserve",
+            correlation_id,
+            json_data=payload,
+        )
+        standard_resp = self.validate_standard_response(response_data)
+        return _coerce_dict(standard_resp.data)
+
+    async def get_profit_decision(
+        self,
+        account_id: Union[int, str],
+        decision_id: str,
+        correlation_id: str,
+    ) -> Optional[Dict[str, Any]]:
+        encoded_decision_id = quote(str(decision_id), safe="")
+        try:
+            response_data = await self._get(
+                f"/accounts/{account_id}/profit-decisions/{encoded_decision_id}",
+                correlation_id,
+            )
+        except httpx.HTTPStatusError as exc:
+            if exc.response.status_code == 404:
+                return None
+            raise
+        standard_resp = self.validate_standard_response(response_data)
+        return _coerce_dict(standard_resp.data)
+
+    async def transition_profit_decision(
+        self,
+        account_id: Union[int, str],
+        decision_id: str,
+        payload: Dict[str, Any],
+        correlation_id: str,
+    ) -> Dict[str, Any]:
+        encoded_decision_id = quote(str(decision_id), safe="")
+        response_data = await self._post(
+            f"/accounts/{account_id}/profit-decisions/"
+            f"{encoded_decision_id}/transition",
+            correlation_id,
+            json_data=payload,
+        )
+        standard_resp = self.validate_standard_response(response_data)
+        return _coerce_dict(standard_resp.data)
 
     async def get_orders(self, account_id: Union[int, str], correlation_id: str) -> List[Dict[str, Any]]:
         await self._reconcile_broker_before_context(account_id, correlation_id)
