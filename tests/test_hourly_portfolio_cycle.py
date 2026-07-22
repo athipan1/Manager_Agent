@@ -64,6 +64,15 @@ def test_automatic_exit_actions_remain_recommendations(profit_action, expected):
     ) == expected
 
 
+def test_blocked_profit_quality_cannot_be_classified_as_hold():
+    assert classify_position_action(
+        position={"symbol": "AAPL"},
+        protection={"protection_status": "tp_sl_protected"},
+        portfolio_position={"action": "hold"},
+        profit_plan={"primary_action": "review", "decision_status": "blocked"},
+    ) == "BLOCKED_PROFIT_DATA_QUALITY"
+
+
 def test_database_mismatch_blocks_execution():
     with pytest.raises(RuntimeSafetyError):
         require_safe_broker_sync(

@@ -135,6 +135,14 @@ legacy Profit response without `profit-decision.v2` is allowed only for the
 temporary advisory migration path and emits a deprecation warning. It remains
 ineligible for automatic execution without deterministic lifecycle identity.
 
+For adaptive profit review, Manager consumes only
+`profit-market-context.v1` and `profit-technical-context.v1` projections. It
+forwards available evidence without inventing missing ATR, trend, volume, or
+event fields and attaches Database-owned peak/version quality. Evidence older
+than `PROFIT_MARKET_DATA_MAX_AGE_SECONDS` is marked stale; Profit then returns a
+blocked review rather than an execution recommendation. Hard stop and base
+trailing breaches retain priority inside Profit_Agent.
+
 Compatibility timeline:
 
 - `profit-decision.v2` is current from 2026-07-22.
