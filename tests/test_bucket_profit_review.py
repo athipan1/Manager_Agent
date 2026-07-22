@@ -107,6 +107,53 @@ def test_build_profit_request_uses_bucket_specific_rules():
     assert payload["trailing_stop_pct"] == 0.035
 
 
+def test_build_profit_request_forwards_adaptive_context_without_inference():
+    observed_at = "2026-07-22T12:00:00Z"
+    position = {
+        "symbol": "ACGL",
+        "strategy_bucket": "value_rebound",
+        "quantity": 10,
+        "average_cost": 100,
+        "current_market_price": 108,
+        "highest_price_since_entry": 120,
+        "highest_price_since_entry_source": "database_agent",
+        "account_id": 1,
+        "position_id": 42,
+        "position_version": 7,
+        "sources": ["database_agent"],
+    }
+
+    payload = build_profit_request(
+        "value_rebound",
+        position,
+        None,
+        market_regime={
+            "profit_policy_context": {
+                "context_version": "profit-market-context.v1",
+                "regime": "bear",
+                "risk_level": "high",
+                "observed_at": observed_at,
+            }
+        },
+        technical_analysis={
+            "profit_policy_context": {
+                "context_version": "profit-technical-context.v1",
+                "trend_strength": 0.2,
+                "observed_at": observed_at,
+                "evidence_status": "complete",
+            }
+        },
+        max_age_seconds=10**9,
+    )
+
+    assert payload["market_context"]["regime"] == "BEAR"
+    assert payload["market_context"]["risk_level"] == "HIGH"
+    assert payload["market_context"]["trend_strength"] == 0.2
+    assert "volume_strength" not in payload["market_context"]
+    assert payload["data_quality"]["peak_history_complete"] is True
+    assert payload["data_quality"]["position_version_current"] is True
+
+
 def test_review_bucket_falls_back_without_profit_agent():
     dashboard = {
         "data": {

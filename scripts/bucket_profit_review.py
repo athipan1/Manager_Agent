@@ -11,6 +11,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional
 
+from app.profit_market_context import compose_profit_market_context
+
 BUCKET_CONFIG: Dict[str, Dict[str, Any]] = {
     "core_dividend": {
         "frequency": "quarterly",
@@ -239,7 +241,15 @@ def _profit_lifecycle(position: Dict[str, Any], quantity: int) -> Optional[Dict[
     }
 
 
-def build_profit_request(bucket_name: str, position: Dict[str, Any], stop_order: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+def build_profit_request(
+    bucket_name: str,
+    position: Dict[str, Any],
+    stop_order: Optional[Dict[str, Any]],
+    *,
+    market_regime: Any = None,
+    technical_analysis: Any = None,
+    max_age_seconds: int = 120,
+) -> Dict[str, Any]:
     prices = _position_prices(position, stop_order)
     entry, current = prices["entry_price"], prices["current_price"]
     quantity = _as_int(position.get("qty") or position.get("quantity"))
@@ -250,6 +260,15 @@ def build_profit_request(bucket_name: str, position: Dict[str, Any], stop_order:
     lifecycle = _profit_lifecycle(position, quantity)
     if lifecycle is not None:
         payload["lifecycle"] = lifecycle
+    if market_regime is not None or technical_analysis is not None:
+        adaptive_context = compose_profit_market_context(
+            market_regime=market_regime,
+            technical_analysis=technical_analysis,
+            position=position,
+            lifecycle_available=lifecycle is not None,
+            max_age_seconds=max_age_seconds,
+        )
+        payload.update(adaptive_context)
     return payload
 
 

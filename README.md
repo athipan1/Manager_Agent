@@ -87,6 +87,7 @@ Manager sends the shared service secret and one correlation ID on every call:
 PROFIT_AGENT_ENABLED=true
 PROFIT_AGENT_URL=http://profit-agent:8011
 PROFIT_AGENT_API_KEY=
+PROFIT_MARKET_DATA_MAX_AGE_SECONDS=120
 ```
 
 Do not commit the key or place it in request/report data. Production Manager

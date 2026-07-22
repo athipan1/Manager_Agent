@@ -16,6 +16,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from scripts.hourly_runtime_loader import runtime  # noqa: E402
+from app.profit_market_context import compose_profit_market_context  # noqa: E402
 
 JsonHttpClient = runtime.JsonHttpClient
 RuntimeSafetyError = runtime.RuntimeSafetyError
@@ -118,6 +119,11 @@ def classify_position_action(
         return "REPLACE_PROTECTION"
     portfolio_action = str(portfolio_position.get("action") or "").lower()
     primary = str(profit_plan.get("primary_action") or "hold").lower()
+    if (
+        primary == "review"
+        or str(profit_plan.get("decision_status") or "").lower() == "blocked"
+    ):
+        return "BLOCKED_PROFIT_DATA_QUALITY"
     if primary == "exit_all":
         return "EXIT_ALL_RECOMMENDATION"
     if primary == "partial_exit" or portfolio_action == "reduce":
@@ -429,6 +435,24 @@ def review_existing_positions(
         )
         if lifecycle is not None:
             profit_request["lifecycle"] = lifecycle
+        adaptive_context = compose_profit_market_context(
+            market_regime=regime,
+            technical_analysis=technical,
+            position={
+                **durable,
+                "highest_price_since_entry_source": (
+                    "database_agent"
+                    if durable.get("highest_price_since_entry") not in (None, "")
+                    else "current_price_fallback"
+                ),
+            },
+            lifecycle_available=lifecycle is not None,
+            max_age_seconds=int(
+                os.getenv("PROFIT_MARKET_DATA_MAX_AGE_SECONDS", "120")
+            ),
+            emergency_halt_active=bool(session_risk.get("emergency_halt")),
+        )
+        profit_request.update(adaptive_context)
         profit_plan = as_dict(
             unwrap(
                 clients.post(
@@ -457,6 +481,7 @@ def review_existing_positions(
                 "technical": technical,
                 "fundamental": fundamental,
                 "highest_price_since_entry": max(entry, current, highest),
+                "profit_market_context": adaptive_context,
             }
         )
 
