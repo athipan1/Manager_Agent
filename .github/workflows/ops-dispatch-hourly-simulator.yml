@@ -16,7 +16,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - name: Print failed target logs
+      - name: Print concise failed target logs
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
@@ -24,5 +24,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          echo "Target: https://github.com/$REPO/actions/runs/$TARGET_RUN_ID"
-          gh run view "$TARGET_RUN_ID" --repo "$REPO" --log-failed
+          gh run view "$TARGET_RUN_ID" --repo "$REPO" --log-failed > failed.log
+          echo "=== ERROR MATCHES ==="
+          grep -Ei "RuntimeSafetyError|not ready|connection|refused|unauthorized|forbidden|error|failed" failed.log | tail -n 30 || true
+          echo "=== FINAL 35 LINES ==="
+          tail -n 35 failed.log
