@@ -30,7 +30,7 @@ def parse_github_env(path: Path) -> dict[str, str]:
 
 def test_simulator_runtime_creates_unique_job_scoped_internal_keys(tmp_path):
     github_env = tmp_path / "github-env"
-    counter = iter(("exec", "database", "portfolio", "risk"))
+    counter = iter(("exec", "database", "portfolio", "risk", "profit"))
 
     names = configure_simulator_runtime(
         github_env,
@@ -44,14 +44,18 @@ def test_simulator_runtime_creates_unique_job_scoped_internal_keys(tmp_path):
         "DATABASE_AGENT_API_KEY",
         "PORTFOLIO_AGENT_API_KEY",
         "RISK_ADMIN_TOKEN",
+        "PROFIT_AGENT_API_KEY",
         "SIMULATOR_RUNTIME_KEYS_EPHEMERAL",
     }
     assert values["EXECUTION_API_KEY"] == "sim-execution-exec"
     assert values["DATABASE_AGENT_API_KEY"] == "sim-database-database"
     assert values["PORTFOLIO_AGENT_API_KEY"] == "sim-portfolio-portfolio"
     assert values["RISK_ADMIN_TOKEN"] == "sim-risk-risk"
+    assert values["PROFIT_AGENT_API_KEY"] == "sim-profit-profit"
     assert values["SIMULATOR_RUNTIME_KEYS_EPHEMERAL"] == "true"
-    assert len(set(values[name] for name in names if name.endswith(("KEY", "TOKEN")))) == 4
+    assert len(
+        set(values[name] for name in names if name.endswith(("KEY", "TOKEN")))
+    ) == 5
     assert "DATABASE_AGENT_URL" not in values
 
 
