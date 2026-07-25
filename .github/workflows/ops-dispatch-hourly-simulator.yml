@@ -1,4 +1,4 @@
-name: Ops Diagnose Manager Trace
+name: Ops Diagnose Manager Runtime
 
 on:
   pull_request:
@@ -16,7 +16,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - name: Print exact Manager trace
+      - name: Print Manager runtime traceback only
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
@@ -26,5 +26,7 @@ jobs:
         run: |
           set -euo pipefail
           gh run view "$TARGET_RUN_ID" --repo "$REPO" --job "$TARGET_JOB_ID" --log > job.log
-          echo "=== MANAGER CONTAINER LINES ==="
-          grep -Ei "manager-agent|discover-analyze-trade|Traceback|Exception|ValidationError|KeyError|TypeError|HTTP/1.1 500" job.log | tail -n 260 || true
+          echo "=== MANAGER RUNTIME CONTAINER ==="
+          grep -E "manager-agent-1|manager_agent-manager-agent-1" job.log | tail -n 100 || true
+          echo "=== FAILURE TIME WINDOW ==="
+          grep -E "08:39:|08:40:" job.log | grep -Ei "manager|traceback|exception|error|500|discover|failed" | tail -n 100 || true
