@@ -1,4 +1,4 @@
-name: Ops Diagnose Candidate Cycle
+name: Ops Diagnose Manager Container
 
 on:
   pull_request:
@@ -16,7 +16,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - name: Print concise candidate-cycle diagnostics
+      - name: Print Manager container diagnostics
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
@@ -24,8 +24,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          gh run view "$TARGET_RUN_ID" --repo "$REPO" --log-failed > failed.log
-          echo "=== ERROR MATCHES ==="
-          grep -Ei "RuntimeSafetyError|not ready|connection|refused|unauthorized|forbidden|traceback|HTTP [45][0-9][0-9]|error|failed" failed.log | tail -n 50 || true
-          echo "=== FINAL 60 LINES ==="
-          tail -n 60 failed.log
+          gh run view "$TARGET_RUN_ID" --repo "$REPO" --log > full.log
+          echo "=== MANAGER ERROR MATCHES ==="
+          grep -Ei "discover-analyze-trade|manager-agent.*(error|exception|traceback|500|failed)|Traceback|ValidationError|KeyError|TypeError|RuntimeError" full.log | tail -n 120 || true
+          echo "=== FAILURE DIAGNOSTICS TAIL ==="
+          awk '/Show fail-closed diagnostics/{show=1} show{print}' full.log | tail -n 180 || true
