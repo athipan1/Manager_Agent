@@ -263,6 +263,10 @@ jobs:
       - name: Run Scanner preselection after portfolio review
         id: scanner_preselection
         working-directory: Manager_Agent
+        env:
+          MAX_UNIVERSE: ${{ env.HOURLY_MAX_UNIVERSE }}
+          TOP_N: ${{ env.HOURLY_TOP_N }}
+          MIN_FINAL_SCORE: ${{ env.HOURLY_MIN_FINAL_SCORE }}
         run: |
           python scripts/run_scanner_preselection.py \
             --output reports/hourly-pre-backtest-discovery.json \
@@ -281,7 +285,42 @@ jobs:
           python ../Backtest_Agent/scripts/run_hourly_backtest.py > reports/hourly-backtest-console.json
           python scripts/verify_backtest_publish.py reports/hourly-backtest-result.json
 
+      - name: Record safe no-candidate cycle
+        if: steps.scanner_preselection.outputs.backtest_symbols == ''
+        working-directory: Manager_Agent
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          preflight = json.loads(Path("reports/hourly-preflight.json").read_text(encoding="utf-8"))
+          payload = {
+              "execute_requested": False,
+              "market_mode": preflight.get("market_mode"),
+              "reason": "no_preselected_backtest_symbols",
+              "manager_response": {
+                  "status": "success",
+                  "data": {
+                      "execution": {
+                          "status": "not_attempted",
+                          "reason": "no_preselected_backtest_symbols",
+                      },
+                      "portfolio_summary": {
+                          "approved_positions": 0,
+                          "execution_status": "not_attempted",
+                      },
+                  },
+              },
+          }
+          Path("reports/hourly-manager-cycle.json").write_text(
+              json.dumps(payload, ensure_ascii=False, indent=2),
+              encoding="utf-8",
+          )
+          print("No preselected symbols passed the safety gates; recorded a successful no-op cycle.")
+          PY
+
       - name: Run Manager candidate, Risk and guarded Execution cycle
+        if: steps.scanner_preselection.outputs.backtest_symbols != ''
         working-directory: Manager_Agent
         env:
           MANAGER_AGENT_URL: http://localhost:8000
@@ -341,8 +380,13 @@ jobs:
         if: failure()
         working-directory: Manager_Agent
         run: |
-          docker compose ps || true
-          docker compose logs --tail=180 manager-agent execution-agent risk-agent portfolio-agent profit-agent performance-agent market-regime-agent || true
+          if [ "${{ steps.preflight.outputs.paper_automation }}" = "true" ]; then
+            COMPOSE_ARGS=(-f docker-compose.yml -f docker-compose.risk.yml -f docker-compose.alpha.yml -f docker-compose.hourly-paper.yml)
+          else
+            COMPOSE_ARGS=(-f docker-compose.yml -f docker-compose.risk.yml -f docker-compose.alpha.yml -f docker-compose.hourly-simulator.yml)
+          fi
+          docker compose "${COMPOSE_ARGS[@]}" ps || true
+          docker compose "${COMPOSE_ARGS[@]}" logs --tail=180 manager-agent execution-agent risk-agent portfolio-agent profit-agent performance-agent market-regime-agent || true
 
       - name: Stop stack
         if: always()
