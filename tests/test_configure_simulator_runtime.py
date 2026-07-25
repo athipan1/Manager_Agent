@@ -30,7 +30,7 @@ def parse_github_env(path: Path) -> dict[str, str]:
 
 def test_simulator_runtime_creates_unique_job_scoped_internal_keys(tmp_path):
     github_env = tmp_path / "github-env"
-    counter = iter(("exec", "database", "portfolio", "risk", "profit"))
+    counter = iter(("exec", "database", "portfolio", "profit", "risk"))
 
     names = configure_simulator_runtime(
         github_env,
