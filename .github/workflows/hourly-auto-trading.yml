@@ -207,6 +207,10 @@ jobs:
           path: Learning_Agent
           fetch-depth: 1
 
+      - name: Install Manager host-script dependencies
+        working-directory: Manager_Agent
+        run: python -m pip install --disable-pip-version-check -r requirements.prod.base.txt
+
       - name: Validate compose model before startup
         working-directory: Manager_Agent
         run: docker compose --profile backtest config --quiet
@@ -259,6 +263,10 @@ jobs:
       - name: Run Scanner preselection after portfolio review
         id: scanner_preselection
         working-directory: Manager_Agent
+        env:
+          MAX_UNIVERSE: ${{ env.HOURLY_MAX_UNIVERSE }}
+          TOP_N: ${{ env.HOURLY_TOP_N }}
+          MIN_FINAL_SCORE: ${{ env.HOURLY_MIN_FINAL_SCORE }}
         run: |
           python scripts/run_scanner_preselection.py \
             --output reports/hourly-pre-backtest-discovery.json \
@@ -277,7 +285,13 @@ jobs:
           python ../Backtest_Agent/scripts/run_hourly_backtest.py > reports/hourly-backtest-console.json
           python scripts/verify_backtest_publish.py reports/hourly-backtest-result.json
 
+      - name: Record safe no-candidate cycle
+        if: steps.scanner_preselection.outputs.backtest_symbols == ''
+        working-directory: Manager_Agent
+        run: python scripts/record_no_candidate_cycle.py
+
       - name: Run Manager candidate, Risk and guarded Execution cycle
+        if: steps.scanner_preselection.outputs.backtest_symbols != ''
         working-directory: Manager_Agent
         env:
           MANAGER_AGENT_URL: http://localhost:8000
@@ -337,8 +351,13 @@ jobs:
         if: failure()
         working-directory: Manager_Agent
         run: |
-          docker compose ps || true
-          docker compose logs --tail=180 manager-agent execution-agent risk-agent portfolio-agent profit-agent performance-agent market-regime-agent || true
+          if [ "${{ steps.preflight.outputs.paper_automation }}" = "true" ]; then
+            COMPOSE_ARGS=(-f docker-compose.yml -f docker-compose.risk.yml -f docker-compose.alpha.yml -f docker-compose.hourly-paper.yml)
+          else
+            COMPOSE_ARGS=(-f docker-compose.yml -f docker-compose.risk.yml -f docker-compose.alpha.yml -f docker-compose.hourly-simulator.yml)
+          fi
+          docker compose "${COMPOSE_ARGS[@]}" ps || true
+          docker compose "${COMPOSE_ARGS[@]}" logs --tail=180 manager-agent execution-agent risk-agent portfolio-agent profit-agent performance-agent market-regime-agent || true
 
       - name: Stop stack
         if: always()

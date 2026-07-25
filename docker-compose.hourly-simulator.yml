@@ -10,6 +10,7 @@ services:
       DATABASE_AGENT_API_KEY: ${DATABASE_AGENT_API_KEY:?DATABASE_AGENT_API_KEY is required}
       EXECUTION_API_KEY: ${EXECUTION_API_KEY:?EXECUTION_API_KEY is required}
       PORTFOLIO_AGENT_API_KEY: ${PORTFOLIO_AGENT_API_KEY:?PORTFOLIO_AGENT_API_KEY is required}
+      PROFIT_AGENT_API_KEY: ${PROFIT_AGENT_API_KEY:?PROFIT_AGENT_API_KEY is required}
 
   database-agent:
     environment:
@@ -32,3 +33,12 @@ services:
   portfolio-agent:
     environment:
       PORTFOLIO_AGENT_API_KEY: ${PORTFOLIO_AGENT_API_KEY:?PORTFOLIO_AGENT_API_KEY is required}
+
+  profit-agent:
+    environment:
+      PROFIT_AGENT_API_KEY: ${PROFIT_AGENT_API_KEY:?PROFIT_AGENT_API_KEY is required}
+
+  performance-agent:
+    environment:
+      PERFORMANCE_AGENT_AUTH_ENABLED: "false"
+      PERFORMANCE_AGENT_DATABASE_REQUIRED: "false"

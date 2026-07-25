@@ -67,6 +67,7 @@ def test_workflow_uses_secrets_without_placeholder_fallbacks():
         "DATABASE_AGENT_API_KEY",
         "RISK_ADMIN_TOKEN",
         "PORTFOLIO_AGENT_API_KEY",
+        "PROFIT_AGENT_API_KEY",
     ):
         assert f"{name}: ${{{{ secrets.{name} }}}}" in workflow
     assert "secrets.ALPACA_API_URL ||" not in workflow
@@ -114,6 +115,7 @@ def test_large_runtime_logic_is_not_embedded_in_yaml():
     assert "python scripts/hourly_paper_preflight.py" in workflow
     assert "python scripts/configure_simulator_runtime.py" in workflow
     assert "python scripts/hourly_portfolio_cycle.py prepare" in workflow
+    assert "python scripts/record_no_candidate_cycle.py" in workflow
     assert "python scripts/hourly_portfolio_cycle.py trade" in workflow
     assert "python scripts/hourly_portfolio_cycle.py finalize" in workflow
     assert "python - <<'PY'" not in workflow
