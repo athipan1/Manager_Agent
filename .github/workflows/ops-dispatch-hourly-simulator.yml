@@ -1,4 +1,4 @@
-name: Finalize Hourly Simulator Fix
+name: Diagnose Finalizer Push
 
 on:
   pull_request:
@@ -7,119 +7,19 @@ on:
       - .github/workflows/ops-dispatch-hourly-simulator.yml
 
 permissions:
-  contents: write
+  actions: read
+  contents: read
 
 jobs:
-  finalize:
-    if: github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.user.login == 'athipan1'
+  diagnose:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
     steps:
-      - name: Checkout PR branch
-        uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.pull_request.head.ref }}
-          fetch-depth: 0
-
-      - name: Apply production cleanup
-        shell: bash
+      - name: Print failed commit step
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
-          python - <<'PY'
-          from pathlib import Path
-
-          workflow_path = Path('.github/workflows/hourly-auto-trading.yml')
-          workflow = workflow_path.read_text(encoding='utf-8')
-          start = workflow.index('      - name: Record safe no-candidate cycle\n')
-          end = workflow.index('      - name: Run Manager candidate, Risk and guarded Execution cycle\n', start)
-          replacement = '''      - name: Record safe no-candidate cycle
-                  if: steps.scanner_preselection.outputs.backtest_symbols == ''
-                  working-directory: Manager_Agent
-                  run: python scripts/record_no_candidate_cycle.py
-
-          '''
-          workflow_path.write_text(workflow[:start] + replacement + workflow[end:], encoding='utf-8')
-
-          helper = '''#!/usr/bin/env python3
-          """Record a successful no-op hourly cycle when Scanner selects no symbols."""
-
-          from __future__ import annotations
-
-          import json
-          from pathlib import Path
-
-
-          def build_no_candidate_report(preflight: dict) -> dict:
-              return {
-                  "execute_requested": False,
-                  "market_mode": preflight.get("market_mode"),
-                  "reason": "no_preselected_backtest_symbols",
-                  "manager_response": {
-                      "status": "success",
-                      "data": {
-                          "execution": {
-                              "status": "not_attempted",
-                              "reason": "no_preselected_backtest_symbols",
-                          },
-                          "portfolio_summary": {
-                              "approved_positions": 0,
-                              "execution_status": "not_attempted",
-                          },
-                      },
-                  },
-              }
-
-
-          def main() -> int:
-              preflight_path = Path("reports/hourly-preflight.json")
-              output_path = Path("reports/hourly-manager-cycle.json")
-              preflight = json.loads(preflight_path.read_text(encoding="utf-8"))
-              if preflight.get("status") != "ready" or not preflight.get("portfolio_cycle_id"):
-                  raise ValueError("Hourly preflight must be ready before recording a no-candidate cycle")
-              output_path.parent.mkdir(parents=True, exist_ok=True)
-              output_path.write_text(
-                  json.dumps(build_no_candidate_report(preflight), ensure_ascii=False, indent=2),
-                  encoding="utf-8",
-              )
-              print("No preselected symbols passed the safety gates; recorded a successful no-op cycle.")
-              return 0
-
-
-          if __name__ == "__main__":
-              raise SystemExit(main())
-          '''
-          Path('scripts/record_no_candidate_cycle.py').write_text(
-              '\n'.join(line[10:] if line.startswith('          ') else line for line in helper.splitlines()) + '\n',
-              encoding='utf-8',
-          )
-
-          test_path = Path('tests/test_configure_simulator_runtime.py')
-          tests = test_path.read_text(encoding='utf-8')
-          tests = tests.replace(
-              'counter = iter(("exec", "database", "portfolio", "risk"))',
-              'counter = iter(("exec", "database", "portfolio", "risk", "profit"))',
-          )
-          tests = tests.replace(
-              '        "RISK_ADMIN_TOKEN",\n        "SIMULATOR_RUNTIME_KEYS_EPHEMERAL",',
-              '        "RISK_ADMIN_TOKEN",\n        "PROFIT_AGENT_API_KEY",\n        "SIMULATOR_RUNTIME_KEYS_EPHEMERAL",',
-          )
-          tests = tests.replace(
-              '    assert values["RISK_ADMIN_TOKEN"] == "sim-risk-risk"\n',
-              '    assert values["RISK_ADMIN_TOKEN"] == "sim-risk-risk"\n    assert values["PROFIT_AGENT_API_KEY"] == "sim-profit-profit"\n',
-          )
-          tests = tests.replace(' == 4\n', ' == 5\n')
-          test_path.write_text(tests, encoding='utf-8')
-          PY
-
-          rm .github/workflows/ops-dispatch-hourly-simulator.yml
-          python -m py_compile scripts/record_no_candidate_cycle.py scripts/configure_simulator_runtime.py
-
-      - name: Commit finalized fix
-        shell: bash
-        run: |
-          set -euo pipefail
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add -A
-          git commit -m "fix: finalize hourly simulator safety flow"
-          git push origin HEAD:${{ github.event.pull_request.head.ref }}
+          gh run view 30157463829 --repo "$REPO" --log-failed > failed.log
+          grep -Ei "remote:|error:|fatal:|denied|refusing|workflow|permission|protected|push" failed.log | tail -n 80 || true
+          tail -n 80 failed.log
