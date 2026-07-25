@@ -1,0 +1,74 @@
+name: Ops Dispatch Hourly Simulator
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - .github/workflows/ops-dispatch-hourly-simulator.yml
+
+permissions:
+  actions: write
+  contents: read
+
+jobs:
+  dispatch:
+    if: github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.user.login == 'athipan1'
+    runs-on: ubuntu-latest
+    timeout-minutes: 65
+    steps:
+      - name: Dispatch exact Simulator smoke on main
+        id: dispatch
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          started_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+
+          gh workflow run hourly-auto-trading.yml \
+            --repo "$REPO" \
+            --ref main \
+            -f dry_run=true \
+            -f broker_mode=SIMULATOR \
+            -f max_universe=50 \
+            -f top_n=3 \
+            -f min_final_score=0.55
+
+          run_id=""
+          for _ in $(seq 1 60); do
+            run_id="$(gh run list \
+              --repo "$REPO" \
+              --workflow hourly-auto-trading.yml \
+              --event workflow_dispatch \
+              --branch main \
+              --limit 20 \
+              --json databaseId,createdAt \
+              --jq ".[] | select(.createdAt >= \"${started_at}\") | .databaseId" \
+              | head -n1)"
+            if [ -n "$run_id" ]; then
+              break
+            fi
+            sleep 5
+          done
+
+          if [ -z "$run_id" ]; then
+            echo "Dispatched workflow but could not resolve the target run id." >&2
+            exit 1
+          fi
+
+          echo "run_id=$run_id" >> "$GITHUB_OUTPUT"
+          echo "Target run: https://github.com/$REPO/actions/runs/$run_id" >> "$GITHUB_STEP_SUMMARY"
+          gh run watch "$run_id" --repo "$REPO" --exit-status --interval 10
+
+      - name: Record exact test inputs
+        if: always()
+        run: |
+          {
+            echo "### Hourly Simulator dispatch"
+            echo "- dry_run: true"
+            echo "- broker_mode: SIMULATOR"
+            echo "- max_universe: 50"
+            echo "- top_n: 3"
+            echo "- target_run_id: ${{ steps.dispatch.outputs.run_id }}"
+          } >> "$GITHUB_STEP_SUMMARY"
