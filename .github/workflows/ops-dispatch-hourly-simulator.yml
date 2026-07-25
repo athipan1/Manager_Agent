@@ -99,14 +99,14 @@ jobs:
           test_path.write_text(tests, encoding='utf-8')
           PY
 
-          mkdir -p finalized/.github/workflows finalized/scripts finalized/tests
-          cp .github/workflows/hourly-auto-trading.yml finalized/.github/workflows/
+          mkdir -p finalized/scripts finalized/tests
+          cp .github/workflows/hourly-auto-trading.yml finalized/hourly-auto-trading.yml
           cp scripts/record_no_candidate_cycle.py finalized/scripts/
           cp tests/test_configure_simulator_runtime.py finalized/tests/
 
       - name: Upload finalized files
         uses: actions/upload-artifact@v4
         with:
-          name: finalized-hourly-simulator-fix
+          name: finalized-hourly-simulator-fix-v2
           path: finalized/
           retention-days: 1
