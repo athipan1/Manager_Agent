@@ -288,36 +288,7 @@ jobs:
       - name: Record safe no-candidate cycle
         if: steps.scanner_preselection.outputs.backtest_symbols == ''
         working-directory: Manager_Agent
-        run: |
-          python - <<'PY'
-          import json
-          from pathlib import Path
-
-          preflight = json.loads(Path("reports/hourly-preflight.json").read_text(encoding="utf-8"))
-          payload = {
-              "execute_requested": False,
-              "market_mode": preflight.get("market_mode"),
-              "reason": "no_preselected_backtest_symbols",
-              "manager_response": {
-                  "status": "success",
-                  "data": {
-                      "execution": {
-                          "status": "not_attempted",
-                          "reason": "no_preselected_backtest_symbols",
-                      },
-                      "portfolio_summary": {
-                          "approved_positions": 0,
-                          "execution_status": "not_attempted",
-                      },
-                  },
-              },
-          }
-          Path("reports/hourly-manager-cycle.json").write_text(
-              json.dumps(payload, ensure_ascii=False, indent=2),
-              encoding="utf-8",
-          )
-          print("No preselected symbols passed the safety gates; recorded a successful no-op cycle.")
-          PY
+        run: python scripts/record_no_candidate_cycle.py
 
       - name: Run Manager candidate, Risk and guarded Execution cycle
         if: steps.scanner_preselection.outputs.backtest_symbols != ''
