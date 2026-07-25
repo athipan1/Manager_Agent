@@ -6,18 +6,20 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+NO_CANDIDATE_REASON = "no_preselected_backtest_symbols"
+
 
 def build_no_candidate_report(preflight: dict) -> dict:
     return {
         "execute_requested": False,
         "market_mode": preflight.get("market_mode"),
-        "reason": "no_preselected_backtest_symbols",
+        "reason": NO_CANDIDATE_REASON,
         "manager_response": {
             "status": "success",
             "data": {
                 "execution": {
                     "status": "not_attempted",
-                    "reason": "no_preselected_backtest_symbols",
+                    "reason": NO_CANDIDATE_REASON,
                 },
                 "portfolio_summary": {
                     "approved_positions": 0,
