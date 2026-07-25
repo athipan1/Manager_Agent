@@ -207,6 +207,10 @@ jobs:
           path: Learning_Agent
           fetch-depth: 1
 
+      - name: Install Manager host-script dependencies
+        working-directory: Manager_Agent
+        run: python -m pip install --disable-pip-version-check -r requirements.prod.base.txt
+
       - name: Validate compose model before startup
         working-directory: Manager_Agent
         run: docker compose --profile backtest config --quiet
