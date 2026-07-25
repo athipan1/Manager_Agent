@@ -52,6 +52,7 @@ def _runtime_values(token_factory: Callable[[int], str]) -> dict[str, str]:
         "EXECUTION_API_KEY": f"sim-execution-{token_factory(48)}",
         "DATABASE_AGENT_API_KEY": f"sim-database-{token_factory(48)}",
         "PORTFOLIO_AGENT_API_KEY": f"sim-portfolio-{token_factory(48)}",
+        "PROFIT_AGENT_API_KEY": f"sim-profit-{token_factory(48)}",
         "RISK_ADMIN_TOKEN": f"sim-risk-{token_factory(48)}",
         "SIMULATOR_RUNTIME_KEYS_EPHEMERAL": "true",
     }
