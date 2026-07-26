@@ -9,7 +9,7 @@ import os
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
@@ -23,6 +23,16 @@ check_railway_database = runtime.check_railway_database
 deterministic_portfolio_cycle_id = runtime.deterministic_portfolio_cycle_id
 fetch_market_regime_inputs = runtime.fetch_market_regime_inputs
 validate_runtime_environment = runtime.validate_runtime_environment
+
+STRATEGY_BUCKET_REGISTRY_PATH = (
+    ROOT / "config" / "strategy_bucket_assignments.v1.json"
+)
+VALID_STRATEGY_BUCKETS = {
+    "core_dividend",
+    "quality_growth",
+    "value_rebound",
+    "news_momentum",
+}
 
 
 def _github_output(values: dict[str, Any]) -> None:
@@ -48,6 +58,198 @@ def _unwrap(payload: Any) -> Any:
     if isinstance(payload, dict) and "data" in payload:
         return payload.get("data")
     return payload
+
+
+def _database_account_id(env: Mapping[str, str]) -> int:
+    raw = str(env.get("DEFAULT_ACCOUNT_ID") or "1").strip()
+    try:
+        account_id = int(raw)
+    except ValueError as exc:
+        raise RuntimeSafetyError(
+            "DEFAULT_ACCOUNT_ID must be a positive integer."
+        ) from exc
+    if account_id < 1:
+        raise RuntimeSafetyError("DEFAULT_ACCOUNT_ID must be a positive integer.")
+    return account_id
+
+
+def _load_strategy_bucket_registry(
+    path: Path = STRATEGY_BUCKET_REGISTRY_PATH,
+) -> dict[str, Any]:
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise RuntimeSafetyError(
+            "Strategy bucket migration registry is missing or invalid."
+        ) from exc
+
+    if not isinstance(payload, dict):
+        raise RuntimeSafetyError("Strategy bucket migration registry must be an object.")
+    if payload.get("schema_version") != "strategy-bucket-assignments.v1":
+        raise RuntimeSafetyError(
+            "Strategy bucket migration registry schema version is invalid."
+        )
+
+    try:
+        account_id = int(payload.get("account_id"))
+    except (TypeError, ValueError) as exc:
+        raise RuntimeSafetyError(
+            "Strategy bucket migration registry account_id is invalid."
+        ) from exc
+    if account_id < 1:
+        raise RuntimeSafetyError(
+            "Strategy bucket migration registry account_id is invalid."
+        )
+
+    raw_assignments = payload.get("assignments")
+    if not isinstance(raw_assignments, dict) or not raw_assignments:
+        raise RuntimeSafetyError(
+            "Strategy bucket migration registry has no approved assignments."
+        )
+
+    assignments: dict[str, str] = {}
+    for raw_symbol, raw_bucket in raw_assignments.items():
+        symbol = str(raw_symbol or "").strip().upper()
+        bucket = str(raw_bucket or "").strip().lower()
+        if not symbol or bucket not in VALID_STRATEGY_BUCKETS:
+            raise RuntimeSafetyError(
+                "Strategy bucket migration registry contains an invalid assignment."
+            )
+        assignments[symbol] = bucket
+
+    source = str(payload.get("source") or "").strip()
+    reason = str(payload.get("reason") or "").strip()
+    if not source or not reason:
+        raise RuntimeSafetyError(
+            "Strategy bucket migration registry requires source and reason."
+        )
+
+    return {
+        "account_id": account_id,
+        "source": source,
+        "reason": reason,
+        "assignments": assignments,
+    }
+
+
+def _assignment_map(rows: Any) -> dict[str, str]:
+    result: dict[str, str] = {}
+    if not isinstance(rows, list):
+        return result
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        symbol = str(row.get("symbol") or "").strip().upper()
+        bucket = str(
+            row.get("strategy_bucket") or row.get("bucket") or ""
+        ).strip().lower()
+        if symbol and bucket:
+            result[symbol] = bucket
+    return result
+
+
+def ensure_strategy_bucket_assignments(
+    *,
+    base_url: str,
+    api_key: str,
+    correlation_id: str,
+    account_id: int,
+    registry_path: Path = STRATEGY_BUCKET_REGISTRY_PATH,
+) -> dict[str, Any]:
+    """Seed only missing, manually approved Paper strategy bucket assignments.
+
+    Existing conflicting assignments are never overwritten automatically. A conflict
+    fails closed because changing bucket ownership affects portfolio and risk policy.
+    """
+    registry = _load_strategy_bucket_registry(registry_path)
+    if registry["account_id"] != account_id:
+        raise RuntimeSafetyError(
+            "Strategy bucket migration registry does not match DEFAULT_ACCOUNT_ID."
+        )
+
+    client = runtime.JsonHttpClient(
+        base_url=base_url,
+        service_name="Railway Database_Agent strategy bucket migration",
+        headers={"X-API-KEY": api_key},
+    )
+    path = f"/accounts/{account_id}/strategy-bucket-assignments"
+    current = _unwrap(client.request(path, correlation_id=correlation_id)) or {}
+    if not isinstance(current, dict):
+        raise RuntimeSafetyError(
+            "Database_Agent strategy bucket assignment contract is invalid."
+        )
+    existing = _assignment_map(current.get("assignments"))
+
+    conflicts = sorted(
+        symbol
+        for symbol, expected in registry["assignments"].items()
+        if symbol in existing and existing[symbol] != expected
+    )
+    if conflicts:
+        raise RuntimeSafetyError(
+            "Database_Agent has conflicting strategy bucket assignments for: "
+            + ", ".join(conflicts)
+            + ". Manual review is required."
+        )
+
+    missing = sorted(
+        symbol for symbol in registry["assignments"] if symbol not in existing
+    )
+    if missing:
+        payload = {
+            "source": registry["source"],
+            "assignments": [
+                {
+                    "account_id": account_id,
+                    "symbol": symbol,
+                    "strategy_bucket": registry["assignments"][symbol],
+                    "source": registry["source"],
+                    "reason": registry["reason"],
+                }
+                for symbol in missing
+            ],
+        }
+        seeded = _unwrap(
+            client.request(
+                f"/accounts/{account_id}/position-buckets/bulk",
+                method="POST",
+                payload=payload,
+                correlation_id=correlation_id,
+            )
+        )
+        if not isinstance(seeded, dict) or seeded.get("updated_count") != len(missing):
+            raise RuntimeSafetyError(
+                "Database_Agent did not persist every approved strategy bucket assignment."
+            )
+
+    verified_response = _unwrap(
+        client.request(path, correlation_id=correlation_id)
+    ) or {}
+    if not isinstance(verified_response, dict):
+        raise RuntimeSafetyError(
+            "Database_Agent strategy bucket verification contract is invalid."
+        )
+    verified = _assignment_map(verified_response.get("assignments"))
+    unresolved = sorted(
+        symbol
+        for symbol, expected in registry["assignments"].items()
+        if verified.get(symbol) != expected
+    )
+    if unresolved:
+        raise RuntimeSafetyError(
+            "Database_Agent strategy bucket verification failed for: "
+            + ", ".join(unresolved)
+            + "."
+        )
+
+    return {
+        "status": "verified",
+        "account_id": account_id,
+        "approved_assignment_count": len(registry["assignments"]),
+        "seeded_count": len(missing),
+        "seeded_symbols": missing,
+        "conflict_count": 0,
+    }
 
 
 def _check_railway_database_compatible(
@@ -95,7 +297,10 @@ def _check_railway_database_compatible(
         raise RuntimeSafetyError(
             "Railway Database_Agent does not report an API key configuration."
         )
-    if not isinstance(version, dict) or str(version.get("agent_type") or "").strip() != "database":
+    if (
+        not isinstance(version, dict)
+        or str(version.get("agent_type") or "").strip() != "database"
+    ):
         raise RuntimeSafetyError("Railway Database_Agent version contract is invalid.")
 
     return {
@@ -123,10 +328,18 @@ def _safe_database_diagnostics() -> dict[str, Any]:
     )
     result: dict[str, Any] = {"available": True}
     correlation_id = os.getenv("GITHUB_RUN_ID", "database-diagnostic")
-    for path, name in (("/health", "health"), ("/ready", "ready"), ("/version", "version")):
+    for path, name in (
+        ("/health", "health"),
+        ("/ready", "ready"),
+        ("/version", "version"),
+    ):
         try:
             payload = client.request(path, correlation_id=correlation_id)
-            data = payload.get("data") if isinstance(payload, dict) and "data" in payload else payload
+            data = (
+                payload.get("data")
+                if isinstance(payload, dict) and "data" in payload
+                else payload
+            )
             if not isinstance(data, dict):
                 result[name] = {"response_type": type(data).__name__}
                 continue
@@ -149,7 +362,9 @@ def _safe_database_diagnostics() -> dict[str, Any]:
                 "version",
                 "schema_version",
             }
-            result[name] = {key: data.get(key) for key in sorted(allowed) if key in data}
+            result[name] = {
+                key: data.get(key) for key in sorted(allowed) if key in data
+            }
         except Exception as exc:
             result[name] = {"error_type": type(exc).__name__}
     return result
@@ -183,6 +398,13 @@ def build_preflight() -> dict[str, Any]:
         base_url=env["DATABASE_AGENT_URL"],
         api_key=env["DATABASE_AGENT_API_KEY"],
         correlation_id=correlation_id,
+    )
+    database_account_id = _database_account_id(env)
+    railway["strategy_bucket_assignments"] = ensure_strategy_bucket_assignments(
+        base_url=env["DATABASE_AGENT_URL"],
+        api_key=env["DATABASE_AGENT_API_KEY"],
+        correlation_id=correlation_id,
+        account_id=database_account_id,
     )
     alpaca = check_alpaca_paper(
         api_url=env["ALPACA_API_URL"],
@@ -221,7 +443,9 @@ def build_preflight() -> dict[str, Any]:
 
 
 def main() -> int:
-    report_path = Path(os.getenv("HOURLY_PREFLIGHT_REPORT", "reports/hourly-preflight.json"))
+    report_path = Path(
+        os.getenv("HOURLY_PREFLIGHT_REPORT", "reports/hourly-preflight.json")
+    )
     try:
         report = build_preflight()
     except RuntimeSafetyError as exc:
