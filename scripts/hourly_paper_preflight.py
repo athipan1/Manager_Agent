@@ -44,22 +44,67 @@ def _account_ref(account_id: str) -> str:
     return hashlib.sha256(account_id.encode("utf-8")).hexdigest()[:12]
 
 
+def _safe_database_diagnostics() -> dict[str, Any]:
+    """Fetch non-secret readiness fields after a fail-closed database error."""
+    base_url = os.getenv("DATABASE_AGENT_URL", "").strip()
+    api_key = os.getenv("DATABASE_AGENT_API_KEY", "").strip()
+    if not base_url or not api_key:
+        return {"available": False, "reason": "database credentials unavailable"}
+
+    client = runtime.JsonHttpClient(
+        base_url=base_url,
+        service_name="Railway Database_Agent diagnostics",
+        headers={"X-API-KEY": api_key},
+        max_attempts=1,
+    )
+    result: dict[str, Any] = {"available": True}
+    correlation_id = os.getenv("GITHUB_RUN_ID", "database-diagnostic")
+    for path, name in (("/health", "health"), ("/ready", "ready"), ("/version", "version")):
+        try:
+            payload = client.request(path, correlation_id=correlation_id)
+            data = payload.get("data") if isinstance(payload, dict) and "data" in payload else payload
+            if not isinstance(data, dict):
+                result[name] = {"response_type": type(data).__name__}
+                continue
+            allowed = {
+                "status",
+                "ready",
+                "database_connection",
+                "dev_mode",
+                "trading_mode",
+                "database_emergency_halt",
+                "database_agent_api_key_configured",
+                "database_provider",
+                "database_url_configured",
+                "database_ssl_mode",
+                "database_cutover_guard_enabled",
+                "database_expected_provider",
+                "database_require_schema_identity",
+                "schema_identity_valid",
+                "agent_type",
+                "version",
+                "schema_version",
+            }
+            result[name] = {key: data.get(key) for key in sorted(allowed) if key in data}
+        except Exception as exc:  # diagnostics must not replace the original failure
+            result[name] = {"error_type": type(exc).__name__}
+    return result
+
+
 def build_preflight() -> dict[str, Any]:
     env = os.environ
-    runtime = validate_runtime_environment(env)
+    runtime_report = validate_runtime_environment(env)
     correlation_id = (
         env.get("GITHUB_RUN_ID")
         or env.get("GITHUB_RUN_NUMBER")
         or datetime.now(timezone.utc).strftime("local-%Y%m%dT%H%M%S")
     )
 
-    if not runtime["paper_automation"]:
-        cycle_id = deterministic_portfolio_cycle_id(
-            account_id="simulator",
-        )
+    if not runtime_report["paper_automation"]:
+        cycle_id = deterministic_portfolio_cycle_id(account_id="simulator")
         return {
             "status": "ready",
-            "runtime": runtime,
+            "runtime": runtime_report,
             "portfolio_cycle_id": cycle_id,
             "correlation_id": cycle_id,
             "account_ref": "simulator",
@@ -83,9 +128,7 @@ def build_preflight() -> dict[str, Any]:
     )
     if not alpaca["account_active"]:
         raise RuntimeSafetyError("Alpaca Paper account is not active and unrestricted.")
-    cycle_id = deterministic_portfolio_cycle_id(
-        account_id=alpaca["account_id"],
-    )
+    cycle_id = deterministic_portfolio_cycle_id(account_id=alpaca["account_id"])
     market_inputs = fetch_market_regime_inputs(
         api_key_id=env["ALPACA_API_KEY_ID"],
         secret_key=env["ALPACA_SECRET_KEY"],
@@ -93,7 +136,7 @@ def build_preflight() -> dict[str, Any]:
     )
     return {
         "status": "ready",
-        "runtime": runtime,
+        "runtime": runtime_report,
         "portfolio_cycle_id": cycle_id,
         "correlation_id": cycle_id,
         "account_ref": _account_ref(alpaca["account_id"]),
@@ -119,6 +162,13 @@ def main() -> int:
         report = build_preflight()
     except RuntimeSafetyError as exc:
         print(f"Hourly Paper preflight failed closed: {exc}", file=sys.stderr)
+        if "Database_Agent" in str(exc) or "DATABASE_AGENT" in str(exc):
+            diagnostics = _safe_database_diagnostics()
+            print(
+                "Safe Railway Database_Agent diagnostics: "
+                + json.dumps(diagnostics, ensure_ascii=False, sort_keys=True),
+                file=sys.stderr,
+            )
         return 1
     report_path.parent.mkdir(parents=True, exist_ok=True)
     report_path.write_text(
