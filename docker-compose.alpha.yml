@@ -14,6 +14,7 @@ services:
       PROFIT_DECISION_EXECUTION_ENABLED: ${PROFIT_DECISION_EXECUTION_ENABLED:-false}
       PROFIT_AUTO_EXIT_ALL_ENABLED: ${PROFIT_AUTO_EXIT_ALL_ENABLED:-false}
       PERFORMANCE_AGENT_URL: http://performance-agent:8013
+      PERFORMANCE_AGENT_API_KEY: ${PROFIT_AGENT_API_KEY:-dev_performance_key}
     depends_on:
       market-regime-agent:
         condition: service_healthy
@@ -93,3 +94,4 @@ services:
       start_period: 30s
     environment:
       PYTHONPATH: /app
+      PERFORMANCE_AGENT_API_KEY: ${PROFIT_AGENT_API_KEY:-dev_performance_key}
