@@ -11,15 +11,13 @@ from __future__ import annotations
 
 import asyncio
 import uuid
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from typing import Any
 
 from fastapi import HTTPException
 
-from .. import config
 from ..config_manager import config_manager
 from ..contracts import StandardAgentResponse
-from ..database_client import DatabaseAgentClient
 from ..discover_report_builder import build_discover_allocation_report
 from ..logger import report_logger
 from ..models import DiscoverAnalyzeTradeRequest
@@ -45,20 +43,64 @@ from .guarded_discovery_workflow import load_database_sync_status
 from .single_analysis_workflow import manager_metadata, utc_now
 
 
-def _mark_verified_snapshot_context(
-    db_client: DatabaseAgentClient,
-    account_id: Any,
-) -> None:
-    """Scope the verified snapshot to this one read-only client instance.
+def _verified_database_context(
+    database_sync: dict[str, Any],
+) -> tuple[Decimal, list[dict[str, Any]], list[dict[str, Any]]]:
+    """Extract canonical portfolio context from one verified sync-status payload.
 
-    DatabaseAgentClient normally asks Execution_Agent to reconcile before its
-    first context read. Hourly preselection has already passed host-side
-    reconciliation and a fresh Database_Agent sync-status gate. Marking this
-    account as reconciled avoids a redundant Execution dependency without
-    weakening the later trade/execution gates.
+    Database_Agent's `/broker-sync/status` response already contains the account,
+    positions, and open orders used to prove Database/Alpaca parity. Reusing that
+    same payload keeps preselection internally consistent and avoids a second
+    remote Database_Agent request after the expensive Scanner pass.
     """
 
-    db_client._broker_context_reconciled_accounts.add(str(account_id))
+    database = database_sync.get("database")
+    if not isinstance(database, dict):
+        raise AgentUnavailable(
+            "Verified Database/Alpaca status omitted canonical database context."
+        )
+
+    account = database.get("account")
+    positions = database.get("positions")
+    open_orders = database.get("open_orders")
+    if not isinstance(account, dict):
+        raise AgentUnavailable(
+            "Verified Database/Alpaca status omitted canonical account context."
+        )
+    if not isinstance(positions, list) or not all(
+        isinstance(row, dict) for row in positions
+    ):
+        raise AgentUnavailable(
+            "Verified Database/Alpaca status returned invalid position context."
+        )
+    if not isinstance(open_orders, list) or not all(
+        isinstance(row, dict) for row in open_orders
+    ):
+        raise AgentUnavailable(
+            "Verified Database/Alpaca status returned invalid open-order context."
+        )
+
+    raw_cash = account.get("cash_balance")
+    if raw_cash in (None, ""):
+        raise AgentUnavailable(
+            "Verified Database/Alpaca status omitted the canonical cash balance."
+        )
+    try:
+        cash_balance = Decimal(str(raw_cash))
+    except (InvalidOperation, TypeError, ValueError) as exc:
+        raise AgentUnavailable(
+            "Verified Database/Alpaca status returned an invalid cash balance."
+        ) from exc
+    if not cash_balance.is_finite():
+        raise AgentUnavailable(
+            "Verified Database/Alpaca status returned a non-finite cash balance."
+        )
+
+    return (
+        cash_balance,
+        [dict(row) for row in positions],
+        [dict(row) for row in open_orders],
+    )
 
 
 async def run_scanner_preselection_flow(
@@ -137,13 +179,7 @@ async def run_scanner_preselection_flow(
             ticker_to_scanner_candidate=ticker_to_scanner_candidate,
         )
 
-        async with DatabaseAgentClient() as db_client:
-            _mark_verified_snapshot_context(db_client, account_id)
-            balance = await db_client.get_account_balance(account_id, correlation_id)
-            positions = await db_client.get_positions(account_id, correlation_id)
-            orders = await db_client.get_orders(account_id, correlation_id)
-
-        cash_balance = Decimal(balance.cash_balance if balance else 0)
+        cash_balance, positions, orders = _verified_database_context(database_sync)
         portfolio_value = cash_balance + total_position_exposure(positions)
         allocation_report = build_discover_allocation_report(
             ranked=ranked,
@@ -196,9 +232,14 @@ async def run_scanner_preselection_flow(
                 "reason": "read-only Scanner preselection",
             },
             "database_sync": database_sync,
+            "database_context": {
+                "source": "broker_sync_status.database",
+                "position_count": len(positions),
+                "open_order_count": len(orders),
+            },
             "broker_snapshot_capture": {
                 "status": "skipped",
-                "reason": "verified host-side reconciliation already completed",
+                "reason": "verified Database_Agent sync-status payload reused",
             },
             "portfolio_summary": {
                 "policy_name": (
@@ -214,6 +255,7 @@ async def run_scanner_preselection_flow(
                 "database_sync_status": database_sync_summary(
                     database_sync
                 ).get("status"),
+                "database_context_source": "broker_sync_status.database",
                 "execution_status": "not_requested",
             },
             "ranked_candidates": allocation_report.get("ranked_candidates"),
@@ -239,6 +281,8 @@ async def run_scanner_preselection_flow(
                 ),
                 "preselection_only": True,
                 "execution_agent_required": False,
+                "database_context_source": "broker_sync_status.database",
+                "database_context_request_count": 1,
                 "exposure_gate_allowed_count": (
                     exposure_gate.get("summary") or {}
                 ).get("allowed_count", 0),

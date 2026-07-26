@@ -1,4 +1,5 @@
 from datetime import datetime, timezone
+from decimal import Decimal
 import inspect
 
 import pytest
@@ -6,10 +7,11 @@ from fastapi import HTTPException
 
 from app.contracts import StandardAgentResponse
 from app.models import DiscoverAnalyzeTradeRequest
+from app.resilient_client import AgentUnavailable
 from app.routes import discovery
 from app.workflows import scanner_preselection_workflow
 from app.workflows.scanner_preselection_workflow import (
-    _mark_verified_snapshot_context,
+    _verified_database_context,
     run_scanner_preselection_flow,
 )
 from scripts.run_scanner_preselection import _payload_from_env
@@ -119,26 +121,93 @@ async def test_unsynced_database_blocks_before_scanner(monkeypatch):
     assert scanner_created is False
 
 
-def test_verified_snapshot_marker_is_scoped_to_client_instance():
-    first = type(
-        "FakeDatabaseClient",
-        (),
-        {"_broker_context_reconciled_accounts": set()},
-    )()
-    second = type(
-        "FakeDatabaseClient",
-        (),
-        {"_broker_context_reconciled_accounts": set()},
-    )()
+def test_verified_database_context_reuses_canonical_sync_payload():
+    sync_status = {
+        "database": {
+            "account": {"cash_balance": "93276.77"},
+            "positions": [
+                {
+                    "symbol": "ADBE",
+                    "quantity": 52,
+                    "average_cost": "198.76",
+                    "current_market_price": "193.01",
+                    "market_value": "10036.52",
+                    "strategy_bucket": "value_rebound",
+                }
+            ],
+            "open_orders": [
+                {
+                    "symbol": "ADBE",
+                    "side": "sell",
+                    "quantity": 52,
+                    "order_type": "stop",
+                    "status": "placed",
+                    "stop_price": "190.12",
+                    "strategy_bucket": "value_rebound",
+                }
+            ],
+        }
+    }
 
-    _mark_verified_snapshot_context(first, 1)
+    cash, positions, orders = _verified_database_context(sync_status)
 
-    assert first._broker_context_reconciled_accounts == {"1"}
-    assert second._broker_context_reconciled_accounts == set()
+    assert cash == Decimal("93276.77")
+    assert positions[0]["symbol"] == "ADBE"
+    assert orders[0]["order_type"] == "stop"
+    positions[0]["symbol"] = "MUTATED"
+    assert sync_status["database"]["positions"][0]["symbol"] == "ADBE"
 
 
-def test_read_only_workflow_has_no_execution_agent_client_dependency():
+@pytest.mark.parametrize(
+    "sync_status, message",
+    [
+        ({}, "canonical database context"),
+        ({"database": {}}, "canonical account context"),
+        (
+            {
+                "database": {
+                    "account": {"cash_balance": "100"},
+                    "positions": {},
+                    "open_orders": [],
+                }
+            },
+            "invalid position context",
+        ),
+        (
+            {
+                "database": {
+                    "account": {"cash_balance": "100"},
+                    "positions": [],
+                    "open_orders": {},
+                }
+            },
+            "invalid open-order context",
+        ),
+        (
+            {
+                "database": {
+                    "account": {"cash_balance": "NaN"},
+                    "positions": [],
+                    "open_orders": [],
+                }
+            },
+            "non-finite cash balance",
+        ),
+    ],
+)
+def test_verified_database_context_fails_closed(sync_status, message):
+    with pytest.raises(AgentUnavailable) as exc_info:
+        _verified_database_context(sync_status)
+
+    assert message in str(exc_info.value)
+
+
+def test_read_only_workflow_has_no_execution_or_repeat_database_client_dependency():
     source = inspect.getsource(scanner_preselection_workflow)
 
     assert "ExecutionAgentClient" not in source
     assert "execute_portfolio_batch" not in source
+    assert "DatabaseAgentClient" not in source
+    assert "get_account_balance" not in source
+    assert "get_positions" not in source
+    assert "get_orders" not in source
