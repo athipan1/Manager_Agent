@@ -61,8 +61,6 @@ jobs:
       DATABASE_AGENT_URL: ${{ secrets.DATABASE_AGENT_URL }}
       DATABASE_AGENT_API_KEY: ${{ secrets.DATABASE_AGENT_API_KEY }}
       RISK_ADMIN_TOKEN: ${{ secrets.RISK_ADMIN_TOKEN }}
-      PORTFOLIO_AGENT_API_KEY: ${{ secrets.PORTFOLIO_AGENT_API_KEY }}
-      PROFIT_AGENT_API_KEY: ${{ secrets.PROFIT_AGENT_API_KEY }}
       DEFAULT_ACCOUNT_ID: "1"
       HOURLY_MAX_UNIVERSE: ${{ inputs.max_universe || '1000' }}
       HOURLY_TOP_N: ${{ inputs.top_n || '10' }}
@@ -88,6 +86,10 @@ jobs:
         uses: actions/checkout@v4
         with:
           path: Manager_Agent
+
+      - name: Generate ephemeral internal agent API keys
+        working-directory: Manager_Agent
+        run: python scripts/generate_ephemeral_agent_keys.py
 
       - name: Validate Paper-only runtime and external dependencies
         id: preflight
@@ -320,47 +322,28 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: hourly-auto-trading-report
-          path: Manager_Agent/reports/
+          path: Manager_Agent/reports
           if-no-files-found: warn
           retention-days: 30
 
       - name: Send hourly email report
         if: always()
-        continue-on-error: true
         working-directory: Manager_Agent
         env:
-          SMTP_SERVER: ${{ secrets.SMTP_SERVER }}
+          SMTP_HOST: ${{ secrets.SMTP_HOST }}
           SMTP_PORT: ${{ secrets.SMTP_PORT }}
           SMTP_USERNAME: ${{ secrets.SMTP_USERNAME }}
           SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
-          SMTP_USE_SSL: ${{ secrets.SMTP_USE_SSL }}
-          EMAIL_FROM: ${{ secrets.EMAIL_FROM }}
-          EMAIL_TO: ${{ secrets.EMAIL_TO }}
-          EMAIL_CC: ${{ secrets.EMAIL_CC }}
-          EMAIL_SUBJECT: "Hourly Alpaca Paper Portfolio #${{ github.run_number }}"
-          GITHUB_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-          REPORTS_DIR: reports
-        run: |
-          if [ -n "${SMTP_SERVER}" ] && [ -n "${SMTP_USERNAME}" ] && [ -n "${SMTP_PASSWORD}" ] && [ -n "${EMAIL_TO}" ]; then
-            python scripts/send_workflow_email.py
-          else
-            echo "Email secrets are not configured; artifact remains the authoritative report."
-          fi
+          SMTP_FROM: ${{ secrets.SMTP_FROM }}
+          SMTP_TO: ${{ secrets.SMTP_TO }}
+        run: python scripts/send_hourly_email_report.py
 
       - name: Show fail-closed diagnostics
         if: failure()
         working-directory: Manager_Agent
-        run: |
-          if [ "${{ steps.preflight.outputs.paper_automation }}" = "true" ]; then
-            COMPOSE_ARGS=(-f docker-compose.yml -f docker-compose.risk.yml -f docker-compose.alpha.yml -f docker-compose.hourly-paper.yml)
-          else
-            COMPOSE_ARGS=(-f docker-compose.yml -f docker-compose.risk.yml -f docker-compose.alpha.yml -f docker-compose.hourly-simulator.yml)
-          fi
-          docker compose "${COMPOSE_ARGS[@]}" ps || true
-          docker compose "${COMPOSE_ARGS[@]}" logs --tail=180 manager-agent execution-agent risk-agent portfolio-agent profit-agent performance-agent market-regime-agent || true
+        run: docker compose --profile backtest logs --no-color --tail=300
 
       - name: Stop stack
         if: always()
-        continue-on-error: true
         working-directory: Manager_Agent
-        run: docker compose down -v
+        run: docker compose --profile backtest down --remove-orphans
