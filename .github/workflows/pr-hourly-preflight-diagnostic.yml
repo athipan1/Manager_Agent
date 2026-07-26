@@ -1,0 +1,62 @@
+name: PR Hourly Preflight Diagnostic
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "app/hourly_paper_runtime.py"
+      - "scripts/hourly_paper_preflight.py"
+      - ".github/workflows/pr-hourly-preflight-diagnostic.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose-hourly-preflight:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      TRADING_ENABLED: "true"
+      TRADING_MODE: PAPER
+      BROKER_MODE: ALPACA
+      DRY_RUN: "false"
+      ALLOW_LIVE_TRADING: "false"
+      BACKTEST_EXECUTION_GATE_REQUIRED: "true"
+      BROKER_RECONCILE_REQUIRED: "true"
+      BROKER_RECONCILE_CONTEXT_REQUIRED: "true"
+      PERFORMANCE_SESSION_RISK_REQUIRED: "true"
+      ALPACA_API_KEY_ID: ${{ secrets.ALPACA_API_KEY_ID }}
+      ALPACA_SECRET_KEY: ${{ secrets.ALPACA_SECRET_KEY }}
+      ALPACA_API_URL: ${{ secrets.ALPACA_API_URL }}
+      EXECUTION_API_KEY: ${{ secrets.EXECUTION_API_KEY }}
+      DATABASE_AGENT_URL: ${{ secrets.DATABASE_AGENT_URL }}
+      DATABASE_AGENT_API_KEY: ${{ secrets.DATABASE_AGENT_API_KEY }}
+      RISK_ADMIN_TOKEN: ${{ secrets.RISK_ADMIN_TOKEN }}
+      PORTFOLIO_AGENT_API_KEY: ${{ secrets.PORTFOLIO_AGENT_API_KEY }}
+      PROFIT_AGENT_API_KEY: ${{ secrets.PROFIT_AGENT_API_KEY }}
+      PYTHONUNBUFFERED: "1"
+
+    steps:
+      - name: Checkout PR branch
+        uses: actions/checkout@v4
+
+      - name: Run fail-closed hourly preflight diagnostics
+        id: preflight
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          python scripts/hourly_paper_preflight.py 2>&1 | tee hourly-preflight-diagnostic.log
+
+      - name: Upload safe diagnostic log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pr-hourly-preflight-diagnostic
+          path: hourly-preflight-diagnostic.log
+          if-no-files-found: error
+          retention-days: 3
+
+      - name: Preserve preflight result
+        if: steps.preflight.outcome != 'success'
+        run: exit 1
