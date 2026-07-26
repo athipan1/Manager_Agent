@@ -20,3 +20,10 @@ if runtime is None:
     sys.modules[SPEC.name] = runtime
     sys.modules["app.hourly_paper_runtime"] = runtime
     SPEC.loader.exec_module(runtime)
+
+# Keep the core runtime stdlib-only while replacing the historical-data helper
+# with the corrected explicit-lookback, paginated implementation used by the
+# GitHub hourly entrypoint.
+from scripts.hourly_market_regime_data import fetch_market_regime_inputs
+
+runtime.fetch_market_regime_inputs = fetch_market_regime_inputs
