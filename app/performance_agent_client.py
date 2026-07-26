@@ -11,9 +11,15 @@ class PerformanceAgentClient(ResilientAgentClient):
     """Client for Performance_Agent metrics used by Manager risk context."""
 
     def __init__(self):
+        headers = (
+            {"X-API-KEY": config.PERFORMANCE_AGENT_API_KEY}
+            if config.PERFORMANCE_AGENT_API_KEY
+            else None
+        )
         super().__init__(
             base_url=config.PERFORMANCE_AGENT_URL,
             timeout=config.PERFORMANCE_AGENT_TIMEOUT,
+            headers=headers,
         )
 
     async def build_session_risk_metrics(
