@@ -44,6 +44,70 @@ def _account_ref(account_id: str) -> str:
     return hashlib.sha256(account_id.encode("utf-8")).hexdigest()[:12]
 
 
+def _unwrap(payload: Any) -> Any:
+    if isinstance(payload, dict) and "data" in payload:
+        return payload.get("data")
+    return payload
+
+
+def _check_railway_database_compatible(
+    *, base_url: str, api_key: str, correlation_id: str
+) -> dict[str, Any]:
+    """Validate both legacy and current Database_Agent readiness contracts.
+
+    `/health` remains authoritative for runtime mode and connectivity. The newer
+    `/ready` response intentionally omits duplicated flags such as `dev_mode` and
+    `database_agent_api_key_configured`, so their absence must not be interpreted
+    as unsafe when `/health` already proves the fail-closed invariants.
+    """
+    client = runtime.JsonHttpClient(
+        base_url=base_url,
+        service_name="Railway Database_Agent",
+        headers={"X-API-KEY": api_key},
+    )
+    health = _unwrap(client.request("/health", correlation_id=correlation_id)) or {}
+    ready = _unwrap(client.request("/ready", correlation_id=correlation_id)) or {}
+    version = _unwrap(client.request("/version", correlation_id=correlation_id)) or {}
+
+    if not isinstance(health, dict) or health.get("database_connection") != "connected":
+        raise RuntimeSafetyError(
+            "Railway Database_Agent health did not confirm PostgreSQL connectivity."
+        )
+    if health.get("dev_mode") is not False:
+        raise RuntimeSafetyError(
+            "Railway Database_Agent must have DATABASE_DEV_MODE=false."
+        )
+    if str(health.get("trading_mode") or "").strip().upper() != "PAPER":
+        raise RuntimeSafetyError(
+            "Railway Database_Agent did not report TRADING_MODE=PAPER."
+        )
+    if health.get("database_emergency_halt") is True:
+        raise RuntimeSafetyError("Railway Database_Agent emergency halt is active.")
+
+    if not isinstance(ready, dict) or ready.get("ready") is not True:
+        raise RuntimeSafetyError("Railway Database_Agent readiness check failed.")
+    if "dev_mode" in ready and ready.get("dev_mode") is not False:
+        raise RuntimeSafetyError("Railway Database_Agent readiness reports dev mode.")
+    if (
+        "database_agent_api_key_configured" in ready
+        and ready.get("database_agent_api_key_configured") is not True
+    ):
+        raise RuntimeSafetyError(
+            "Railway Database_Agent does not report an API key configuration."
+        )
+    if not isinstance(version, dict) or str(version.get("agent_type") or "").strip() != "database":
+        raise RuntimeSafetyError("Railway Database_Agent version contract is invalid.")
+
+    return {
+        "health": "connected",
+        "ready": True,
+        "dev_mode": False,
+        "trading_mode": "PAPER",
+        "version": str(version.get("version") or "").strip(),
+        "schema_version": str(version.get("schema_version") or "").strip(),
+    }
+
+
 def _safe_database_diagnostics() -> dict[str, Any]:
     """Fetch non-secret readiness fields after a fail-closed database error."""
     base_url = os.getenv("DATABASE_AGENT_URL", "").strip()
@@ -86,7 +150,7 @@ def _safe_database_diagnostics() -> dict[str, Any]:
                 "schema_version",
             }
             result[name] = {key: data.get(key) for key in sorted(allowed) if key in data}
-        except Exception as exc:  # diagnostics must not replace the original failure
+        except Exception as exc:
             result[name] = {"error_type": type(exc).__name__}
     return result
 
@@ -115,7 +179,7 @@ def build_preflight() -> dict[str, Any]:
             "market_regime_inputs": {},
         }
 
-    railway = check_railway_database(
+    railway = _check_railway_database_compatible(
         base_url=env["DATABASE_AGENT_URL"],
         api_key=env["DATABASE_AGENT_API_KEY"],
         correlation_id=correlation_id,
