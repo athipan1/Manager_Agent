@@ -142,6 +142,7 @@ def _payload_from_env() -> Dict[str, Any]:
         "max_workers": 10,
         "min_final_score": float(os.getenv("MIN_FINAL_SCORE", "0.55")),
         "execute": False,
+        "portfolio_cycle_id": os.getenv("PORTFOLIO_CYCLE_ID") or None,
     }
 
 
@@ -174,7 +175,7 @@ def main() -> None:
     )
     parser.add_argument(
         "--url",
-        default="http://localhost:8000/discover-analyze-trade",
+        default="http://localhost:8000/scanner-preselection",
     )
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--github-output", type=Path)
