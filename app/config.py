@@ -153,6 +153,10 @@ PROFIT_DECISION_EXECUTION_ENABLED = _env_bool(
 )
 PROFIT_AUTO_EXIT_ALL_ENABLED = _env_bool("PROFIT_AUTO_EXIT_ALL_ENABLED", False)
 PERFORMANCE_AGENT_URL = os.getenv("PERFORMANCE_AGENT_URL", "http://performance-agent:8013")
+PERFORMANCE_AGENT_API_KEY = os.getenv(
+    "PERFORMANCE_AGENT_API_KEY",
+    PROFIT_AGENT_API_KEY,
+).strip()
 CURATOR_AGENT_URL = os.getenv("CURATOR_AGENT_URL", "http://curator-agent:8015")
 MARKET_REGIME_AGENT_TIMEOUT = int(os.getenv("MARKET_REGIME_AGENT_TIMEOUT", 10))
 PORTFOLIO_AGENT_TIMEOUT = int(os.getenv("PORTFOLIO_AGENT_TIMEOUT", 10))
@@ -160,13 +164,20 @@ PROFIT_AGENT_TIMEOUT = int(os.getenv("PROFIT_AGENT_TIMEOUT", 10))
 PERFORMANCE_AGENT_TIMEOUT = int(os.getenv("PERFORMANCE_AGENT_TIMEOUT", 10))
 CURATOR_AGENT_TIMEOUT = int(os.getenv("CURATOR_AGENT_TIMEOUT", 10))
 
-if (
-    os.getenv("APP_ENV", os.getenv("ENVIRONMENT", "development")).strip().lower()
+_IS_PRODUCTION = (
+    os.getenv("APP_ENV", os.getenv("ENVIRONMENT", "development"))
+    .strip()
+    .lower()
     in {"production", "prod"}
-    and PROFIT_AGENT_ENABLED
-    and not PROFIT_AGENT_API_KEY
-):
+)
+
+if _IS_PRODUCTION and PROFIT_AGENT_ENABLED and not PROFIT_AGENT_API_KEY:
     raise RuntimeError("PROFIT_AGENT_API_KEY is required when Profit Agent is enabled in production.")
+
+if _IS_PRODUCTION and PERFORMANCE_AGENT_ENABLED and not PERFORMANCE_AGENT_API_KEY:
+    raise RuntimeError(
+        "PERFORMANCE_AGENT_API_KEY is required when Performance Agent is enabled in production."
+    )
 
 if TRADING_MODE == "LIVE" and PROFIT_DECISION_EXECUTION_ENABLED:
     raise RuntimeError(
