@@ -8,6 +8,7 @@ from urllib.parse import quote
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import Field, field_validator
 
+from ..contracts import TradePlan
 from ..database_client import DatabaseAgentClient
 from ..dashboard_security import enforce_dashboard_rate_limit
 from .web_control import (
@@ -15,6 +16,8 @@ from .web_control import (
     FinancialAdvisorRequest,
     InvestmentPlanRequest,
     StrictModel,
+    _get_trade_plan,
+    _update_trade_plan_status,
     build_financial_advice,
     create_investment_plan,
     require_operator_token,
@@ -59,6 +62,7 @@ class PersistedInvestmentPlanRequest(StrictModel):
     ticker: str = Field(min_length=1, max_length=16, pattern=r"^[A-Za-z0-9.\-]+$")
     period: str = Field(default="1mo", max_length=16)
     user_goal: str = Field(default="", max_length=1000)
+    requested_action: Literal["AUTO", "BUY", "SELL"] = "AUTO"
 
     @field_validator("account_id", mode="before")
     @classmethod
@@ -69,6 +73,12 @@ class PersistedInvestmentPlanRequest(StrictModel):
     @classmethod
     def normalize_ticker(cls, value: str) -> str:
         return value.upper()
+
+
+class ActionConstraintResult(StrictModel):
+    requested_action: Literal["AUTO", "BUY", "SELL"]
+    actual_action: str
+    matched: bool
 
 
 def _jsonable(value: Any) -> Any:
@@ -90,6 +100,16 @@ def _advice_entry(raw: dict[str, Any]) -> FinanceEntry:
             "description": raw.get("description") or "",
             "occurred_at": raw.get("occurred_at"),
         }
+    )
+
+
+def _action_constraint(requested_action: str, plan: TradePlan) -> ActionConstraintResult:
+    actual_action = plan.side.value.upper() if hasattr(plan.side, "value") else str(plan.side).upper()
+    normalized_request = requested_action.upper()
+    return ActionConstraintResult(
+        requested_action=normalized_request,
+        actual_action=actual_action,
+        matched=normalized_request == "AUTO" or normalized_request == actual_action,
     )
 
 
@@ -221,5 +241,44 @@ async def create_investment_plan_from_persisted_limit(
         None,
         None,
     )
-    result.setdefault("metadata", {})["budget_source"] = "database-agent"
+    metadata = result.setdefault("metadata", {})
+    metadata["budget_source"] = "database-agent"
+    metadata["requested_action"] = request.requested_action
+
+    trade_plan_id = metadata.get("trade_plan_id")
+    if request.requested_action != "AUTO" and metadata.get("confirmation_ready") and trade_plan_id:
+        constraint_correlation_id = str(uuid.uuid4())
+        async with DatabaseAgentClient() as db_client:
+            record = await _get_trade_plan(db_client, str(trade_plan_id), constraint_correlation_id)
+            plan = TradePlan.model_validate(record.get("plan") or {})
+            constraint = _action_constraint(request.requested_action, plan)
+            metadata["actual_action"] = constraint.actual_action
+            metadata["action_constraint_matched"] = constraint.matched
+            if not constraint.matched:
+                current_status = str(record.get("status") or "").lower()
+                if current_status in {"queued", "risk_approved"}:
+                    await _update_trade_plan_status(
+                        db_client,
+                        str(trade_plan_id),
+                        constraint_correlation_id,
+                        status_value="rejected",
+                        expected_status=current_status,
+                        reason=(
+                            f"TradePlan action {constraint.actual_action} conflicts with operator constraint "
+                            f"{constraint.requested_action}."
+                        ),
+                        metadata={
+                            "source": "web-control",
+                            "requested_action": constraint.requested_action,
+                            "actual_action": constraint.actual_action,
+                            "action_constraint_matched": False,
+                        },
+                    )
+                metadata["confirmation_ready"] = False
+                metadata["trade_plan_status"] = "rejected"
+                metadata["blocked_reason"] = (
+                    f"AI plan action {constraint.actual_action} does not match the user's "
+                    f"{constraint.requested_action}-only constraint."
+                )
+
     return result
