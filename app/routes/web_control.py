@@ -51,7 +51,7 @@ class InvestmentPlanRequest(StrictModel):
     ticker: str = Field(min_length=1, max_length=16, pattern=r"^[A-Za-z0-9.\-]+$")
     period: str = Field(default="1mo", max_length=16)
     user_goal: str = Field(default="", max_length=1000)
-    max_investment_amount: Decimal = Field(ge=0, max_digits=18, decimal_places=2)
+    max_investment_amount: Decimal = Field(gt=0, max_digits=18, decimal_places=2)
     investment_currency: Literal["USD"] = "USD"
 
     @field_validator("account_id", mode="before")
@@ -180,6 +180,10 @@ def _plan_notional(plan: TradePlan) -> Decimal:
     return reference_price * Decimal(plan.final_quantity or plan.quantity)
 
 
+def _confirmation_eligible(record_status: str, plan: TradePlan) -> bool:
+    return record_status in {"queued", "risk_approved"} and bool(plan.risk_approval_id)
+
+
 def confirmation_phrase(trade_plan_id: str) -> str:
     mode = str(config.TRADING_MODE or "paper").strip().upper()
     return f"CONFIRM {mode} {trade_plan_id}"
@@ -286,27 +290,50 @@ async def create_investment_plan(
         "web_control_investment_currency": request.investment_currency,
     }
     budget_blocked = False
+    confirmation_ready = False
+    blocked_reason: str | None = None
     plan_notional: Decimal | None = None
+    trade_plan_status: str | None = None
+
     if trade_plan_id:
         correlation_id = str(uuid.uuid4())
         async with DatabaseAgentClient() as db_client:
             record = await _get_trade_plan(db_client, trade_plan_id, correlation_id)
+            trade_plan_status = str(record.get("status") or "").lower()
             plan = TradePlan.model_validate(record.get("plan") or {})
             plan_notional = _plan_notional(plan)
             budget_metadata["web_control_plan_notional"] = str(_money(plan_notional))
             budget_blocked = plan_notional > request.max_investment_amount
-            await _update_trade_plan_status(
-                db_client,
-                trade_plan_id,
-                correlation_id,
-                status_value="rejected" if budget_blocked else "queued",
-                reason=(
-                    "TradePlan exceeds the user-controlled investment allowance."
-                    if budget_blocked
-                    else "TradePlan reserved for explicit Web Control confirmation."
-                ),
-                metadata=budget_metadata,
-            )
+            confirmation_ready = _confirmation_eligible(trade_plan_status, plan) and not budget_blocked
+
+            if budget_blocked:
+                blocked_reason = "TradePlan exceeds the user-controlled USD allowance."
+                if trade_plan_status != "rejected":
+                    await _update_trade_plan_status(
+                        db_client,
+                        trade_plan_id,
+                        correlation_id,
+                        status_value="rejected",
+                        expected_status=trade_plan_status,
+                        reason=blocked_reason,
+                        metadata=budget_metadata,
+                    )
+                    trade_plan_status = "rejected"
+            elif confirmation_ready:
+                await _update_trade_plan_status(
+                    db_client,
+                    trade_plan_id,
+                    correlation_id,
+                    status_value="queued",
+                    expected_status=trade_plan_status,
+                    reason="TradePlan reserved for explicit Web Control confirmation.",
+                    metadata=budget_metadata,
+                )
+                trade_plan_status = "queued"
+            else:
+                blocked_reason = (
+                    f"TradePlan status {trade_plan_status!r} or Risk approval is not eligible for confirmation."
+                )
 
     return {
         "status": "success",
@@ -315,6 +342,9 @@ async def create_investment_plan(
             "execution_attempted": False,
             "manual_confirmation_required": True,
             "trade_plan_id": trade_plan_id,
+            "trade_plan_status": trade_plan_status,
+            "confirmation_ready": confirmation_ready,
+            "blocked_reason": blocked_reason,
             "user_goal": request.user_goal,
             "max_investment_amount": str(_money(request.max_investment_amount)),
             "investment_currency": request.investment_currency,
