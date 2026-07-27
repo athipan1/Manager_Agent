@@ -219,11 +219,19 @@ async def _update_trade_plan_status(
     status_value: str,
     reason: str,
     metadata: dict[str, Any],
+    expected_status: str | None = None,
 ) -> dict[str, Any]:
+    body: dict[str, Any] = {
+        "status": status_value,
+        "reason": reason,
+        "metadata": metadata,
+    }
+    if expected_status is not None:
+        body["expected_status"] = expected_status
     response_data = await db_client._post(
         f"/trade-plans/{quote(trade_plan_id, safe='')}/status",
         correlation_id,
-        json_data={"status": status_value, "reason": reason, "metadata": metadata},
+        json_data=body,
     )
     response = db_client.validate_standard_response(response_data)
     return _jsonable(response.data)
@@ -388,9 +396,42 @@ async def confirm_investment_plan(
         if max_notional_raw and order_notional > Decimal(max_notional_raw):
             raise HTTPException(status_code=409, detail="TradePlan exceeds WEB_CONTROL_MAX_ORDER_NOTIONAL.")
 
+        await _update_trade_plan_status(
+            db_client,
+            trade_plan_id,
+            correlation_id,
+            status_value="execution_pending",
+            expected_status=lifecycle_status,
+            reason="Operator confirmation reserved before execution.",
+            metadata={
+                "source": "web-control",
+                "operator_confirmed": True,
+                "trading_mode": mode,
+                "confirmation_reserved": True,
+            },
+        )
+
         execution_order = plan.to_execution_order()
-        async with ExecutionAgentClient() as execution_client:
-            execution = await execution_client.create_order(execution_order, correlation_id)
+        try:
+            async with ExecutionAgentClient() as execution_client:
+                execution = await execution_client.create_order(execution_order, correlation_id)
+        except Exception as exc:
+            await _update_trade_plan_status(
+                db_client,
+                trade_plan_id,
+                correlation_id,
+                status_value="rejected",
+                expected_status="execution_pending",
+                reason="Execution Agent failed after operator confirmation.",
+                metadata={
+                    "source": "web-control",
+                    "execution_error_type": type(exc).__name__,
+                },
+            )
+            raise HTTPException(
+                status_code=502,
+                detail="Execution Agent failed after confirmation; TradePlan was marked rejected.",
+            ) from exc
 
         execution_payload = _jsonable(execution)
         rejected = str(execution_payload.get("status") or "").lower() in {"failed", "rejected", "cancelled"}
@@ -400,6 +441,7 @@ async def confirm_investment_plan(
             trade_plan_id,
             correlation_id,
             status_value=next_status,
+            expected_status="execution_pending",
             reason="User confirmed from Web Control Center.",
             metadata={
                 "source": "web-control",
