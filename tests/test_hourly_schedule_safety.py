@@ -118,6 +118,7 @@ def test_large_runtime_logic_is_not_embedded_in_yaml():
     assert "python scripts/record_no_candidate_cycle.py" in workflow
     assert "python scripts/hourly_portfolio_cycle.py trade" in workflow
     assert "python scripts/hourly_portfolio_cycle.py finalize" in workflow
+    assert "python scripts/build_hourly_operator_artifact.py" in workflow
     assert "python - <<'PY'" not in workflow
 
 
@@ -138,4 +139,4 @@ def test_cleanup_failure_cannot_mask_the_primary_workflow_failure():
     cleanup = workflow.split("      - name: Stop stack", 1)[1]
     assert "if: always()" in cleanup
     assert "continue-on-error: true" in cleanup
-    assert "docker compose down -v" in cleanup
+    assert "docker compose --profile backtest down -v" in cleanup
