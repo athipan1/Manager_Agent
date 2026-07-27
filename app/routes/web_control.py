@@ -51,6 +51,7 @@ class InvestmentPlanRequest(StrictModel):
     ticker: str = Field(min_length=1, max_length=16, pattern=r"^[A-Za-z0-9.\-]+$")
     period: str = Field(default="1mo", max_length=16)
     user_goal: str = Field(default="", max_length=1000)
+    max_investment_amount: Decimal = Field(ge=0, max_digits=18, decimal_places=2)
 
     @field_validator("account_id", mode="before")
     @classmethod
@@ -155,6 +156,29 @@ def build_financial_advice(request: FinancialAdvisorRequest) -> dict[str, Any]:
     }
 
 
+def _find_trade_plan_id(value: Any) -> str | None:
+    if isinstance(value, dict):
+        for key in ("trade_plan_id", "plan_id"):
+            candidate = value.get(key)
+            if isinstance(candidate, str) and candidate:
+                return candidate
+        for child in value.values():
+            found = _find_trade_plan_id(child)
+            if found:
+                return found
+    elif isinstance(value, list):
+        for child in value:
+            found = _find_trade_plan_id(child)
+            if found:
+                return found
+    return None
+
+
+def _plan_notional(plan: TradePlan) -> Decimal:
+    reference_price = Decimal(str(plan.limit_price or plan.entry_price or 0))
+    return reference_price * Decimal(plan.final_quantity or plan.quantity)
+
+
 def confirmation_phrase(trade_plan_id: str) -> str:
     mode = str(config.TRADING_MODE or "paper").strip().upper()
     return f"CONFIRM {mode} {trade_plan_id}"
@@ -243,13 +267,46 @@ async def create_investment_plan(
         dry_run=True,
     )
     payload = _jsonable(result)
+    trade_plan_id = _find_trade_plan_id(payload)
+    budget_metadata: dict[str, Any] = {
+        "source": "web-control",
+        "user_goal": request.user_goal,
+        "web_control_max_investment_amount": str(_money(request.max_investment_amount)),
+    }
+    budget_blocked = False
+    plan_notional: Decimal | None = None
+    if trade_plan_id:
+        correlation_id = str(uuid.uuid4())
+        async with DatabaseAgentClient() as db_client:
+            record = await _get_trade_plan(db_client, trade_plan_id, correlation_id)
+            plan = TradePlan.model_validate(record.get("plan") or {})
+            plan_notional = _plan_notional(plan)
+            budget_metadata["web_control_plan_notional"] = str(_money(plan_notional))
+            budget_blocked = plan_notional > request.max_investment_amount
+            await _update_trade_plan_status(
+                db_client,
+                trade_plan_id,
+                correlation_id,
+                status_value="rejected" if budget_blocked else "queued",
+                reason=(
+                    "TradePlan exceeds the user-controlled investment allowance."
+                    if budget_blocked
+                    else "TradePlan reserved for explicit Web Control confirmation."
+                ),
+                metadata=budget_metadata,
+            )
+
     return {
         "status": "success",
         "data": payload,
         "metadata": {
             "execution_attempted": False,
             "manual_confirmation_required": True,
+            "trade_plan_id": trade_plan_id,
             "user_goal": request.user_goal,
+            "max_investment_amount": str(_money(request.max_investment_amount)),
+            "plan_notional": str(_money(plan_notional)) if plan_notional is not None else None,
+            "budget_blocked": budget_blocked,
         },
     }
 
@@ -319,9 +376,15 @@ async def confirm_investment_plan(
         if not approval or (approval_status not in {"approved", "risk_approved", "active"} and not approval_flag):
             raise HTTPException(status_code=409, detail="Risk approval is missing or no longer approved.")
 
+        order_notional = _plan_notional(plan)
+        record_metadata = record.get("metadata") if isinstance(record.get("metadata"), dict) else {}
+        user_limit_raw = str(record_metadata.get("web_control_max_investment_amount") or "").strip()
+        if not user_limit_raw:
+            raise HTTPException(status_code=409, detail="TradePlan has no persisted user investment allowance.")
+        if order_notional > Decimal(user_limit_raw):
+            raise HTTPException(status_code=409, detail="TradePlan exceeds the user-controlled investment allowance.")
+
         max_notional_raw = os.getenv("WEB_CONTROL_MAX_ORDER_NOTIONAL", "").strip()
-        reference_price = Decimal(str(plan.limit_price or plan.entry_price or 0))
-        order_notional = reference_price * Decimal(plan.final_quantity or plan.quantity)
         if max_notional_raw and order_notional > Decimal(max_notional_raw):
             raise HTTPException(status_code=409, detail="TradePlan exceeds WEB_CONTROL_MAX_ORDER_NOTIONAL.")
 
