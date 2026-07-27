@@ -27,15 +27,21 @@ def configure_dashboard_cors(app) -> None:
         CORSMiddleware,
         allow_origins=dashboard_cors_allowed_origins(),
         allow_credentials=False,
-        allow_methods=["GET", "OPTIONS"],
-        allow_headers=["Accept", "Content-Type", "X-Request-ID"],
-        expose_headers=["Cache-Control", "Retry-After", "X-Request-ID"],
+        allow_methods=["GET", "POST", "OPTIONS"],
+        allow_headers=[
+            "Accept",
+            "Content-Type",
+            "X-Request-ID",
+            "X-Correlation-ID",
+            "X-Operator-Token",
+        ],
+        expose_headers=["Cache-Control", "Retry-After", "X-Request-ID", "X-Correlation-ID"],
         max_age=600,
     )
 
 
 class DashboardRateLimiter:
-    """Small per-process fixed-window limiter for the public read-only endpoint."""
+    """Small per-process fixed-window limiter for public dashboard and web-control endpoints."""
 
     def __init__(self, limit: int = 120, window_seconds: int = 60):
         if limit < 1 or window_seconds < 1:
