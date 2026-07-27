@@ -1,8 +1,11 @@
 from decimal import Decimal
 
+from app.contracts import OrderSide, OrderType, TradePlan, TradePlanRisk
 from app.routes.web_control import (
     FinanceEntry,
     FinancialAdvisorRequest,
+    _find_trade_plan_id,
+    _plan_notional,
     build_financial_advice,
     confirmation_phrase,
 )
@@ -44,3 +47,30 @@ def test_financial_advice_calculates_cash_flow_and_investment_cap():
 def test_confirmation_phrase_includes_runtime_mode(monkeypatch):
     monkeypatch.setattr("app.routes.web_control.config.TRADING_MODE", "paper")
     assert confirmation_phrase("plan-123") == "CONFIRM PAPER plan-123"
+
+
+def test_find_trade_plan_id_handles_nested_manager_response():
+    payload = {"data": {"audit": {"trade_decision": {"trade_plan_id": "plan-nested"}}}}
+    assert _find_trade_plan_id(payload) == "plan-nested"
+
+
+def test_plan_notional_uses_final_quantity():
+    plan = TradePlan(
+        plan_id="plan-1",
+        correlation_id="corr-1",
+        source="manual",
+        status="risk_approved",
+        account_id="1",
+        symbol="AAPL",
+        side=OrderSide.BUY,
+        order_type=OrderType.MARKET,
+        entry_price=125.50,
+        quantity=10,
+        final_quantity=8,
+        final_verdict="buy",
+        confidence_score=0.8,
+        risk=TradePlanRisk(max_loss_amount=100, max_loss_pct=0.01),
+        risk_approval_id="risk-1",
+    )
+
+    assert _plan_notional(plan) == Decimal("1004.0")
