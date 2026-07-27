@@ -311,7 +311,7 @@ jobs:
         working-directory: Manager_Agent
         run: |
           if [ -f reports/hourly-portfolio-cycle.json ]; then
-            cp reports/hourly-portfolio-cycle.json reports/hourly-auto-trading-report.json
+            python scripts/build_hourly_operator_artifact.py
             PYTHONPATH=. python scripts/render_hourly_portfolio_report.py || true
           fi
 
@@ -363,4 +363,4 @@ jobs:
         if: always()
         continue-on-error: true
         working-directory: Manager_Agent
-        run: docker compose down -v
+        run: docker compose --profile backtest down -v
