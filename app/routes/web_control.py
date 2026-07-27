@@ -52,6 +52,7 @@ class InvestmentPlanRequest(StrictModel):
     period: str = Field(default="1mo", max_length=16)
     user_goal: str = Field(default="", max_length=1000)
     max_investment_amount: Decimal = Field(ge=0, max_digits=18, decimal_places=2)
+    investment_currency: Literal["USD"] = "USD"
 
     @field_validator("account_id", mode="before")
     @classmethod
@@ -251,6 +252,8 @@ async def capabilities(
             "manual_confirmation_required": True,
             "execution_enabled": _execution_enabled(),
             "live_execution_enabled": _live_execution_enabled(),
+            "trade_currency": "USD",
+            "finance_currency": "THB",
         },
     }
 
@@ -280,6 +283,7 @@ async def create_investment_plan(
         "source": "web-control",
         "user_goal": request.user_goal,
         "web_control_max_investment_amount": str(_money(request.max_investment_amount)),
+        "web_control_investment_currency": request.investment_currency,
     }
     budget_blocked = False
     plan_notional: Decimal | None = None
@@ -313,6 +317,7 @@ async def create_investment_plan(
             "trade_plan_id": trade_plan_id,
             "user_goal": request.user_goal,
             "max_investment_amount": str(_money(request.max_investment_amount)),
+            "investment_currency": request.investment_currency,
             "plan_notional": str(_money(plan_notional)) if plan_notional is not None else None,
             "budget_blocked": budget_blocked,
         },
@@ -387,6 +392,9 @@ async def confirm_investment_plan(
         order_notional = _plan_notional(plan)
         record_metadata = record.get("metadata") if isinstance(record.get("metadata"), dict) else {}
         user_limit_raw = str(record_metadata.get("web_control_max_investment_amount") or "").strip()
+        investment_currency = str(record_metadata.get("web_control_investment_currency") or "").upper()
+        if investment_currency != "USD":
+            raise HTTPException(status_code=409, detail="TradePlan investment currency must be USD.")
         if not user_limit_raw:
             raise HTTPException(status_code=409, detail="TradePlan has no persisted user investment allowance.")
         if order_notional > Decimal(user_limit_raw):
