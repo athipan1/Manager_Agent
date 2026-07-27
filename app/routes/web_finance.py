@@ -13,8 +13,10 @@ from ..dashboard_security import enforce_dashboard_rate_limit
 from .web_control import (
     FinanceEntry,
     FinancialAdvisorRequest,
+    InvestmentPlanRequest,
     StrictModel,
     build_financial_advice,
+    create_investment_plan,
     require_operator_token,
 )
 
@@ -50,6 +52,23 @@ class PersistedFinancialAdvisorRequest(StrictModel):
     @classmethod
     def normalize_account_id(cls, value: Any) -> str:
         return str(value)
+
+
+class PersistedInvestmentPlanRequest(StrictModel):
+    account_id: str | int
+    ticker: str = Field(min_length=1, max_length=16, pattern=r"^[A-Za-z0-9.\-]+$")
+    period: str = Field(default="1mo", max_length=16)
+    user_goal: str = Field(default="", max_length=1000)
+
+    @field_validator("account_id", mode="before")
+    @classmethod
+    def normalize_account_id(cls, value: Any) -> str:
+        return str(value)
+
+    @field_validator("ticker")
+    @classmethod
+    def normalize_ticker(cls, value: str) -> str:
+        return value.upper()
 
 
 def _jsonable(value: Any) -> Any:
@@ -162,3 +181,33 @@ async def financial_advisor_from_persisted_state(
         "data": build_financial_advice(advice_request),
         "metadata": {"correlation_id": correlation_id, "source": "database-agent"},
     }
+
+
+@router.post("/investment-plans-persisted")
+async def create_investment_plan_from_persisted_limit(
+    request: PersistedInvestmentPlanRequest,
+    _: None = Depends(require_operator_token),
+    __: None = Depends(enforce_dashboard_rate_limit),
+):
+    correlation_id = str(uuid.uuid4())
+    async with DatabaseAgentClient() as db_client:
+        state = await _finance_state(db_client, request.account_id, correlation_id)
+    budgets = state.get("budgets") if isinstance(state.get("budgets"), dict) else {}
+    trade_limit = Decimal(str(budgets.get("trade_plan_limit_usd") or 0))
+    if trade_limit <= 0:
+        raise HTTPException(status_code=409, detail="Persisted USD trade plan limit must be greater than zero.")
+
+    result = await create_investment_plan(
+        InvestmentPlanRequest(
+            account_id=request.account_id,
+            ticker=request.ticker,
+            period=request.period,
+            user_goal=request.user_goal,
+            max_investment_amount=trade_limit,
+            investment_currency="USD",
+        ),
+        None,
+        None,
+    )
+    result.setdefault("metadata", {})["budget_source"] = "database-agent"
+    return result
