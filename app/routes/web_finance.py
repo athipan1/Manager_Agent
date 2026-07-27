@@ -81,6 +81,18 @@ def _jsonable(value: Any) -> Any:
     return value
 
 
+def _advice_entry(raw: dict[str, Any]) -> FinanceEntry:
+    return FinanceEntry.model_validate(
+        {
+            "entry_type": raw.get("entry_type"),
+            "amount": raw.get("amount"),
+            "category": raw.get("category"),
+            "description": raw.get("description") or "",
+            "occurred_at": raw.get("occurred_at"),
+        }
+    )
+
+
 async def _finance_state(db_client: DatabaseAgentClient, account_id: str, correlation_id: str) -> dict[str, Any]:
     response_data = await db_client._get(
         f"/personal-finance/state?account_id={quote(str(account_id), safe='')}&limit=2000",
@@ -168,7 +180,7 @@ async def financial_advisor_from_persisted_state(
     async with DatabaseAgentClient() as db_client:
         state = await _finance_state(db_client, request.account_id, correlation_id)
 
-    entries = [FinanceEntry.model_validate(entry) for entry in (state.get("entries") or [])]
+    entries = [_advice_entry(entry) for entry in (state.get("entries") or [])]
     budgets = state.get("budgets") if isinstance(state.get("budgets"), dict) else {}
     advice_request = FinancialAdvisorRequest(
         account_id=request.account_id,
