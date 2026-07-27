@@ -43,6 +43,73 @@ from .guarded_discovery_workflow import load_database_sync_status
 from .single_analysis_workflow import manager_metadata, utc_now
 
 
+def _order_identity(row: dict[str, Any]) -> str:
+    """Return the broker identity shared by Database and snapshot order rows."""
+
+    for key in ("broker_order_id", "id", "trade_id"):
+        raw = str(row.get(key) or "").strip()
+        if not raw:
+            continue
+        if key == "trade_id" and raw.startswith("broker:"):
+            return raw.split(":", 1)[1]
+        return raw
+    return ""
+
+
+def _copy_order_tree(row: dict[str, Any]) -> dict[str, Any]:
+    copied = dict(row)
+    legs = row.get("legs")
+    if isinstance(legs, list):
+        copied["legs"] = [
+            _copy_order_tree(leg) for leg in legs if isinstance(leg, dict)
+        ]
+    return copied
+
+
+def _enrich_database_orders_with_verified_broker_legs(
+    database_sync: dict[str, Any],
+    open_orders: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Attach OCO/bracket child legs from the already verified broker snapshot.
+
+    Database_Agent intentionally stores one durable row for the parent broker order.
+    Alpaca returns protective stop legs nested under that parent. Exposure checks need
+    those legs to prove stop coverage, so merge only the nested broker evidence after
+    Database/Alpaca parity has already been established by `/broker-sync/status`.
+    Database fields remain authoritative for account ownership and strategy buckets.
+    """
+
+    latest_snapshot = database_sync.get("latest_snapshot")
+    broker_orders = (
+        latest_snapshot.get("open_orders")
+        if isinstance(latest_snapshot, dict)
+        else None
+    )
+    if not isinstance(broker_orders, list):
+        return [dict(row) for row in open_orders]
+
+    broker_by_id = {
+        identity: row
+        for row in broker_orders
+        if isinstance(row, dict)
+        and (identity := _order_identity(row))
+    }
+    enriched: list[dict[str, Any]] = []
+    for database_order in open_orders:
+        row = dict(database_order)
+        broker_order = broker_by_id.get(_order_identity(row))
+        if isinstance(broker_order, dict) and isinstance(
+            broker_order.get("legs"), list
+        ):
+            row["legs"] = [
+                _copy_order_tree(leg)
+                for leg in broker_order["legs"]
+                if isinstance(leg, dict)
+            ]
+        enriched.append(row)
+    return enriched
+
+
 def _verified_database_context(
     database_sync: dict[str, Any],
 ) -> tuple[Decimal, list[dict[str, Any]], list[dict[str, Any]]]:
@@ -99,7 +166,10 @@ def _verified_database_context(
     return (
         cash_balance,
         [dict(row) for row in positions],
-        [dict(row) for row in open_orders],
+        _enrich_database_orders_with_verified_broker_legs(
+            database_sync,
+            [dict(row) for row in open_orders],
+        ),
     )
 
 
@@ -128,7 +198,6 @@ async def run_scanner_preselection_flow(
                 "Scanner preselection requires a verified Database/Alpaca snapshot: "
                 + database_sync_block_reason(database_sync)
             )
-
         async with ScannerAgentClient() as scanner_client:
             scan_response = await scanner_client.discover_best_fundamentals(
                 correlation_id=correlation_id,
