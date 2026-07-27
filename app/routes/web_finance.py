@@ -6,7 +6,7 @@ from typing import Any, Literal
 from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import Field
+from pydantic import Field, field_validator
 
 from ..database_client import DatabaseAgentClient
 from ..dashboard_security import enforce_dashboard_rate_limit
@@ -31,10 +31,25 @@ class CreateFinanceEntryRequest(StrictModel):
     description: str = Field(default="", max_length=240)
     occurred_at: str
 
+    @field_validator("account_id", mode="before")
+    @classmethod
+    def normalize_account_id(cls, value: Any) -> str:
+        return str(value)
+
 
 class UpdateFinanceBudgetsRequest(StrictModel):
     personal_investment_budget_thb: Decimal = Field(default=Decimal("0"), ge=0, max_digits=18, decimal_places=2)
     trade_plan_limit_usd: Decimal = Field(default=Decimal("0"), ge=0, max_digits=18, decimal_places=2)
+
+
+class PersistedFinancialAdvisorRequest(StrictModel):
+    account_id: str | int
+    message: str = Field(default="", max_length=2000)
+
+    @field_validator("account_id", mode="before")
+    @classmethod
+    def normalize_account_id(cls, value: Any) -> str:
+        return str(value)
 
 
 def _jsonable(value: Any) -> Any:
@@ -102,8 +117,7 @@ async def delete_finance_entry(
             f"/personal-finance/entries/{quote(entry_id, safe='')}?account_id={quote(account_id, safe='')}",
             correlation_id,
         )
-        response_data = response.json()
-        standard_response = db_client.validate_standard_response(response_data)
+        standard_response = db_client.validate_standard_response(response.json())
     return {"status": "success", "data": _jsonable(standard_response.data), "metadata": {"correlation_id": correlation_id}}
 
 
@@ -127,23 +141,21 @@ async def update_finance_budgets(
 
 @router.post("/financial-advisor-persisted")
 async def financial_advisor_from_persisted_state(
-    request: StrictModel,
-    account_id: str = Query(..., min_length=1, max_length=80),
-    message: str = Query(default="", max_length=2000),
+    request: PersistedFinancialAdvisorRequest,
     _: None = Depends(require_operator_token),
     __: None = Depends(enforce_dashboard_rate_limit),
 ):
     correlation_id = str(uuid.uuid4())
     async with DatabaseAgentClient() as db_client:
-        state = await _finance_state(db_client, account_id, correlation_id)
+        state = await _finance_state(db_client, request.account_id, correlation_id)
 
     entries = [FinanceEntry.model_validate(entry) for entry in (state.get("entries") or [])]
     budgets = state.get("budgets") if isinstance(state.get("budgets"), dict) else {}
     advice_request = FinancialAdvisorRequest(
-        account_id=account_id,
+        account_id=request.account_id,
         entries=entries,
         available_investment_capital=budgets.get("personal_investment_budget_thb") or 0,
-        message=message,
+        message=request.message,
     )
     return {
         "status": "success",
