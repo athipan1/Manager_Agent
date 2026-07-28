@@ -28,7 +28,7 @@ def trade_plan(side=OrderSide.BUY):
     return TradePlan(
         plan_id="plan-1",
         correlation_id="corr-1",
-        source="web-control",
+        source="manual",
         status="risk_approved",
         account_id="1",
         symbol="AAPL",
