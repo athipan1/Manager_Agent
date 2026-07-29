@@ -51,6 +51,7 @@ REQUIRED_SCHEDULED_FLAGS = {
     "BROKER_RECONCILE_CONTEXT_REQUIRED": "true",
     "PERFORMANCE_SESSION_RISK_REQUIRED": "true",
 }
+DIRECT_PAPER_CONFIRMATION = "EXECUTE_ALPACA_PAPER"
 
 
 class RuntimeSafetyError(RuntimeError):
@@ -107,6 +108,13 @@ def validate_runtime_environment(
     broker_mode = _clean(env.get("BROKER_MODE") or "SIMULATOR").upper()
     dry_run = _bool_text(env.get("DRY_RUN") or "true") != "false"
     paper_automation = scheduled or (broker_mode == "ALPACA" and not dry_run)
+    profit_decision_execution_enabled = (
+        _bool_text(env.get("PROFIT_DECISION_EXECUTION_ENABLED") or "false")
+        == "true"
+    )
+    profit_auto_exit_all_enabled = (
+        _bool_text(env.get("PROFIT_AUTO_EXIT_ALL_ENABLED") or "false") == "true"
+    )
 
     if scheduled:
         for name, expected in REQUIRED_SCHEDULED_FLAGS.items():
@@ -126,6 +134,18 @@ def validate_runtime_environment(
         raise RuntimeSafetyError("Simulator runtime must keep DRY_RUN=true.")
 
     if paper_automation:
+        if profit_decision_execution_enabled or profit_auto_exit_all_enabled:
+            raise RuntimeSafetyError(
+                "Profit lifecycle execution must remain disabled during Alpaca Paper soak."
+            )
+        if (
+            event == "workflow_dispatch"
+            and _clean(env.get("PAPER_OPERATOR_CONFIRMATION"))
+            != DIRECT_PAPER_CONFIRMATION
+        ):
+            raise RuntimeSafetyError(
+                "Direct Alpaca Paper dispatch requires explicit operator confirmation."
+            )
         for name in SCHEDULED_REQUIRED_SECRETS:
             value = env.get(name)
             if name.endswith("_URL"):
@@ -155,6 +175,8 @@ def validate_runtime_environment(
             not paper_automation
             or _clean(env.get("ALPACA_API_URL")) == PAPER_API_URL
         ),
+        "profit_decision_execution_enabled": profit_decision_execution_enabled,
+        "profit_auto_exit_all_enabled": profit_auto_exit_all_enabled,
         "required_secret_names": (
             list(SCHEDULED_REQUIRED_SECRETS) if paper_automation else []
         ),

@@ -42,6 +42,8 @@ def test_paper_compose_forces_exact_safety_and_required_gates():
     assert manager_env["BROKER_RECONCILE_REQUIRED"] == "true"
     assert manager_env["BROKER_RECONCILE_CONTEXT_REQUIRED"] == "true"
     assert manager_env["PERFORMANCE_SESSION_RISK_REQUIRED"] == "true"
+    assert manager_env["PROFIT_DECISION_EXECUTION_ENABLED"] == "false"
+    assert manager_env["PROFIT_AUTO_EXIT_ALL_ENABLED"] == "false"
 
 
 def test_sqlite_is_confined_to_manual_simulator_override():

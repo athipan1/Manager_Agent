@@ -21,6 +21,8 @@ def test_hourly_schedule_and_concurrency_contract():
     assert "group: hourly-alpaca-paper-portfolio" in workflow
     assert "cancel-in-progress: false" in workflow
     assert "vars.HOURLY_PAPER_SCHEDULE_ENABLED == 'true'" in workflow
+    assert "workflow_call:" in workflow
+    assert "inputs.authorized_soak_schedule == true" in workflow
 
 
 def test_compose_validation_activates_required_backtest_profile():
@@ -29,7 +31,9 @@ def test_compose_validation_activates_required_backtest_profile():
 
 
 def test_hourly_manual_dispatch_defaults_to_simulator_dry_run():
-    workflow = workflow_text()
+    workflow = workflow_text().split("  workflow_dispatch:", 1)[1].split(
+        "  schedule:", 1
+    )[0]
     dry_run = workflow.split("      dry_run:", 1)[1].split(
         "      broker_mode:", 1
     )[0]
@@ -52,6 +56,8 @@ def test_schedule_forces_exact_alpaca_paper_flags():
         'BROKER_RECONCILE_REQUIRED: "true"',
         'BROKER_RECONCILE_CONTEXT_REQUIRED: "true"',
         'PERFORMANCE_SESSION_RISK_REQUIRED: "true"',
+        'PROFIT_DECISION_EXECUTION_ENABLED: "false"',
+        'PROFIT_AUTO_EXIT_ALL_ENABLED: "false"',
     ):
         assert required in workflow
 
@@ -108,6 +114,25 @@ def test_position_review_precedes_scanner_backtest_and_execution():
     execution = workflow.index("Run Manager candidate, Risk and guarded Execution cycle")
     final = workflow.index("Verify fills, protection and post-execution reconciliation")
     assert review < scanner < backtest < execution < final
+
+
+def test_durable_halt_is_checked_before_preflight_and_broker_mutation():
+    workflow = workflow_text()
+    first_halt = workflow.index("Check durable Alpaca Paper emergency halt")
+    preflight = workflow.index("Validate Paper-only runtime and external dependencies")
+    second_halt = workflow.index("Recheck durable emergency halt before broker mutation")
+    execution = workflow.index("Run Manager candidate, Risk and guarded Execution cycle")
+    assert first_halt < preflight < second_halt < execution
+    assert workflow.count("python scripts/paper_trading_control.py assert-clear") == 2
+
+
+def test_emergency_halt_drill_is_opt_in_for_trusted_callers():
+    workflow = workflow_text()
+    drill = workflow.split(
+        "      - name: Exercise Risk emergency halt fail-closed drill", 1
+    )[1].split("      - name: Review existing positions", 1)[0]
+    assert "inputs.emergency_halt_drill == true" in drill
+    assert "python scripts/emergency_halt_drill.py" in drill
 
 
 def test_large_runtime_logic_is_not_embedded_in_yaml():

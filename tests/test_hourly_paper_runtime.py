@@ -41,6 +41,8 @@ def test_scheduled_runtime_accepts_only_exact_paper_contract():
     assert report["paper_automation"] is True
     assert report["broker_mode"] == "ALPACA"
     assert report["dry_run"] is False
+    assert report["profit_decision_execution_enabled"] is False
+    assert report["profit_auto_exit_all_enabled"] is False
 
 
 @pytest.mark.parametrize(
@@ -88,6 +90,30 @@ def test_scheduled_live_or_simulator_misconfiguration_fails(field, value):
     env = scheduled_env()
     env[field] = value
     with pytest.raises(RuntimeSafetyError):
+        validate_runtime_environment(env)
+
+
+def test_direct_paper_dispatch_requires_explicit_confirmation():
+    env = scheduled_env()
+    env["GITHUB_EVENT_NAME"] = "workflow_dispatch"
+    env["PAPER_OPERATOR_CONFIRMATION"] = ""
+
+    with pytest.raises(RuntimeSafetyError, match="operator confirmation"):
+        validate_runtime_environment(env)
+
+    env["PAPER_OPERATOR_CONFIRMATION"] = "EXECUTE_ALPACA_PAPER"
+    assert validate_runtime_environment(env)["paper_automation"] is True
+
+
+@pytest.mark.parametrize(
+    "flag",
+    ["PROFIT_DECISION_EXECUTION_ENABLED", "PROFIT_AUTO_EXIT_ALL_ENABLED"],
+)
+def test_paper_soak_refuses_profit_lifecycle_execution(flag):
+    env = scheduled_env()
+    env[flag] = "true"
+
+    with pytest.raises(RuntimeSafetyError, match="Profit lifecycle"):
         validate_runtime_environment(env)
 
 
