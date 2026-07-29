@@ -48,6 +48,24 @@ def test_soak_workflow_runs_hourly_with_durable_state_and_failure_halt():
     assert "authorized_soak_schedule: true" in workflow
 
 
+def test_soak_issue_command_is_owner_only_and_starts_exactly_24_hours():
+    workflow = text("alpaca-paper-soak.yml")
+    assert "issues:" in workflow
+    assert "types: [opened]" in workflow
+    assert (
+        "github.event.issue.title == '[command] Start Alpaca Paper Soak 24h'"
+        in workflow
+    )
+    assert "github.event.issue.body == 'START_ALPACA_PAPER_SOAK'" in workflow
+    assert "github.event.issue.user.login == github.repository_owner" in workflow
+    assert "github.actor == github.repository_owner" in workflow
+    assert "github.event_name == 'issues' && 'start'" in workflow
+    assert "github.event_name == 'issues' && '24'" in workflow
+    assert "Close owner soak command issue" in workflow
+    assert "gh issue comment" in workflow
+    assert "gh issue close" in workflow
+
+
 def test_emergency_halt_workflow_has_no_broker_credentials():
     workflow = text("alpaca-paper-emergency-halt.yml")
     assert yaml.safe_load(workflow)
