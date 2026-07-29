@@ -8,6 +8,7 @@ from scripts.full_system_profit_e2e import (
     PositionCase,
     ProfitLifecycleE2E,
     TimeoutAfterAcceptGateway,
+    decimal_value,
 )
 from scripts.profit_decision_orchestrator import GatewayTimeout
 
@@ -84,6 +85,11 @@ def test_timeout_injection_occurs_only_after_execution_accepts_request():
         ("execution", "POST", "/execute"),
         ("execution", "POST", "/execute"),
     ]
+
+
+@pytest.mark.parametrize("value", [1, 1.0, "1", "1.00000000"])
+def test_decimal_value_accepts_database_numeric_json_shapes(value):
+    assert decimal_value(value) == 1
 
 
 def test_worker_uses_execution_container_virtualenv(tmp_path, monkeypatch):
