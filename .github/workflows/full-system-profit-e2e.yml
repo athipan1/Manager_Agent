@@ -55,6 +55,11 @@ jobs:
           python --version
           docker --version
           docker compose version
+          echo "Manager_Agent=$(git -C Manager_Agent rev-parse HEAD)"
+          echo "Database_Agent=$(git -C Database_Agent rev-parse HEAD)"
+          echo "Profit_Agent=$(git -C Profit_Agent rev-parse HEAD)"
+          echo "Risk_Agent=$(git -C Risk_Agent rev-parse HEAD)"
+          echo "Execution_Agent=$(git -C Execution_Agent rev-parse HEAD)"
 
       - name: Create isolated Profit lifecycle stack
         working-directory: Manager_Agent
