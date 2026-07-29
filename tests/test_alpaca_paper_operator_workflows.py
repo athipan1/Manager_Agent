@@ -23,6 +23,18 @@ def test_manual_paper_workflow_reuses_hourly_cycle_and_requires_confirmation():
     assert "paper_trading_control.py alert" in workflow
 
 
+def test_manual_paper_issue_command_is_owner_only_and_closes_with_evidence():
+    workflow = text("manual-alpaca-paper-trading.yml")
+    assert "issues:" in workflow
+    assert "types: [opened]" in workflow
+    assert "github.event.issue.title == '[command] Run Manual Alpaca Paper'" in workflow
+    assert "github.event.issue.user.login == github.repository_owner" in workflow
+    assert "github.actor == github.repository_owner" in workflow
+    assert 'OPERATOR_CONFIRMATION="${ISSUE_CONFIRMATION}"' in workflow
+    assert "gh issue comment" in workflow
+    assert "gh issue close" in workflow
+
+
 def test_soak_workflow_runs_hourly_with_durable_state_and_failure_halt():
     workflow = text("alpaca-paper-soak.yml")
     assert yaml.safe_load(workflow)
