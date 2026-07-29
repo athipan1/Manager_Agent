@@ -388,7 +388,22 @@ class ProfitDecisionOrchestrator:
                 "action": primary,
             }
 
-        decision = self._reserve(row, action)
+        try:
+            decision = self._reserve(row, action)
+        except GatewayError as exc:
+            if exc.status_code == 409:
+                return {
+                    "status": "BLOCKED_STALE_POSITION_VERSION",
+                    "action": primary,
+                    "error": str(exc),
+                }
+            if exc.status_code == 404:
+                return {
+                    "status": "BLOCKED_MISSING_POSITION_LIFECYCLE",
+                    "action": primary,
+                    "error": str(exc),
+                }
+            raise
         state = str(decision.get("status") or "")
         if state in {"EXECUTED", "REJECTED", "FAILED", "EXPIRED"}:
             return {"status": f"DUPLICATE_{state}", "decision": decision}

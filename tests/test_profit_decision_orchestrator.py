@@ -71,9 +71,16 @@ def lifecycle_row():
 
 
 class FakeGateway:
-    def __init__(self, *, risk_approved=True, timeout_after_accept=False):
+    def __init__(
+        self,
+        *,
+        risk_approved=True,
+        timeout_after_accept=False,
+        execution_status="executed",
+    ):
         self.risk_approved = risk_approved
         self.timeout_after_accept = timeout_after_accept
+        self.execution_status = execution_status
         self.decision = None
         self.risk_approval = None
         self.order = None
@@ -146,9 +153,13 @@ class FakeGateway:
             self.order = {
                 "order_id": "order-1",
                 "trade_id": DECISION_ID,
-                "status": "executed",
-                "executed_quantity": 3,
+                "status": self.execution_status,
+                "executed_quantity": (
+                    3 if self.execution_status == "executed" else 0
+                ),
             }
+            if self.execution_status == "failed":
+                self.order["reason"] = "simulated execution failure"
             if self.timeout_after_accept:
                 self.order["status"] = "placed"
                 self.timeout_after_accept = False
@@ -253,6 +264,30 @@ def test_risk_rejection_is_terminal_and_never_calls_execution():
     assert gateway.execution_calls == 0
 
 
+def test_execution_failure_is_terminal_and_retry_does_not_resubmit():
+    gateway = FakeGateway(execution_status="failed")
+    manager = orchestrator(gateway)
+
+    first = manager.orchestrate(lifecycle_row())
+    retry = manager.orchestrate(lifecycle_row())
+
+    assert first["status"] == "FAILED"
+    assert retry["status"] == "DUPLICATE_FAILED"
+    assert gateway.execution_calls == 1
+    assert gateway.decision["status"] == "FAILED"
+
+
+def test_hold_decision_never_writes_or_calls_downstream_agents():
+    gateway = FakeGateway()
+    row = lifecycle_row()
+    row["profit_plan"]["primary_action"] = "hold"
+
+    result = orchestrator(gateway).orchestrate(row)
+
+    assert result == {"status": "NO_EXECUTION_REQUIRED", "action": "hold"}
+    assert gateway.requests == []
+
+
 def test_timeout_after_acceptance_is_retried_without_duplicate_submission():
     gateway = FakeGateway(timeout_after_accept=True)
     manager = orchestrator(gateway)
@@ -291,6 +326,36 @@ def test_missing_lifecycle_blocks_before_any_external_write():
 
     assert result["status"] == "BLOCKED_MISSING_IDEMPOTENCY_CONTRACT"
     assert gateway.requests == []
+
+
+@pytest.mark.parametrize(
+    ("status_code", "expected_status"),
+    [
+        (404, "BLOCKED_MISSING_POSITION_LIFECYCLE"),
+        (409, "BLOCKED_STALE_POSITION_VERSION"),
+    ],
+)
+def test_reserve_contract_conflicts_fail_closed_before_risk_or_execution(
+    status_code,
+    expected_status,
+):
+    class ReserveConflictGateway(FakeGateway):
+        def request(self, service, method, path, **kwargs):
+            if service == "database" and path.endswith("/profit-decisions/reserve"):
+                raise GatewayError("reserve rejected", status_code=status_code)
+            return super().request(service, method, path, **kwargs)
+
+    gateway = ReserveConflictGateway()
+
+    result = orchestrator(gateway).orchestrate(lifecycle_row())
+
+    assert result["status"] == expected_status
+    assert result["action"] == "partial_exit"
+    assert gateway.execution_calls == 0
+    assert not any(
+        request["service"] in {"risk", "execution"}
+        for request in gateway.requests
+    )
 
 
 def test_live_mode_is_rejected():

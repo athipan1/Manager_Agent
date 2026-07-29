@@ -1,0 +1,235 @@
+name: Full-System Profit E2E
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  profit-lifecycle-e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      DATABASE_AGENT_API_KEY: e2e_database_profit_key
+      EXECUTION_AGENT_API_KEY: e2e_execution_profit_key
+      PROFIT_AGENT_API_KEY: e2e_profit_lifecycle_key
+      COMPOSE_PROJECT_NAME: profit-lifecycle-e2e
+      RUNTIME_SERVICES: db database-agent risk-agent execution-agent profit-agent
+
+    steps:
+      - name: Checkout Manager_Agent
+        uses: actions/checkout@v4
+        with:
+          path: Manager_Agent
+
+      - name: Checkout Database_Agent
+        uses: actions/checkout@v4
+        with:
+          repository: athipan1/Database_Agent
+          path: Database_Agent
+
+      - name: Checkout Profit_Agent
+        uses: actions/checkout@v4
+        with:
+          repository: athipan1/Profit_Agent
+          path: Profit_Agent
+
+      - name: Checkout Risk_Agent
+        uses: actions/checkout@v4
+        with:
+          repository: athipan1/Risk_Agent
+          path: Risk_Agent
+
+      - name: Checkout Execution_Agent
+        uses: actions/checkout@v4
+        with:
+          repository: athipan1/Execution_Agent
+          path: Execution_Agent
+
+      - name: Show runtime versions
+        run: |
+          python --version
+          docker --version
+          docker compose version
+
+      - name: Create isolated Profit lifecycle stack
+        working-directory: Manager_Agent
+        run: |
+          mkdir -p reports
+          cat > /tmp/full-system-profit-e2e.yml <<'YAML'
+          services:
+            db:
+              image: postgres:13
+              environment:
+                POSTGRES_USER: user
+                POSTGRES_PASSWORD: password
+                POSTGRES_DB: trading_db
+              healthcheck:
+                test: ["CMD-SHELL", "pg_isready -U user -d trading_db"]
+                interval: 5s
+                timeout: 5s
+                retries: 12
+                start_period: 10s
+
+            database-agent:
+              image: painaidee/database-agent:profit-lifecycle-e2e
+              environment:
+                DATABASE_AGENT_API_KEY: ${DATABASE_AGENT_API_KEY}
+                DATABASE_DEV_MODE: "true"
+                USE_SQLITE: ""
+                DATABASE_URL: postgresql://user:password@db:5432/trading_db
+              depends_on:
+                db:
+                  condition: service_healthy
+
+            risk-agent:
+              image: painaidee/risk-agent:profit-lifecycle-e2e
+              environment:
+                EMERGENCY_HALT: "false"
+                PYTHONPATH: /app
+
+            execution-agent:
+              image: painaidee/execution-agent:profit-lifecycle-e2e
+              environment:
+                API_KEY: ${EXECUTION_AGENT_API_KEY}
+                EXECUTION_AGENT_API_KEY: ${EXECUTION_AGENT_API_KEY}
+                DATABASE_AGENT_API_KEY: ${DATABASE_AGENT_API_KEY}
+                DB_AGENT_URL: http://database-agent:8004
+                TRADING_MODE: PAPER
+                TRADING_ENABLED: "true"
+                ALLOW_LIVE_TRADING: "false"
+                BROKER_MODE: SIMULATOR
+                DRY_RUN: "false"
+                REQUIRE_BROKER_PREFLIGHT: "true"
+                PYTHONPATH: /home/appuser:/home/appuser/src
+              depends_on:
+                database-agent:
+                  condition: service_healthy
+
+            profit-agent:
+              build:
+                context: ../Profit_Agent
+                dockerfile: Dockerfile
+              image: painaidee/profit-agent:profit-lifecycle-e2e
+              ports:
+                - "8011:8011"
+              environment:
+                PROFIT_AGENT_API_KEY: ${PROFIT_AGENT_API_KEY}
+                PYTHONPATH: /app
+              healthcheck:
+                test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8011/health', timeout=3)\" || exit 1"]
+                interval: 5s
+                timeout: 5s
+                retries: 12
+                start_period: 20s
+          YAML
+
+          docker compose \
+            -f docker-compose.yml \
+            -f /tmp/full-system-profit-e2e.yml \
+            config > reports/full-system-profit-compose-config.yml
+
+      - name: Build and start Profit lifecycle stack
+        working-directory: Manager_Agent
+        run: |
+          set +e
+          docker compose \
+            -f docker-compose.yml \
+            -f /tmp/full-system-profit-e2e.yml \
+            up --build -d \
+            db database-agent risk-agent execution-agent profit-agent \
+            2>&1 | tee reports/full-system-profit-compose-up.log
+          status=${PIPESTATUS[0]}
+          if [ "$status" != "0" ]; then
+            docker compose \
+              -f docker-compose.yml \
+              -f /tmp/full-system-profit-e2e.yml \
+              ps --all || true
+            exit "$status"
+          fi
+
+      - name: Wait for Profit lifecycle services
+        working-directory: Manager_Agent
+        run: |
+          for i in {1..72}; do
+            exited=$(docker compose \
+              -f docker-compose.yml \
+              -f /tmp/full-system-profit-e2e.yml \
+              ps --status exited -q $RUNTIME_SERVICES | wc -l | tr -d ' ')
+            if [ "$exited" != "0" ]; then
+              echo "A Profit lifecycle service exited before becoming healthy."
+              exit 1
+            fi
+
+            database=$(curl -fsS http://localhost:8004/health >/dev/null && echo ok || echo wait)
+            profit=$(curl -fsS http://localhost:8011/health >/dev/null && echo ok || echo wait)
+            risk=$(curl -fsS http://localhost:8007/health >/dev/null && echo ok || echo wait)
+            execution=$(curl -fsS http://localhost:8006/health >/dev/null && echo ok || echo wait)
+            postgres=$(docker compose \
+              -f docker-compose.yml \
+              -f /tmp/full-system-profit-e2e.yml \
+              exec -T db pg_isready -U user -d trading_db >/dev/null && echo ok || echo wait)
+
+            echo "health: postgres=$postgres database=$database profit=$profit risk=$risk execution=$execution"
+            if [ "$postgres$database$profit$risk$execution" = "okokokokok" ]; then
+              exit 0
+            fi
+            sleep 5
+          done
+
+          echo "Profit lifecycle services did not become healthy in time."
+          exit 1
+
+      - name: Run full-system Profit lifecycle
+        working-directory: Manager_Agent
+        run: |
+          python -m scripts.full_system_profit_e2e \
+            --database-url http://localhost:8004 \
+            --database-api-key "$DATABASE_AGENT_API_KEY" \
+            --profit-url http://localhost:8011 \
+            --profit-api-key "$PROFIT_AGENT_API_KEY" \
+            --risk-url http://localhost:8007 \
+            --execution-url http://localhost:8006 \
+            --execution-api-key "$EXECUTION_AGENT_API_KEY" \
+            --compose-directory "$PWD" \
+            --compose-file "$PWD/docker-compose.yml" \
+            --compose-file /tmp/full-system-profit-e2e.yml \
+            --output-json reports/full-system-profit-e2e.json
+
+      - name: Collect service evidence
+        if: always()
+        working-directory: Manager_Agent
+        run: |
+          docker compose \
+            -f docker-compose.yml \
+            -f /tmp/full-system-profit-e2e.yml \
+            ps --all > reports/full-system-profit-compose-ps.txt 2>&1 || true
+          for service in $RUNTIME_SERVICES; do
+            docker compose \
+              -f docker-compose.yml \
+              -f /tmp/full-system-profit-e2e.yml \
+              logs --no-color --tail=300 "$service" \
+              > "reports/full-system-profit-${service}.log" 2>&1 || true
+          done
+
+      - name: Upload Profit lifecycle evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: full-system-profit-e2e-${{ github.run_id }}
+          path: Manager_Agent/reports/full-system-profit-*
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Stop Profit lifecycle stack
+        if: always()
+        working-directory: Manager_Agent
+        run: |
+          docker compose \
+            -f docker-compose.yml \
+            -f /tmp/full-system-profit-e2e.yml \
+            down --volumes --remove-orphans
