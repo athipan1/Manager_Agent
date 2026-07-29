@@ -1,0 +1,156 @@
+name: Alpaca Paper Soak
+run-name: Alpaca Paper Soak · ${{ github.event_name }} · #${{ github.run_number }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      operation:
+        description: "Start, inspect or stop the durable soak window"
+        required: true
+        type: choice
+        options:
+          - status
+          - start
+          - stop
+        default: status
+      duration_hours:
+        description: "Soak duration"
+        required: true
+        type: choice
+        options:
+          - "24"
+          - "48"
+          - "72"
+        default: "24"
+      confirmation:
+        description: "START_ALPACA_PAPER_SOAK or STOP_ALPACA_PAPER_SOAK"
+        required: false
+        type: string
+  schedule:
+    - cron: "17 * * * *"
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: alpaca-paper-soak-control
+  cancel-in-progress: false
+
+jobs:
+  control:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      should_run: ${{ steps.control.outputs.should_run }}
+      issue_number: ${{ steps.control.outputs.issue_number }}
+      status: ${{ steps.control.outputs.status }}
+    steps:
+      - name: Checkout Manager_Agent
+        uses: actions/checkout@v4
+
+      - name: Resolve durable soak state
+        id: control
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          HOURLY_PAPER_SCHEDULE_ENABLED: ${{ vars.HOURLY_PAPER_SCHEDULE_ENABLED }}
+          REQUESTED_OPERATION: ${{ github.event_name == 'schedule' && 'tick' || inputs.operation }}
+          REQUESTED_DURATION: ${{ inputs.duration_hours || '24' }}
+          OPERATOR_CONFIRMATION: ${{ inputs.confirmation || '' }}
+          GITHUB_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          if [ "${GITHUB_EVENT_NAME}" = "workflow_dispatch" ] && [ "${GITHUB_REF}" != "refs/heads/main" ]; then
+            echo "Alpaca Paper soak control is allowed only from main."
+            exit 1
+          fi
+          python scripts/paper_trading_control.py soak \
+            --operation "${REQUESTED_OPERATION}" \
+            --duration-hours "${REQUESTED_DURATION}" \
+            --confirmation "${OPERATOR_CONFIRMATION}"
+
+  paper-cycle:
+    if: needs.control.outputs.should_run == 'true'
+    needs: control
+    permissions:
+      contents: read
+      issues: read
+    uses: ./.github/workflows/hourly-auto-trading.yml
+    with:
+      dry_run: false
+      broker_mode: ALPACA
+      max_universe: "1000"
+      top_n: "10"
+      min_final_score: "0.55"
+      operator_confirmation: EXECUTE_ALPACA_PAPER
+      emergency_halt_drill: true
+      authorized_soak_schedule: true
+    secrets: inherit
+
+  record-cycle:
+    if: always() && needs.control.outputs.should_run == 'true'
+    needs:
+      - control
+      - paper-cycle
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - name: Checkout Manager_Agent
+        uses: actions/checkout@v4
+
+      - name: Download Paper cycle artifact
+        id: download
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          name: hourly-auto-trading-report
+          path: evidence/raw
+
+      - name: Verify cycle evidence
+        id: audit
+        if: always()
+        continue-on-error: true
+        run: |
+          python scripts/verify_paper_cycle_evidence.py \
+            --artifact-dir evidence/raw \
+            --output evidence/soak-cycle-audit.json \
+            --require-emergency-drill
+
+      - name: Record result and activate halt on failure
+        id: record
+        if: always()
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          PAPER_WORKFLOW_RESULT: ${{ needs.paper-cycle.result }}
+          PAPER_AUDIT_OUTCOME: ${{ steps.audit.outcome }}
+          SOAK_ISSUE_NUMBER: ${{ needs.control.outputs.issue_number }}
+        run: |
+          python scripts/paper_trading_control.py record \
+            --issue-number "${SOAK_ISSUE_NUMBER}" \
+            --workflow-result "${PAPER_WORKFLOW_RESULT}" \
+            --audit-outcome "${PAPER_AUDIT_OUTCOME}" \
+            --evidence evidence/soak-cycle-audit.json \
+            --run-url "${GITHUB_RUN_URL}"
+
+      - name: Upload soak evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: alpaca-paper-soak-evidence
+          path: evidence/
+          if-no-files-found: warn
+          retention-days: 90
+
+      - name: Fail when the broker cycle or evidence audit failed
+        if: always()
+        env:
+          PAPER_WORKFLOW_RESULT: ${{ needs.paper-cycle.result }}
+          PAPER_AUDIT_OUTCOME: ${{ steps.audit.outcome }}
+        run: |
+          if [ "${PAPER_WORKFLOW_RESULT}" != "success" ] || [ "${PAPER_AUDIT_OUTCOME}" != "success" ]; then
+            exit 1
+          fi

@@ -1,0 +1,57 @@
+name: Alpaca Paper Emergency Halt
+run-name: Alpaca Paper Halt · ${{ inputs.operation }} · ${{ github.actor }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      operation:
+        description: "Activate, inspect or clear the durable Paper halt"
+        required: true
+        type: choice
+        options:
+          - status
+          - activate
+          - clear
+        default: status
+      reason:
+        description: "Operational reason; required for activate and clear"
+        required: false
+        type: string
+      confirmation:
+        description: "HALT_ALPACA_PAPER or CLEAR_ALPACA_PAPER_HALT"
+        required: false
+        type: string
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: alpaca-paper-emergency-halt-control
+  cancel-in-progress: false
+
+jobs:
+  emergency-halt:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout Manager_Agent
+        uses: actions/checkout@v4
+
+      - name: Update durable emergency halt
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          HALT_OPERATION: ${{ inputs.operation }}
+          HALT_REASON: ${{ inputs.reason || '' }}
+          HALT_CONFIRMATION: ${{ inputs.confirmation || '' }}
+          GITHUB_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          if [ "${GITHUB_REF}" != "refs/heads/main" ]; then
+            echo "Alpaca Paper halt control is allowed only from main."
+            exit 1
+          fi
+          python scripts/paper_trading_control.py emergency \
+            --operation "${HALT_OPERATION}" \
+            --reason "${HALT_REASON}" \
+            --confirmation "${HALT_CONFIRMATION}"
