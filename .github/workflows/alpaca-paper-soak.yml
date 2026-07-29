@@ -28,6 +28,8 @@ on:
         type: string
   schedule:
     - cron: "17 * * * *"
+  issues:
+    types: [opened]
 
 permissions:
   contents: read
@@ -39,6 +41,14 @@ concurrency:
 
 jobs:
   control:
+    if: >-
+      github.event_name != 'issues' ||
+      (
+        github.event.issue.title == '[command] Start Alpaca Paper Soak 24h' &&
+        github.event.issue.body == 'START_ALPACA_PAPER_SOAK' &&
+        github.event.issue.user.login == github.repository_owner &&
+        github.actor == github.repository_owner
+      )
     runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:
@@ -54,9 +64,9 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           HOURLY_PAPER_SCHEDULE_ENABLED: ${{ vars.HOURLY_PAPER_SCHEDULE_ENABLED }}
-          REQUESTED_OPERATION: ${{ github.event_name == 'schedule' && 'tick' || inputs.operation }}
-          REQUESTED_DURATION: ${{ inputs.duration_hours || '24' }}
-          OPERATOR_CONFIRMATION: ${{ inputs.confirmation || '' }}
+          REQUESTED_OPERATION: ${{ github.event_name == 'schedule' && 'tick' || github.event_name == 'issues' && 'start' || inputs.operation }}
+          REQUESTED_DURATION: ${{ github.event_name == 'issues' && '24' || inputs.duration_hours || '24' }}
+          OPERATOR_CONFIRMATION: ${{ github.event_name == 'issues' && github.event.issue.body || inputs.confirmation || '' }}
           GITHUB_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           set -euo pipefail
@@ -68,6 +78,27 @@ jobs:
             --operation "${REQUESTED_OPERATION}" \
             --duration-hours "${REQUESTED_DURATION}" \
             --confirmation "${OPERATOR_CONFIRMATION}"
+
+      - name: Close owner soak command issue
+        if: always() && github.event_name == 'issues'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          COMMAND_ISSUE_NUMBER: ${{ github.event.issue.number }}
+          CONTROL_OUTCOME: ${{ steps.control.outcome }}
+          SOAK_ISSUE_NUMBER: ${{ steps.control.outputs.issue_number }}
+          SOAK_STATUS: ${{ steps.control.outputs.status }}
+          GITHUB_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          if [ "${CONTROL_OUTCOME}" = "success" ]; then
+            result="started"
+            detail="durable soak issue #${SOAK_ISSUE_NUMBER} · status=${SOAK_STATUS}"
+          else
+            result="failed"
+            detail="inspect the workflow log before retrying"
+          fi
+          gh issue comment "${COMMAND_ISSUE_NUMBER}" \
+            --body "Alpaca Paper soak command: **${result}** · ${detail} · ${GITHUB_RUN_URL}"
+          gh issue close "${COMMAND_ISSUE_NUMBER}" --reason completed
 
   paper-cycle:
     if: needs.control.outputs.should_run == 'true'
