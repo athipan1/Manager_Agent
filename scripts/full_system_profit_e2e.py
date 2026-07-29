@@ -390,7 +390,7 @@ class ProfitLifecycleE2E:
                 "-e",
                 "WORKER_RUN_ONCE=true",
                 "execution-agent",
-                "python",
+                "/opt/venv/bin/python",
                 "-m",
                 "app.workers.execution_worker",
             ]

@@ -86,6 +86,36 @@ def test_timeout_injection_occurs_only_after_execution_accepts_request():
     ]
 
 
+def test_worker_uses_execution_container_virtualenv(tmp_path, monkeypatch):
+    captured = {}
+
+    class Completed:
+        returncode = 0
+        stdout = "worker completed"
+        stderr = ""
+
+    def fake_run(command, **kwargs):
+        captured["command"] = command
+        captured["kwargs"] = kwargs
+        return Completed()
+
+    monkeypatch.setattr(
+        "scripts.full_system_profit_e2e.subprocess.run",
+        fake_run,
+    )
+
+    output = runner(tmp_path).run_worker()
+
+    assert "/opt/venv/bin/python" in captured["command"]
+    assert captured["command"][-3:] == [
+        "/opt/venv/bin/python",
+        "-m",
+        "app.workers.execution_worker",
+    ]
+    assert captured["kwargs"]["check"] is False
+    assert output == "worker completed"
+
+
 def test_full_system_profit_workflow_is_fail_closed_and_collects_evidence():
     text = WORKFLOW_PATH.read_text(encoding="utf-8")
     parsed = yaml.safe_load(text)
