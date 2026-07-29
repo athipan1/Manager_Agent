@@ -149,6 +149,18 @@ class FakeGateway:
             assert payload["trade_id"] == DECISION_ID
             assert payload["side"] == "sell"
             assert payload["quantity"] == 3
+            assert payload["protective_exit"] == {
+                "type": "profit_lifecycle_exit",
+                "reduce_only_intent": True,
+                "decision_id": DECISION_ID,
+            }
+            assert payload["metadata"] == {
+                "profit_decision_id": DECISION_ID,
+                "position_id": "account-1:position-42",
+                "position_version": 7,
+                "correlation_id": "corr-profit-1",
+                "advisory_source": "profit-agent",
+            }
             assert extra_headers == {"Idempotency-Key": DECISION_ID}
             self.order = {
                 "order_id": "order-1",
