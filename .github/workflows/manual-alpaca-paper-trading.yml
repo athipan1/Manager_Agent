@@ -23,6 +23,8 @@ on:
         required: false
         default: "0.55"
         type: string
+  issues:
+    types: [opened]
 
 permissions:
   contents: read
@@ -30,6 +32,14 @@ permissions:
 
 jobs:
   operator-safety-gate:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (
+        github.event_name == 'issues' &&
+        github.event.issue.title == '[command] Run Manual Alpaca Paper' &&
+        github.event.issue.user.login == github.repository_owner &&
+        github.actor == github.repository_owner
+      )
     runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:
@@ -41,13 +51,19 @@ jobs:
       - name: Require main and explicit Paper confirmation
         id: confirm
         env:
-          OPERATOR_CONFIRMATION: ${{ inputs.confirmation }}
+          DISPATCH_CONFIRMATION: ${{ inputs.confirmation || '' }}
+          ISSUE_CONFIRMATION: ${{ github.event.issue.body || '' }}
           PRODUCTION_SCHEDULE_ENABLED: ${{ vars.HOURLY_PAPER_SCHEDULE_ENABLED }}
           BROKER_MODE: ALPACA
           DRY_RUN: "false"
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
+          if [ "${GITHUB_EVENT_NAME}" = "issues" ]; then
+            OPERATOR_CONFIRMATION="${ISSUE_CONFIRMATION}"
+          else
+            OPERATOR_CONFIRMATION="${DISPATCH_CONFIRMATION}"
+          fi
           if [ "${GITHUB_REF}" != "refs/heads/main" ]; then
             echo "Manual Alpaca Paper execution is allowed only from main."
             exit 1
@@ -72,9 +88,9 @@ jobs:
     with:
       dry_run: false
       broker_mode: ALPACA
-      max_universe: ${{ inputs.max_universe }}
-      top_n: ${{ inputs.top_n }}
-      min_final_score: ${{ inputs.min_final_score }}
+      max_universe: ${{ github.event_name == 'issues' && '1000' || inputs.max_universe }}
+      top_n: ${{ github.event_name == 'issues' && '10' || inputs.top_n }}
+      min_final_score: ${{ github.event_name == 'issues' && '0.55' || inputs.min_final_score }}
       operator_confirmation: ${{ needs.operator-safety-gate.outputs.confirmation }}
       emergency_halt_drill: true
     secrets: inherit
@@ -133,6 +149,24 @@ jobs:
           path: evidence/
           if-no-files-found: warn
           retention-days: 90
+
+      - name: Close owner command issue with the run result
+        if: always() && github.event_name == 'issues'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          COMMAND_ISSUE_NUMBER: ${{ github.event.issue.number }}
+          PAPER_WORKFLOW_RESULT: ${{ needs.paper-cycle.result }}
+          PAPER_AUDIT_OUTCOME: ${{ steps.audit.outcome }}
+          GITHUB_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          if [ "${PAPER_WORKFLOW_RESULT}" = "success" ] && [ "${PAPER_AUDIT_OUTCOME}" = "success" ]; then
+            result="success"
+          else
+            result="failure"
+          fi
+          gh issue comment "${COMMAND_ISSUE_NUMBER}" \
+            --body "Manual Alpaca Paper result: **${result}** · ${GITHUB_RUN_URL}"
+          gh issue close "${COMMAND_ISSUE_NUMBER}" --reason completed
 
       - name: Fail when the broker cycle or evidence audit failed
         if: always()
