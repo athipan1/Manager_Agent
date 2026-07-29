@@ -7,6 +7,7 @@ import sys
 import urllib.parse
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from decimal import Decimal
 from pathlib import Path
 from typing import Any, Callable, Dict, Optional
 
@@ -32,6 +33,11 @@ def require(condition: Any, message: str) -> None:
 
 def unwrap(value: Dict[str, Any]) -> Any:
     return value.get("data") if isinstance(value, dict) and "data" in value else value
+
+
+def decimal_value(value: Any) -> Decimal:
+    """Normalize JSON number/string representations without float precision loss."""
+    return Decimal(str(value))
 
 
 @dataclass(frozen=True)
@@ -835,7 +841,9 @@ class ProfitLifecycleE2E:
             )
             lifecycle_pending = self.lifecycle(case.account_id, case.symbol)
             require(
-                partial_decision.get("executed_quantity") == 1, str(partial_decision)
+                decimal_value(partial_decision.get("executed_quantity"))
+                == Decimal("1"),
+                str(partial_decision),
             )
             require(
                 lifecycle_pending.get("position_version") == 1, str(lifecycle_pending)
