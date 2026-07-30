@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build a sanitized hourly operator report, including partial and failure cases."""
+"""Build a sanitized hourly operator report from complete or partial phase outputs."""
 from __future__ import annotations
 
 import argparse
@@ -8,6 +8,11 @@ import os
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping
+
+from scripts.capture_hourly_dashboard_state import (
+    RuntimeSafetyError,
+    capture_dashboard_state,
+)
 
 
 def as_dict(value: Any) -> dict[str, Any]:
@@ -78,21 +83,22 @@ def runtime_mode(
     paper_automation = bool_value(runtime.get("paper_automation")) or (
         trading_mode == "PAPER" and broker == "ALPACA" and not dry_run
     )
-    if paper_automation:
-        return "PAPER", "ALPACA", False
-    return "SIMULATOR", broker or "SIMULATOR", True
+    return ("PAPER", "ALPACA", False) if paper_automation else (
+        "SIMULATOR",
+        broker or "SIMULATOR",
+        True,
+    )
 
 
 def phase_status(value: Any, default: str = "unknown") -> str:
     status = str(value or default).lower()
-    aliases = {
+    status = {
         "neutral": "warning",
         "in_progress": "running",
         "queued": "pending",
         "timed_out": "failure",
         "action_required": "failure",
-    }
-    status = aliases.get(status, status)
+    }.get(status, status)
     allowed = {
         "pending",
         "running",
@@ -130,21 +136,23 @@ def symbols(rows: Any) -> list[str]:
 def dashboard_source(
     dashboard_state: Mapping[str, Any], review: Mapping[str, Any]
 ) -> dict[str, Any]:
-    state = as_dict(dashboard_state)
-    if state:
-        return state
-    return as_dict(review.get("broker_snapshot"))
+    return as_dict(dashboard_state) or as_dict(review.get("broker_snapshot"))
 
 
-def safe_account(source: Mapping[str, Any], review: Mapping[str, Any]) -> dict[str, Any]:
+def safe_account(
+    source: Mapping[str, Any], review: Mapping[str, Any], preflight: Mapping[str, Any]
+) -> dict[str, Any]:
     account = as_dict(source.get("account")) or as_dict(review.get("account"))
     account = as_dict(account.get("data")) or account
+    alpaca = as_dict(preflight.get("alpaca_paper"))
     return {
         "cash": account.get("cash") or account.get("cash_balance"),
         "equity": account.get("equity") or account.get("portfolio_value"),
         "buyingPower": account.get("buying_power") or account.get("buyingPower"),
-        "status": account.get("status"),
-        "lastSyncedAt": source.get("generated_at") or review.get("generated_at"),
+        "status": account.get("status") or alpaca.get("account_status"),
+        "lastSyncedAt": source.get("generated_at")
+        or review.get("generated_at")
+        or preflight.get("generated_at"),
     }
 
 
@@ -237,7 +245,7 @@ def review_signals(review: Mapping[str, Any]) -> list[dict[str, Any]]:
     return result
 
 
-def cycle_status(
+def resolve_cycle_status(
     cycle: Mapping[str, Any], outcomes: Mapping[str, Any]
 ) -> str:
     explicit = str(cycle.get("status") or "").lower()
@@ -250,16 +258,12 @@ def cycle_status(
         return "completed"
     if phase_status(outcomes.get("preflight")) == "failure":
         return "failure"
-    completed = {
-        phase_status(outcomes.get("portfolio_review")),
-        phase_status(outcomes.get("scanner")),
-        phase_status(outcomes.get("backtest")),
-    }
-    if "success" in completed:
+    if any(
+        phase_status(outcomes.get(name)) == "success"
+        for name in ("portfolio_review", "scanner", "backtest")
+    ):
         return "partial"
-    if workflow == "skipped":
-        return "skipped"
-    return "unknown"
+    return "skipped" if workflow == "skipped" else "unknown"
 
 
 def build_hourly_operator_artifact(
@@ -310,7 +314,7 @@ def build_hourly_operator_artifact(
         or preflight.get("generated_at")
         or datetime.now(timezone.utc).isoformat()
     )
-    status = cycle_status(cycle, outcomes)
+    status = resolve_cycle_status(cycle, outcomes)
     execution_status = str(
         execution.get("status") or ("not_attempted" if not selected else "unknown")
     )
@@ -330,7 +334,7 @@ def build_hourly_operator_artifact(
         risk, execution_phase = risk or "success", "warning"
     elif execution_status in {"failed", "failure"}:
         execution_phase = "failure"
-    phase_rows = [
+    phases = [
         phase("preflight", outcomes.get("preflight")),
         phase("portfolio_review", outcomes.get("portfolio_review")),
         phase("protection_reconciliation", outcomes.get("protection_reconciliation")),
@@ -350,6 +354,12 @@ def build_hourly_operator_artifact(
         else []
     )
     signals = [*manager_signals, *review_signals(review)]
+    source = dashboard_source(dashboard_state, review)
+    report_warnings = [str(item)[:280] for item in (warnings or [])]
+    if not source:
+        report_warnings.append(
+            "Frontend-safe broker snapshot was unavailable; portfolio rows may be incomplete."
+        )
     response = {
         "status": manager_response.get("status") or "unknown",
         "data": {
@@ -362,12 +372,13 @@ def build_hourly_operator_artifact(
             "curator_signals": signals,
         },
     }
-    source = dashboard_source(dashboard_state, review)
-    report_warnings = [str(item)[:280] for item in (warnings or [])]
-    if not source:
-        report_warnings.append(
-            "Frontend-safe broker snapshot was unavailable; portfolio values may be incomplete."
-        )
+    cycle_id = preflight.get("portfolio_cycle_id") or review.get("portfolio_cycle_id")
+    market_mode = (
+        preflight.get("market_mode")
+        or candidate.get("market_mode")
+        or review.get("market_mode")
+    )
+    partial_fill = bool_value(cycle.get("partial_fill_detected"))
     return {
         "generated_at": generated_at,
         "workflow": as_dict(workflow),
@@ -382,34 +393,28 @@ def build_hourly_operator_artifact(
         "broker_mode": broker,
         "flow": "hourly_portfolio_cycle",
         "request": {
-            "portfolio_cycle_id": preflight.get("portfolio_cycle_id")
-            or review.get("portfolio_cycle_id"),
-            "market_mode": preflight.get("market_mode")
-            or candidate.get("market_mode")
-            or review.get("market_mode"),
+            "portfolio_cycle_id": cycle_id,
+            "market_mode": market_mode,
             "execute_requested": bool_value(candidate.get("execute_requested")),
         },
         "cycle": {
-            "id": preflight.get("portfolio_cycle_id")
-            or review.get("portfolio_cycle_id"),
+            "id": cycle_id,
             "status": status,
-            "marketMode": preflight.get("market_mode")
-            or candidate.get("market_mode")
-            or review.get("market_mode"),
+            "marketMode": market_mode,
             "candidateCount": candidate_count,
             "selectedSymbols": selected,
             "executionAttempted": bool_value(candidate.get("execute_requested")),
             "executionStatus": execution_status,
             "executionReason": execution_reason,
-            "partialFillDetected": bool_value(cycle.get("partial_fill_detected")),
+            "partialFillDetected": partial_fill,
         },
-        "phases": phase_rows,
-        "account": safe_account(source, review),
+        "phases": phases,
+        "account": safe_account(source, review, preflight),
         "positions": safe_rows(source, "positions"),
         "openOrders": safe_rows(source, "orders"),
         "signals": signals,
         "response": response,
-        "partial_fill_detected": bool_value(cycle.get("partial_fill_detected")),
+        "partial_fill_detected": partial_fill,
         "cycle_status": status,
         "warnings": report_warnings,
         "error": None
@@ -442,7 +447,7 @@ def workflow_from_env() -> dict[str, Any]:
     }
 
 
-def main() -> int:
+def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "--preflight", type=Path, default=Path("reports/hourly-preflight.json")
@@ -471,13 +476,25 @@ def main() -> int:
         type=Path,
         default=Path("reports/hourly-auto-trading-report.json"),
     )
-    args = parser.parse_args()
+    return parser.parse_args()
+
+
+def main() -> int:
+    args = parse_args()
     preflight, w1 = load_json(args.preflight)
     cycle, w2 = load_json(args.cycle)
     discovery, w3 = load_json(args.discovery)
     review, w4 = load_json(args.review)
     manager, w5 = load_json(args.manager)
     dashboard_state, w6 = load_json(args.dashboard_state)
+    if not dashboard_state and preflight.get("status") == "ready":
+        try:
+            dashboard_state = capture_dashboard_state(
+                preflight=preflight, output_path=args.dashboard_state
+            )
+            w6 = None
+        except RuntimeSafetyError as exc:
+            w6 = f"Dashboard state capture unavailable: {type(exc).__name__}"
     outcomes = {
         key: os.getenv(env, "unknown")
         for key, env in {
