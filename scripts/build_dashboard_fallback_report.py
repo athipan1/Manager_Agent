@@ -14,6 +14,8 @@ PAPER_WORKFLOWS = {
     "Manual Alpaca Paper Trading",
 }
 FAILED_CONCLUSIONS = {"failure", "cancelled", "timed_out", "action_required"}
+VALID_RUNTIME_MODES = {"PAPER", "SIMULATOR"}
+VALID_BROKER_MODES = {"ALPACA", "SIMULATOR"}
 
 
 def as_dict(value: Any) -> dict[str, Any]:
@@ -48,10 +50,35 @@ def workflow_error(conclusion: str) -> dict[str, str] | None:
     }
 
 
+def paper_workflow(metadata: Mapping[str, Any]) -> bool:
+    return str(metadata.get("workflowName") or "Hourly Auto Trading") in PAPER_WORKFLOWS
+
+
+def normalized_runtime(
+    previous: Mapping[str, Any], metadata: Mapping[str, Any]
+) -> tuple[str, str, bool]:
+    runtime = as_dict(previous.get("runtime"))
+    raw_mode = str(runtime.get("mode") or "").upper()
+    if raw_mode == "ALPACA_PAPER":
+        raw_mode = "PAPER"
+    is_paper = paper_workflow(metadata) or raw_mode == "PAPER"
+    mode = raw_mode if raw_mode in VALID_RUNTIME_MODES else (
+        "PAPER" if is_paper else "SIMULATOR"
+    )
+    raw_broker = str(runtime.get("brokerMode") or "").upper()
+    broker = raw_broker if raw_broker in VALID_BROKER_MODES else (
+        "ALPACA" if mode == "PAPER" else "SIMULATOR"
+    )
+    dry_run = bool(runtime.get("dryRun", mode != "PAPER"))
+    if mode == "PAPER":
+        broker = "ALPACA"
+        dry_run = False
+    return mode, broker, dry_run
+
+
 def minimal_report(metadata: Mapping[str, Any]) -> dict[str, Any]:
-    workflow_name = str(metadata.get("workflowName") or "Hourly Auto Trading")
     conclusion = str(metadata.get("conclusion") or "unknown").lower()
-    paper = workflow_name in PAPER_WORKFLOWS
+    paper = paper_workflow(metadata)
     generated_at = (
         metadata.get("completedAt")
         or metadata.get("startedAt")
@@ -71,18 +98,20 @@ def minimal_report(metadata: Mapping[str, Any]) -> dict[str, Any]:
         if conclusion == "skipped"
         else "hourly_artifact_unavailable"
     )
+    mode = "PAPER" if paper else "SIMULATOR"
+    broker = "ALPACA" if paper else "SIMULATOR"
     return {
         "generated_at": generated_at,
         "workflow": as_dict(metadata),
         "runtime": {
-            "mode": "PAPER" if paper else "SIMULATOR",
-            "brokerMode": "ALPACA" if paper else "SIMULATOR",
+            "mode": mode,
+            "brokerMode": broker,
             "dryRun": not paper,
             "liveTradingEnabled": False,
             "flow": "hourly_portfolio_cycle",
         },
-        "mode": "PAPER" if paper else "SIMULATOR",
-        "broker_mode": "ALPACA" if paper else "SIMULATOR",
+        "mode": mode,
+        "broker_mode": broker,
         "flow": "hourly_portfolio_cycle",
         "request": {
             "portfolio_cycle_id": None,
@@ -132,16 +161,36 @@ def minimal_report(metadata: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
+def has_verified_dashboard_data(previous: Mapping[str, Any]) -> bool:
+    if previous.get("schemaVersion") != "dashboard-snapshot.v2":
+        return False
+    runtime = as_dict(previous.get("runtime"))
+    raw_mode = str(runtime.get("mode") or "").upper()
+    cycle = as_dict(previous.get("cycle"))
+    return (
+        raw_mode in VALID_RUNTIME_MODES | {"ALPACA_PAPER"}
+        and str(cycle.get("status") or "").lower() not in {"", "unknown"}
+    ) or bool(
+        as_list(previous.get("positions"))
+        or as_list(previous.get("openOrders"))
+        or as_list(previous.get("signals"))
+        or previous.get("lastSuccessfulRun")
+    )
+
+
 def retained_report(
     previous: Mapping[str, Any], metadata: Mapping[str, Any]
 ) -> dict[str, Any]:
-    if previous.get("schemaVersion") != "dashboard-snapshot.v2":
+    if not has_verified_dashboard_data(previous):
         return minimal_report(metadata)
     runtime = as_dict(previous.get("runtime"))
     cycle = as_dict(previous.get("cycle"))
     summary = as_dict(previous.get("summary"))
+    mode, broker, dry_run = normalized_runtime(previous, metadata)
     warnings = [
-        str(item)[:280] for item in as_list(previous.get("warnings")) if item not in (None, "")
+        str(item)[:280]
+        for item in as_list(previous.get("warnings"))
+        if item not in (None, "")
     ]
     warnings.append(
         "No newer verified hourly artifact was available; the last dashboard data is retained."
@@ -154,14 +203,14 @@ def retained_report(
         or datetime.now(timezone.utc).isoformat(),
         "workflow": as_dict(metadata),
         "runtime": {
-            "mode": runtime.get("mode") or "PAPER",
-            "brokerMode": runtime.get("brokerMode") or "ALPACA",
-            "dryRun": bool(runtime.get("dryRun", False)),
+            "mode": mode,
+            "brokerMode": broker,
+            "dryRun": dry_run,
             "liveTradingEnabled": False,
             "flow": runtime.get("flow") or "hourly_portfolio_cycle",
         },
-        "mode": runtime.get("mode") or "PAPER",
-        "broker_mode": runtime.get("brokerMode") or "ALPACA",
+        "mode": mode,
+        "broker_mode": broker,
         "flow": runtime.get("flow") or "hourly_portfolio_cycle",
         "request": {
             "portfolio_cycle_id": cycle.get("id"),
@@ -202,9 +251,9 @@ def main() -> int:
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
 
-    previous = load_json(args.previous)
-    metadata = load_json(args.workflow_metadata)
-    report = retained_report(previous, metadata)
+    report = retained_report(
+        load_json(args.previous), load_json(args.workflow_metadata)
+    )
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(
         json.dumps(report, ensure_ascii=False, indent=2, allow_nan=False) + "\n",
