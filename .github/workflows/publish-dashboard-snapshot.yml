@@ -5,59 +5,116 @@ on:
     workflows: ["Hourly Auto Trading"]
     types: [completed]
   workflow_dispatch:
+    inputs:
+      run_id:
+        description: "Optional Hourly Auto Trading run ID; latest completed run is used when empty"
+        required: false
+        default: ""
 
 permissions:
   actions: read
   contents: write
 
 concurrency:
-  group: publish-dashboard-snapshot
-  cancel-in-progress: true
+  group: publish-dashboard-snapshot-dashboard-data
+  cancel-in-progress: false
 
 jobs:
   publish-dashboard-snapshot:
-    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
+    env:
+      DASHBOARD_SNAPSHOT_PRIVACY_MODE: ${{ vars.DASHBOARD_SNAPSHOT_PRIVACY_MODE || 'masked' }}
     steps:
-      - name: Checkout Manager_Agent
+      - name: Checkout Manager source
         uses: actions/checkout@v4
+        with:
+          ref: main
+          path: source
 
-      - name: Download latest hourly trading artifact
+      - name: Checkout persistent dashboard data branch
+        uses: actions/checkout@v4
+        with:
+          ref: dashboard-data
+          path: dashboard-data
+          fetch-depth: 0
+
+      - name: Resolve completed Hourly run metadata
+        id: hourly_run
         env:
           GH_TOKEN: ${{ github.token }}
+          REQUESTED_RUN_ID: ${{ inputs.run_id || '' }}
+          EVENT_RUN_ID: ${{ github.event.workflow_run.id || '' }}
         run: |
-          mkdir -p reports
-          if [ "${{ github.event_name }}" = "workflow_run" ]; then
-            gh run download "${{ github.event.workflow_run.id }}" \
-              --name hourly-auto-trading-report \
-              --dir reports
-          else
-            latest_run_id=$(gh run list \
+          set -euo pipefail
+          run_id="${EVENT_RUN_ID:-${REQUESTED_RUN_ID:-}}"
+          if [ -z "$run_id" ]; then
+            run_id=$(gh run list \
               --workflow "Hourly Auto Trading" \
               --branch main \
-              --status success \
               --limit 1 \
               --json databaseId \
-              --jq '.[0].databaseId')
-            if [ -z "$latest_run_id" ] || [ "$latest_run_id" = "null" ]; then
-              echo "No successful Hourly Auto Trading run found."
-              exit 1
-            fi
-            gh run download "$latest_run_id" \
-              --name hourly-auto-trading-report \
-              --dir reports
+              --jq '.[0].databaseId // empty')
           fi
+          if [ -z "$run_id" ]; then
+            echo "No completed Hourly Auto Trading run was found."
+            exit 1
+          fi
+          mkdir -p source/reports
+          gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}" \
+            --jq '{runId: .id, runNumber: .run_number, runUrl: .html_url, eventName: .event, status: .status, conclusion: (.conclusion // "unknown"), startedAt: .run_started_at, completedAt: .updated_at}' \
+            > source/reports/workflow-metadata.json
+          echo "run_id=$run_id" >> "$GITHUB_OUTPUT"
 
-      - name: Export frontend-safe snapshot JSON
+      - name: Download hourly report artifact when available
+        id: download
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ steps.hourly_run.outputs.run_id }}
         run: |
-          mkdir -p docs/dashboard
+          mkdir -p source/reports/hourly-artifact
+          gh run download "$RUN_ID" \
+            --name hourly-auto-trading-report \
+            --dir source/reports/hourly-artifact
+
+      - name: Export frontend-safe snapshot v2 or workflow fallback
+        working-directory: source
+        run: |
+          set -euo pipefail
+          input_path=$(find reports/hourly-artifact -type f -name hourly-auto-trading-report.json -print -quit || true)
+          if [ -z "$input_path" ]; then
+            input_path=reports/hourly-artifact/hourly-auto-trading-report.json
+          fi
           python scripts/export_dashboard_snapshot.py \
-            --input reports/hourly-auto-trading-report.json \
-            --output docs/dashboard/latest-dashboard-snapshot.json
-          cp docs/dashboard/latest-dashboard-snapshot.json reports/latest-dashboard-snapshot.json
+            --input "$input_path" \
+            --workflow-metadata reports/workflow-metadata.json \
+            --previous ../dashboard-data/docs/dashboard/latest-dashboard-snapshot.json \
+            --output reports/latest-dashboard-snapshot.json \
+            --privacy-mode "$DASHBOARD_SNAPSHOT_PRIVACY_MODE" \
+            --expected-interval-minutes 60 \
+            --stale-after-minutes 120
+          mkdir -p ../dashboard-data/docs/dashboard
+          cp reports/latest-dashboard-snapshot.json ../dashboard-data/docs/dashboard/latest-dashboard-snapshot.json
 
-      - name: Commit public dashboard snapshot
+      - name: Validate public snapshot contract
+        working-directory: source
         run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          payload = json.loads(Path('reports/latest-dashboard-snapshot.json').read_text(encoding='utf-8'))
+          assert payload['schemaVersion'] == 'dashboard-snapshot.v2'
+          assert payload['runtime']['liveTradingEnabled'] is False
+          assert 'error' in payload and 'freshness' in payload and 'lastSuccessfulRun' in payload
+          forbidden = ('authorization', 'github_token', 'operator_token', 'api_key', 'secret_key', 'password', 'client_order_id')
+          serialized = json.dumps(payload).lower()
+          assert not any(item in serialized for item in forbidden)
+          PY
+
+      - name: Commit snapshot to dashboard-data with bounded retry
+        working-directory: dashboard-data
+        run: |
+          set -euo pipefail
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add docs/dashboard/latest-dashboard-snapshot.json
@@ -66,11 +123,21 @@ jobs:
             exit 0
           fi
           git commit -m "chore: publish latest dashboard snapshot [skip ci]"
-          git push
+          for attempt in 1 2 3; do
+            git pull --rebase origin dashboard-data
+            if git push origin HEAD:dashboard-data; then
+              exit 0
+            fi
+            sleep $((attempt * 2))
+          done
+          echo "Snapshot push failed after bounded retries."
+          exit 1
 
-      - name: Upload dashboard snapshot artifact
+      - name: Upload generated dashboard snapshot
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: latest-dashboard-snapshot
-          path: reports/latest-dashboard-snapshot.json
-          if-no-files-found: error
+          path: source/reports/latest-dashboard-snapshot.json
+          if-no-files-found: warn
+          retention-days: 30
