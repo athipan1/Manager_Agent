@@ -20,6 +20,7 @@ on:
       - "scripts/build_dashboard_fallback_report.py"
       - "scripts/build_hourly_operator_artifact.py"
       - "scripts/capture_hourly_dashboard_state.py"
+      - "scripts/normalize_hourly_operator_report.py"
       - "scripts/export_dashboard_snapshot.py"
 
 permissions:
@@ -122,7 +123,7 @@ jobs:
             --workflow-metadata reports/workflow-metadata.json \
             --output reports/hourly-artifact/hourly-auto-trading-report.json
 
-      - name: Export frontend-safe snapshot v2
+      - name: Normalize and export frontend-safe snapshot v2
         working-directory: source
         run: |
           set -euo pipefail
@@ -131,8 +132,11 @@ jobs:
             echo "Resolved Paper run did not provide a usable operator artifact."
             exit 1
           fi
-          python scripts/export_dashboard_snapshot.py \
+          python scripts/normalize_hourly_operator_report.py \
             --input "$input_path" \
+            --output reports/normalized-hourly-auto-trading-report.json
+          python scripts/export_dashboard_snapshot.py \
+            --input reports/normalized-hourly-auto-trading-report.json \
             --workflow-metadata reports/workflow-metadata.json \
             --previous ../dashboard-data/docs/dashboard/latest-dashboard-snapshot.json \
             --output reports/latest-dashboard-snapshot.json \
