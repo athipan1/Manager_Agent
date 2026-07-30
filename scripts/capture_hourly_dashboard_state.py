@@ -143,9 +143,9 @@ def build_dashboard_state(
         "market_mode": preflight.get("market_mode"),
         "runtime": {
             "mode": "PAPER" if paper else "SIMULATOR",
-            "brokerMode": "ALPACA" if paper else str(
-                runtime_report.get("broker_mode") or "SIMULATOR"
-            ).upper(),
+            "brokerMode": "ALPACA"
+            if paper
+            else str(runtime_report.get("broker_mode") or "SIMULATOR").upper(),
             "dryRun": not paper,
             "liveTradingEnabled": False,
         },
@@ -169,6 +169,52 @@ def load_preflight(path: Path) -> dict[str, Any]:
     return payload
 
 
+def capture_dashboard_state(
+    *, preflight: Mapping[str, Any], output_path: Path | None = None
+) -> dict[str, Any]:
+    if preflight.get("status") != "ready":
+        raise RuntimeSafetyError("Hourly preflight did not reach ready state.")
+    correlation_id = str(
+        preflight.get("portfolio_cycle_id") or os.getenv("GITHUB_RUN_ID") or "hourly"
+    )
+    execution_key = os.getenv("EXECUTION_API_KEY", "").strip()
+    client = JsonHttpClient(
+        os.getenv("EXECUTION_AGENT_URL", "http://localhost:8006"),
+        "Execution_Agent dashboard state",
+        {"X-API-KEY": execution_key} if execution_key else {},
+        timeout_seconds=30,
+    )
+    account_id = os.getenv("DEFAULT_ACCOUNT_ID", "1")
+    broker_state = as_dict(
+        unwrap(
+            client.request(
+                f"/broker/state?account_id={account_id}",
+                correlation_id=correlation_id,
+            )
+        )
+    )
+    diagnostics = as_dict(
+        unwrap(
+            client.request(
+                "/broker/protection-diagnostics",
+                correlation_id=correlation_id,
+            )
+        )
+    )
+    report = build_dashboard_state(
+        preflight=preflight,
+        broker_state=broker_state,
+        protection_diagnostics=diagnostics,
+    )
+    if output_path is not None:
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_text(
+            json.dumps(report, ensure_ascii=False, indent=2, allow_nan=False) + "\n",
+            encoding="utf-8",
+        )
+    return report
+
+
 def main() -> int:
     preflight_path = Path(
         os.getenv("HOURLY_PREFLIGHT_REPORT", "reports/hourly-preflight.json")
@@ -177,43 +223,8 @@ def main() -> int:
         os.getenv("HOURLY_DASHBOARD_STATE_REPORT", "reports/hourly-dashboard-state.json")
     )
     try:
-        preflight = load_preflight(preflight_path)
-        correlation_id = str(
-            preflight.get("portfolio_cycle_id") or os.getenv("GITHUB_RUN_ID") or "hourly"
-        )
-        execution_key = os.getenv("EXECUTION_API_KEY", "").strip()
-        client = JsonHttpClient(
-            os.getenv("EXECUTION_AGENT_URL", "http://localhost:8006"),
-            "Execution_Agent dashboard state",
-            {"X-API-KEY": execution_key} if execution_key else {},
-            timeout_seconds=30,
-        )
-        account_id = os.getenv("DEFAULT_ACCOUNT_ID", "1")
-        broker_state = as_dict(
-            unwrap(
-                client.request(
-                    f"/broker/state?account_id={account_id}",
-                    correlation_id=correlation_id,
-                )
-            )
-        )
-        diagnostics = as_dict(
-            unwrap(
-                client.request(
-                    "/broker/protection-diagnostics",
-                    correlation_id=correlation_id,
-                )
-            )
-        )
-        report = build_dashboard_state(
-            preflight=preflight,
-            broker_state=broker_state,
-            protection_diagnostics=diagnostics,
-        )
-        output_path.parent.mkdir(parents=True, exist_ok=True)
-        output_path.write_text(
-            json.dumps(report, ensure_ascii=False, indent=2, allow_nan=False) + "\n",
-            encoding="utf-8",
+        report = capture_dashboard_state(
+            preflight=load_preflight(preflight_path), output_path=output_path
         )
         print(
             "Captured frontend-safe broker state: "
