@@ -308,6 +308,7 @@ jobs:
         run: python scripts/emergency_halt_drill.py
 
       - name: Review existing positions, orders, regime, exposure and protection
+        id: portfolio_review
         working-directory: Manager_Agent
         env:
           MANAGER_AGENT_URL: http://localhost:8000
@@ -322,6 +323,7 @@ jobs:
         run: python scripts/hourly_portfolio_cycle.py prepare
 
       - name: Reconcile exact Paper protective orders
+        id: protection_reconciliation
         if: steps.preflight.outputs.paper_automation == 'true'
         working-directory: Manager_Agent
         env:
@@ -343,6 +345,7 @@ jobs:
             --github-output "$GITHUB_OUTPUT"
 
       - name: Run exact Backtest and publish to runtime Database_Agent
+        id: backtest
         if: steps.scanner_preselection.outputs.backtest_symbols != ''
         working-directory: Manager_Agent
         env:
@@ -356,6 +359,7 @@ jobs:
           python scripts/verify_backtest_publish.py reports/hourly-backtest-result.json
 
       - name: Record safe no-candidate cycle
+        id: no_candidate
         if: steps.scanner_preselection.outputs.backtest_symbols == ''
         working-directory: Manager_Agent
         run: python scripts/record_no_candidate_cycle.py
@@ -368,6 +372,7 @@ jobs:
         run: python scripts/paper_trading_control.py assert-clear
 
       - name: Run Manager candidate, Risk and guarded Execution cycle
+        id: trade
         if: steps.scanner_preselection.outputs.backtest_symbols != ''
         working-directory: Manager_Agent
         env:
@@ -377,6 +382,7 @@ jobs:
         run: python scripts/hourly_portfolio_cycle.py trade
 
       - name: Verify fills, protection and post-execution reconciliation
+        id: final_reconciliation
         working-directory: Manager_Agent
         env:
           EXECUTION_AGENT_URL: http://localhost:8006
@@ -386,9 +392,19 @@ jobs:
       - name: Render operator report
         if: always()
         working-directory: Manager_Agent
+        env:
+          PHASE_PREFLIGHT_STATUS: ${{ steps.preflight.outcome }}
+          PHASE_PORTFOLIO_REVIEW_STATUS: ${{ steps.portfolio_review.outcome }}
+          PHASE_PROTECTION_STATUS: ${{ steps.protection_reconciliation.outcome }}
+          PHASE_SCANNER_STATUS: ${{ steps.scanner_preselection.outcome }}
+          PHASE_BACKTEST_STATUS: ${{ steps.backtest.outcome }}
+          PHASE_RISK_STATUS: ${{ steps.trade.outcome }}
+          PHASE_EXECUTION_STATUS: ${{ steps.trade.outcome }}
+          PHASE_FINAL_STATUS: ${{ steps.final_reconciliation.outcome }}
+          WORKFLOW_OUTCOME: ${{ job.status }}
         run: |
+          python scripts/build_hourly_operator_artifact.py
           if [ -f reports/hourly-portfolio-cycle.json ]; then
-            python scripts/build_hourly_operator_artifact.py
             PYTHONPATH=. python scripts/render_hourly_portfolio_report.py || true
           fi
 
