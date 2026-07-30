@@ -50,7 +50,7 @@ jobs:
           path: dashboard-data
           fetch-depth: 0
 
-      - name: Resolve latest artifact-producing Paper run
+      - name: Resolve triggering Paper run
         id: hourly_run
         env:
           GH_TOKEN: ${{ github.token }}
@@ -66,10 +66,19 @@ jobs:
               --jq '[.artifacts[] | select(.name == "hourly-auto-trading-report" and (.expired | not))] | length')" -gt 0 ]
           }
 
-          run_id="${REQUESTED_RUN_ID:-${EVENT_RUN_ID:-}}"
+          run_id=""
           artifact_found=false
-          if has_hourly_artifact "$run_id"; then
-            artifact_found=true
+          run_is_authoritative=false
+
+          # A workflow_run event must publish that exact run. Never replace a
+          # skipped, failed or artifact-less current run with an older artifact,
+          # otherwise the public dashboard stops advancing every hour.
+          if [ -n "${EVENT_RUN_ID:-}" ]; then
+            run_id="$EVENT_RUN_ID"
+            run_is_authoritative=true
+          elif [ -n "${REQUESTED_RUN_ID:-}" ]; then
+            run_id="$REQUESTED_RUN_ID"
+            run_is_authoritative=true
           else
             latest_artifact_run=$(gh api \
               "repos/${GITHUB_REPOSITORY}/actions/artifacts?name=hourly-auto-trading-report&per_page=100" \
@@ -80,6 +89,10 @@ jobs:
             fi
           fi
 
+          if [ "$artifact_found" != true ] && has_hourly_artifact "$run_id"; then
+            artifact_found=true
+          fi
+
           if [ -z "$run_id" ]; then
             run_id=$(gh run list \
               --workflow "Hourly Auto Trading" \
@@ -87,6 +100,10 @@ jobs:
               --limit 1 \
               --json databaseId \
               --jq '.[0].databaseId // empty')
+            run_is_authoritative=true
+            if has_hourly_artifact "$run_id"; then
+              artifact_found=true
+            fi
           fi
           if [ -z "$run_id" ]; then
             echo "No completed Paper workflow run was found."
@@ -99,6 +116,7 @@ jobs:
             > source/reports/workflow-metadata.json
           echo "run_id=$run_id" >> "$GITHUB_OUTPUT"
           echo "artifact_found=$artifact_found" >> "$GITHUB_OUTPUT"
+          echo "run_is_authoritative=$run_is_authoritative" >> "$GITHUB_OUTPUT"
 
       - name: Download verified hourly report artifact
         id: download
@@ -113,13 +131,19 @@ jobs:
             --name hourly-auto-trading-report \
             --dir source/reports/hourly-artifact
 
-      - name: Build retained fallback report when no artifact exists
+      - name: Build current-run fallback report when no artifact exists
         if: steps.hourly_run.outputs.artifact_found != 'true'
         working-directory: source
         run: |
           mkdir -p reports/hourly-artifact
+          previous_path="../dashboard-data/docs/dashboard/latest-dashboard-snapshot.json"
+          if [ "${{ steps.hourly_run.outputs.run_is_authoritative }}" = "true" ]; then
+            # Build a metadata-only report for the current run. The exporter still
+            # receives the previous snapshot separately and preserves lastSuccessfulRun.
+            previous_path="reports/current-run-no-previous-snapshot.json"
+          fi
           python scripts/build_dashboard_fallback_report.py \
-            --previous ../dashboard-data/docs/dashboard/latest-dashboard-snapshot.json \
+            --previous "$previous_path" \
             --workflow-metadata reports/workflow-metadata.json \
             --output reports/hourly-artifact/hourly-auto-trading-report.json
 
