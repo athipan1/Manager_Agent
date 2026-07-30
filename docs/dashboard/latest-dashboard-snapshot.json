@@ -1,16 +1,16 @@
 {
   "schemaVersion": "dashboard-snapshot.v2",
-  "generatedAt": "2026-07-30T12:08:31.237131Z",
+  "generatedAt": "2026-07-30T15:28:50.403972Z",
   "workflow": {
-    "runId": 30540953397,
-    "runNumber": 13,
-    "runUrl": "https://github.com/athipan1/Manager_Agent/actions/runs/30540953397",
-    "eventName": "schedule",
+    "runId": 30556865069,
+    "runNumber": 613,
+    "runUrl": "https://github.com/athipan1/Manager_Agent/actions/runs/30556865069",
+    "eventName": "workflow_dispatch",
     "status": "completed",
-    "conclusion": "success",
-    "startedAt": "2026-07-30T12:03:07Z",
-    "completedAt": "2026-07-30T12:09:02Z",
-    "durationSeconds": 355.0
+    "conclusion": "failure",
+    "startedAt": "2026-07-30T15:28:42Z",
+    "completedAt": "2026-07-30T15:28:56Z",
+    "durationSeconds": 14.0
   },
   "runtime": {
     "mode": "PAPER",
@@ -20,22 +20,11 @@
     "flow": "hourly_portfolio_cycle"
   },
   "cycle": {
-    "id": "hourly-paper-4fd6d3db930a-20260730T12",
-    "status": "completed",
-    "marketMode": "PORTFOLIO_REVIEW_ONLY",
-    "candidateCount": 10,
-    "selectedSymbols": [
-      "BANX",
-      "YB",
-      "MAKO",
-      "NAGE",
-      "BSX",
-      "SMCI",
-      "RAIL",
-      "YDDL",
-      "IBAC",
-      "NAMM"
-    ],
+    "id": null,
+    "status": "failure",
+    "marketMode": null,
+    "candidateCount": 0,
+    "selectedSymbols": [],
     "executionAttempted": false,
     "executionStatus": "not_attempted",
     "executionReason": "no_preselected_backtest_symbols",
@@ -44,65 +33,76 @@
   "phases": [
     {
       "name": "preflight",
-      "status": "success",
+      "status": "failure",
       "message": null
     },
     {
       "name": "portfolio_review",
-      "status": "success",
+      "status": "skipped",
       "message": null
     },
     {
       "name": "protection_reconciliation",
-      "status": "success",
+      "status": "skipped",
       "message": null
     },
     {
       "name": "scanner",
-      "status": "success",
-      "message": null
+      "status": "skipped",
+      "message": "No candidate passed the score threshold"
     },
     {
       "name": "backtest",
       "status": "skipped",
-      "message": null
+      "message": "No scanner symbols"
     },
     {
       "name": "risk",
       "status": "skipped",
-      "message": null
+      "message": "No candidate"
     },
     {
       "name": "execution",
-      "status": "skipped",
+      "status": "not_attempted",
       "message": "no_preselected_backtest_symbols"
     },
     {
       "name": "final_reconciliation",
-      "status": "success",
+      "status": "skipped",
       "message": null
     }
   ],
   "account": {
-    "cash": 103248.01,
-    "equity": 103248.01,
-    "buyingPower": 412992.04,
-    "status": "ACTIVE",
-    "lastSyncedAt": "2026-07-30T12:08:36.263691Z",
+    "cash": null,
+    "equity": null,
+    "buyingPower": null,
+    "status": null,
+    "lastSyncedAt": "2026-07-30T15:28:50.403972Z",
     "valuesMasked": false
   },
   "summary": {
     "positionCount": 0,
     "openOrderCount": 0,
-    "candidateCount": 10,
+    "candidateCount": 0,
     "executionStatus": "not_attempted",
     "executionReason": "no_preselected_backtest_symbols"
   },
   "positions": [],
   "openOrders": [],
   "signals": [],
-  "warnings": [],
-  "error": null,
+  "warnings": [
+    "Missing phase report: hourly-preflight.json",
+    "Missing phase report: hourly-portfolio-cycle.json",
+    "Missing phase report: hourly-pre-backtest-discovery.json",
+    "Missing phase report: hourly-position-review.json",
+    "Missing phase report: hourly-manager-cycle.json",
+    "Missing phase report: hourly-dashboard-state.json",
+    "Frontend-safe broker snapshot was unavailable; portfolio rows may be incomplete."
+  ],
+  "error": {
+    "code": "HOURLY_CYCLE_FAILED",
+    "message": "Hourly cycle did not complete successfully."
+  },
   "lastSuccessfulRun": {
     "generatedAt": "2026-07-30T12:08:31.237131Z",
     "runId": 30540953397,
@@ -111,8 +111,8 @@
   },
   "freshness": {
     "expectedIntervalMinutes": 60,
-    "ageMinutes": 186.81,
-    "isStale": true,
+    "ageMinutes": 0.4,
+    "isStale": false,
     "staleAfterMinutes": 120
   },
   "privacy": {
