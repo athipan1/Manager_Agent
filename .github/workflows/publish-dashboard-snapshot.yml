@@ -17,6 +17,7 @@ on:
     branches: [main]
     paths:
       - ".github/workflows/publish-dashboard-snapshot.yml"
+      - "scripts/build_dashboard_fallback_report.py"
       - "scripts/build_hourly_operator_artifact.py"
       - "scripts/capture_hourly_dashboard_state.py"
       - "scripts/export_dashboard_snapshot.py"
@@ -111,13 +112,24 @@ jobs:
             --name hourly-auto-trading-report \
             --dir source/reports/hourly-artifact
 
-      - name: Export frontend-safe snapshot v2 or retained fallback
+      - name: Build retained fallback report when no artifact exists
+        if: steps.hourly_run.outputs.artifact_found != 'true'
+        working-directory: source
+        run: |
+          mkdir -p reports/hourly-artifact
+          python scripts/build_dashboard_fallback_report.py \
+            --previous ../dashboard-data/docs/dashboard/latest-dashboard-snapshot.json \
+            --workflow-metadata reports/workflow-metadata.json \
+            --output reports/hourly-artifact/hourly-auto-trading-report.json
+
+      - name: Export frontend-safe snapshot v2
         working-directory: source
         run: |
           set -euo pipefail
           input_path=$(find reports/hourly-artifact -type f -name hourly-auto-trading-report.json -print -quit 2>/dev/null || true)
           if [ -z "$input_path" ]; then
-            input_path=reports/hourly-artifact/hourly-auto-trading-report.json
+            echo "Resolved Paper run did not provide a usable operator artifact."
+            exit 1
           fi
           python scripts/export_dashboard_snapshot.py \
             --input "$input_path" \
