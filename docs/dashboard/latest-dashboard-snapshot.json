@@ -1,16 +1,16 @@
 {
   "schemaVersion": "dashboard-snapshot.v2",
-  "generatedAt": "2026-07-30T15:39:19.020876Z",
+  "generatedAt": "2026-07-30T15:46:28.421972Z",
   "workflow": {
-    "runId": 30557735484,
-    "runNumber": 614,
-    "runUrl": "https://github.com/athipan1/Manager_Agent/actions/runs/30557735484",
+    "runId": 30557899567,
+    "runNumber": 615,
+    "runUrl": "https://github.com/athipan1/Manager_Agent/actions/runs/30557899567",
     "eventName": "workflow_dispatch",
     "status": "completed",
-    "conclusion": "failure",
-    "startedAt": "2026-07-30T15:39:13Z",
-    "completedAt": "2026-07-30T15:39:22Z",
-    "durationSeconds": 9.0
+    "conclusion": "success",
+    "startedAt": "2026-07-30T15:41:11Z",
+    "completedAt": "2026-07-30T15:46:49Z",
+    "durationSeconds": 338.0
   },
   "runtime": {
     "mode": "PAPER",
@@ -20,11 +20,22 @@
     "flow": "hourly_portfolio_cycle"
   },
   "cycle": {
-    "id": null,
-    "status": "failure",
-    "marketMode": null,
-    "candidateCount": 0,
-    "selectedSymbols": [],
+    "id": "hourly-paper-4fd6d3db930a-20260730T15",
+    "status": "completed",
+    "marketMode": "REVIEW_AND_TRADE",
+    "candidateCount": 10,
+    "selectedSymbols": [
+      "BANX",
+      "YB",
+      "MAKO",
+      "NAGE",
+      "BSX",
+      "META",
+      "SMCI",
+      "YDDL",
+      "IBAC",
+      "NAMM"
+    ],
     "executionAttempted": false,
     "executionStatus": "not_attempted",
     "executionReason": "no_preselected_backtest_symbols",
@@ -33,85 +44,74 @@
   "phases": [
     {
       "name": "preflight",
-      "status": "failure",
+      "status": "success",
       "message": null
     },
     {
       "name": "portfolio_review",
-      "status": "skipped",
+      "status": "success",
       "message": null
     },
     {
       "name": "protection_reconciliation",
-      "status": "skipped",
+      "status": "success",
       "message": null
     },
     {
       "name": "scanner",
-      "status": "skipped",
-      "message": "No candidate passed the score threshold"
+      "status": "success",
+      "message": null
     },
     {
       "name": "backtest",
       "status": "skipped",
-      "message": "No scanner symbols"
+      "message": null
     },
     {
       "name": "risk",
       "status": "skipped",
-      "message": "No candidate"
+      "message": null
     },
     {
       "name": "execution",
-      "status": "not_attempted",
+      "status": "skipped",
       "message": "no_preselected_backtest_symbols"
     },
     {
       "name": "final_reconciliation",
-      "status": "skipped",
+      "status": "success",
       "message": null
     }
   ],
   "account": {
-    "cash": null,
-    "equity": null,
-    "buyingPower": null,
-    "status": null,
-    "lastSyncedAt": "2026-07-30T15:39:19.020876Z",
+    "cash": 103248.01,
+    "equity": 103248.01,
+    "buyingPower": 412992.04,
+    "status": "ACTIVE",
+    "lastSyncedAt": "2026-07-30T15:46:32.624311Z",
     "valuesMasked": false
   },
   "summary": {
     "positionCount": 0,
     "openOrderCount": 0,
-    "candidateCount": 0,
+    "candidateCount": 10,
     "executionStatus": "not_attempted",
     "executionReason": "no_preselected_backtest_symbols"
   },
   "positions": [],
   "openOrders": [],
   "signals": [],
-  "warnings": [
-    "Missing phase report: hourly-preflight.json",
-    "Missing phase report: hourly-portfolio-cycle.json",
-    "Missing phase report: hourly-pre-backtest-discovery.json",
-    "Missing phase report: hourly-position-review.json",
-    "Missing phase report: hourly-manager-cycle.json",
-    "Missing phase report: hourly-dashboard-state.json",
-    "Frontend-safe broker snapshot was unavailable; portfolio rows may be incomplete."
-  ],
-  "error": {
-    "code": "HOURLY_CYCLE_FAILED",
-    "message": "Hourly cycle did not complete successfully."
-  },
+  "warnings": [],
+  "error": null,
   "lastSuccessfulRun": {
-    "generatedAt": "2026-07-30T12:08:31.237131Z",
-    "runId": 30540953397,
-    "runNumber": 13,
+    "generatedAt": "2026-07-30T15:46:28.421972Z",
+    "runId": 30557899567,
+    "runNumber": 615,
     "cycleStatus": "success"
   },
   "freshness": {
     "expectedIntervalMinutes": 60,
-    "ageMinutes": 0.28,
+    "ageMinutes": 0.5,
     "isStale": false,
     "staleAfterMinutes": 120
   },
