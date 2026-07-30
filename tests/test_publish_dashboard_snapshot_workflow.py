@@ -33,18 +33,31 @@ def test_publish_workflow_contract():
     assert "DASHBOARD_SNAPSHOT_PRIVACY_MODE" in workflow
 
 
-def test_publish_workflow_prefers_a_real_artifact_over_skipped_metadata():
+def test_publish_workflow_keeps_triggering_run_authoritative():
     workflow = (
         ROOT / ".github/workflows/publish-dashboard-snapshot.yml"
     ).read_text(encoding="utf-8")
-    artifact_lookup = workflow.index(
+    event_selection = workflow.index('if [ -n "${EVENT_RUN_ID:-}" ]; then')
+    latest_artifact_lookup = workflow.index(
         "actions/artifacts?name=hourly-auto-trading-report"
     )
-    fallback_lookup = workflow.index('gh run list \\\n              --workflow "Hourly Auto Trading"')
-    assert artifact_lookup < fallback_lookup
-    assert "artifact_found=true" in workflow
-    assert "if: steps.hourly_run.outputs.artifact_found == 'true'" in workflow
-    assert "if: steps.hourly_run.outputs.artifact_found != 'true'" in workflow
+    assert event_selection < latest_artifact_lookup
+    assert 'run_id="$EVENT_RUN_ID"' in workflow
+    assert "run_is_authoritative=true" in workflow
+    assert 'if [ "$artifact_found" != true ] && has_hourly_artifact "$run_id"' in workflow
+
+
+def test_artifactless_triggering_run_uses_current_metadata_not_old_cycle():
+    workflow = (
+        ROOT / ".github/workflows/publish-dashboard-snapshot.yml"
+    ).read_text(encoding="utf-8")
+    assert "current-run-no-previous-snapshot.json" in workflow
+    assert (
+        'if [ "${{ steps.hourly_run.outputs.run_is_authoritative }}" = "true" ]'
+        in workflow
+    )
+    assert "The exporter still" in workflow
+    assert "preserves lastSuccessfulRun" in workflow
 
 
 def test_publish_workflow_normalizes_paper_mode_and_rejects_unknown():
