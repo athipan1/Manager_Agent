@@ -5,14 +5,42 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping
 
-from scripts.capture_hourly_dashboard_state import (
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from scripts.capture_hourly_dashboard_state import (  # noqa: E402
     RuntimeSafetyError,
     capture_dashboard_state,
 )
+
+PHASE_ENV = {
+    "preflight": "PHASE_PREFLIGHT_STATUS",
+    "portfolio_review": "PHASE_PORTFOLIO_REVIEW_STATUS",
+    "protection_reconciliation": "PHASE_PROTECTION_STATUS",
+    "scanner": "PHASE_SCANNER_STATUS",
+    "backtest": "PHASE_BACKTEST_STATUS",
+    "risk": "PHASE_RISK_STATUS",
+    "execution": "PHASE_EXECUTION_STATUS",
+    "final_reconciliation": "PHASE_FINAL_STATUS",
+    "workflow": "WORKFLOW_OUTCOME",
+}
+PHASE_STATUSES = {
+    "pending",
+    "running",
+    "success",
+    "warning",
+    "skipped",
+    "not_attempted",
+    "failure",
+    "cancelled",
+    "unknown",
+}
 
 
 def as_dict(value: Any) -> dict[str, Any]:
@@ -81,13 +109,13 @@ def runtime_mode(
         or "PAPER"
     ).upper()
     paper_automation = bool_value(runtime.get("paper_automation")) or (
-        trading_mode == "PAPER" and broker == "ALPACA" and not dry_run
+        trading_mode in {"PAPER", "ALPACA_PAPER"}
+        and broker == "ALPACA"
+        and not dry_run
     )
-    return ("PAPER", "ALPACA", False) if paper_automation else (
-        "SIMULATOR",
-        broker or "SIMULATOR",
-        True,
-    )
+    if paper_automation:
+        return "PAPER", "ALPACA", False
+    return "SIMULATOR", broker if broker in {"ALPACA", "SIMULATOR"} else "SIMULATOR", True
 
 
 def phase_status(value: Any, default: str = "unknown") -> str:
@@ -99,18 +127,7 @@ def phase_status(value: Any, default: str = "unknown") -> str:
         "timed_out": "failure",
         "action_required": "failure",
     }.get(status, status)
-    allowed = {
-        "pending",
-        "running",
-        "success",
-        "warning",
-        "skipped",
-        "not_attempted",
-        "failure",
-        "cancelled",
-        "unknown",
-    }
-    return status if status in allowed else "unknown"
+    return status if status in PHASE_STATUSES else "unknown"
 
 
 def phase(name: str, status: Any, message: Any = None) -> dict[str, Any]:
@@ -123,7 +140,7 @@ def phase(name: str, status: Any, message: Any = None) -> dict[str, Any]:
     }
 
 
-def symbols(rows: Any) -> list[str]:
+def selected_symbols(rows: Any) -> list[str]:
     result: list[str] = []
     for row in as_list(rows):
         value = row.get("symbol") if isinstance(row, Mapping) else row
@@ -131,12 +148,6 @@ def symbols(rows: Any) -> list[str]:
         if symbol and symbol not in result:
             result.append(symbol)
     return result
-
-
-def dashboard_source(
-    dashboard_state: Mapping[str, Any], review: Mapping[str, Any]
-) -> dict[str, Any]:
-    return as_dict(dashboard_state) or as_dict(review.get("broker_snapshot"))
 
 
 def safe_account(
@@ -156,69 +167,74 @@ def safe_account(
     }
 
 
-def safe_rows(source: Mapping[str, Any], key: str) -> list[dict[str, Any]]:
-    raw = source.get(key) or []
-    rows = as_dict(raw).get("data") if isinstance(raw, Mapping) else raw
+def safe_positions(source: Mapping[str, Any]) -> list[dict[str, Any]]:
     result: list[dict[str, Any]] = []
-    for row in as_list(rows):
+    for row in as_list(source.get("positions")):
         if not isinstance(row, Mapping):
             continue
-        if key == "positions":
-            protection = as_dict(row.get("protection"))
-            result.append(
-                {
-                    "symbol": str(row.get("symbol") or "UNKNOWN")[:16],
-                    "quantity": row.get("quantity") or row.get("qty"),
-                    "averageCost": row.get("averageCost")
-                    or row.get("average_cost")
-                    or row.get("avg_entry_price"),
-                    "currentPrice": row.get("currentPrice")
-                    or row.get("current_price")
-                    or row.get("current_market_price"),
-                    "marketValue": row.get("marketValue") or row.get("market_value"),
-                    "unrealizedPnL": row.get("unrealizedPnL")
-                    or row.get("unrealized_pl"),
-                    "bucket": row.get("bucket")
-                    or row.get("strategy_bucket")
-                    or "unassigned",
-                    "protection": {
-                        "status": protection.get("status")
-                        or row.get("protection_status")
-                        or "unknown",
-                        "hasStopLoss": bool_value(
-                            protection.get("hasStopLoss"),
-                            bool_value(row.get("has_protective_stop")),
-                        ),
-                        "hasTakeProfit": bool_value(
-                            protection.get("hasTakeProfit"),
-                            bool_value(row.get("has_take_profit")),
-                        ),
-                        "hasBracket": bool_value(
-                            protection.get("hasBracket"),
-                            bool_value(row.get("has_bracket")),
-                        ),
-                    },
-                }
-            )
-        else:
-            result.append(
-                {
-                    "symbol": str(row.get("symbol") or "UNKNOWN")[:16],
-                    "side": row.get("side"),
-                    "quantity": row.get("quantity") or row.get("qty"),
-                    "orderClass": row.get("orderClass") or row.get("order_class"),
-                    "type": row.get("type") or row.get("order_type"),
-                    "status": row.get("status") or row.get("broker_status"),
-                    "takeProfit": row.get("takeProfit")
-                    or row.get("take_profit")
-                    or row.get("limit_price"),
-                    "stopLoss": bool(
-                        row.get("stopLoss")
-                        or row.get("stop_loss")
-                        or row.get("stop_price")
+        protection = as_dict(row.get("protection"))
+        result.append(
+            {
+                "symbol": str(row.get("symbol") or "UNKNOWN")[:16],
+                "quantity": row.get("quantity") or row.get("qty"),
+                "averageCost": row.get("averageCost")
+                or row.get("average_cost")
+                or row.get("avg_entry_price"),
+                "currentPrice": row.get("currentPrice")
+                or row.get("current_price")
+                or row.get("current_market_price"),
+                "marketValue": row.get("marketValue") or row.get("market_value"),
+                "unrealizedPnL": row.get("unrealizedPnL")
+                or row.get("unrealized_pl"),
+                "bucket": row.get("bucket")
+                or row.get("strategy_bucket")
+                or "unassigned",
+                "protection": {
+                    "status": protection.get("status")
+                    or row.get("protection_status")
+                    or "unknown",
+                    "hasStopLoss": bool_value(
+                        protection.get("hasStopLoss"),
+                        bool_value(row.get("has_protective_stop")),
                     ),
-                }
-            )
+                    "hasTakeProfit": bool_value(
+                        protection.get("hasTakeProfit"),
+                        bool_value(row.get("has_take_profit")),
+                    ),
+                    "hasBracket": bool_value(
+                        protection.get("hasBracket"),
+                        bool_value(row.get("has_bracket")),
+                    ),
+                },
+            }
+        )
+    return result
+
+
+def safe_orders(source: Mapping[str, Any]) -> list[dict[str, Any]]:
+    raw = source.get("orders") or source.get("openOrders") or source.get("open_orders")
+    result: list[dict[str, Any]] = []
+    for row in as_list(raw):
+        if not isinstance(row, Mapping):
+            continue
+        result.append(
+            {
+                "symbol": str(row.get("symbol") or "UNKNOWN")[:16],
+                "side": row.get("side"),
+                "quantity": row.get("quantity") or row.get("qty"),
+                "orderClass": row.get("orderClass") or row.get("order_class"),
+                "type": row.get("type") or row.get("order_type"),
+                "status": row.get("status") or row.get("broker_status"),
+                "takeProfit": row.get("takeProfit")
+                or row.get("take_profit")
+                or row.get("limit_price"),
+                "stopLoss": bool(
+                    row.get("stopLoss")
+                    or row.get("stop_loss")
+                    or row.get("stop_price")
+                ),
+            }
+        )
     return result
 
 
@@ -285,16 +301,15 @@ def build_hourly_operator_artifact(
     review = as_dict(cycle.get("review")) or as_dict(review)
     candidate = as_dict(cycle.get("candidate_cycle")) or as_dict(manager)
     dashboard_state = as_dict(dashboard_state)
+    source = dashboard_state or as_dict(review.get("broker_snapshot"))
     manager_response = as_dict(candidate.get("manager_response"))
     manager_data = response_data(manager_response)
     discovery_data = response_data(as_dict(discovery.get("response")))
     execution = as_dict(manager_data.get("execution"))
-    ranked = (
-        manager_data.get("ranked_candidates")
-        or discovery_data.get("ranked_candidates")
-        or []
-    )
-    selected = symbols(
+    ranked = manager_data.get("ranked_candidates") or discovery_data.get(
+        "ranked_candidates"
+    ) or []
+    selected = selected_symbols(
         manager_data.get("selected_positions")
         or discovery_data.get("selected_positions")
         or ranked
@@ -354,30 +369,20 @@ def build_hourly_operator_artifact(
         else []
     )
     signals = [*manager_signals, *review_signals(review)]
-    source = dashboard_source(dashboard_state, review)
     report_warnings = [str(item)[:280] for item in (warnings or [])]
     if not source:
         report_warnings.append(
             "Frontend-safe broker snapshot was unavailable; portfolio rows may be incomplete."
         )
-    response = {
-        "status": manager_response.get("status") or "unknown",
-        "data": {
-            "execution": {
-                "status": execution_status,
-                "reason": execution_reason,
-            },
-            "scanner_count": candidate_count,
-            "top_10_symbols": selected[:10],
-            "curator_signals": signals,
-        },
-    }
-    cycle_id = preflight.get("portfolio_cycle_id") or review.get("portfolio_cycle_id")
+    cycle_id = preflight.get("portfolio_cycle_id") or review.get(
+        "portfolio_cycle_id"
+    )
     market_mode = (
         preflight.get("market_mode")
         or candidate.get("market_mode")
         or review.get("market_mode")
     )
+    execution_attempted = bool_value(candidate.get("execute_requested"))
     partial_fill = bool_value(cycle.get("partial_fill_detected"))
     return {
         "generated_at": generated_at,
@@ -395,7 +400,7 @@ def build_hourly_operator_artifact(
         "request": {
             "portfolio_cycle_id": cycle_id,
             "market_mode": market_mode,
-            "execute_requested": bool_value(candidate.get("execute_requested")),
+            "execute_requested": execution_attempted,
         },
         "cycle": {
             "id": cycle_id,
@@ -403,17 +408,28 @@ def build_hourly_operator_artifact(
             "marketMode": market_mode,
             "candidateCount": candidate_count,
             "selectedSymbols": selected,
-            "executionAttempted": bool_value(candidate.get("execute_requested")),
+            "executionAttempted": execution_attempted,
             "executionStatus": execution_status,
             "executionReason": execution_reason,
             "partialFillDetected": partial_fill,
         },
         "phases": phases,
         "account": safe_account(source, review, preflight),
-        "positions": safe_rows(source, "positions"),
-        "openOrders": safe_rows(source, "orders"),
+        "positions": safe_positions(source),
+        "openOrders": safe_orders(source),
         "signals": signals,
-        "response": response,
+        "response": {
+            "status": manager_response.get("status") or "unknown",
+            "data": {
+                "execution": {
+                    "status": execution_status,
+                    "reason": execution_reason,
+                },
+                "scanner_count": candidate_count,
+                "top_10_symbols": selected[:10],
+                "curator_signals": signals,
+            },
+        },
         "partial_fill_detected": partial_fill,
         "cycle_status": status,
         "warnings": report_warnings,
@@ -481,33 +497,24 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> int:
     args = parse_args()
-    preflight, w1 = load_json(args.preflight)
-    cycle, w2 = load_json(args.cycle)
-    discovery, w3 = load_json(args.discovery)
-    review, w4 = load_json(args.review)
-    manager, w5 = load_json(args.manager)
-    dashboard_state, w6 = load_json(args.dashboard_state)
+    preflight, preflight_warning = load_json(args.preflight)
+    cycle, cycle_warning = load_json(args.cycle)
+    discovery, discovery_warning = load_json(args.discovery)
+    review, review_warning = load_json(args.review)
+    manager, manager_warning = load_json(args.manager)
+    dashboard_state, state_warning = load_json(args.dashboard_state)
     if not dashboard_state and preflight.get("status") == "ready":
         try:
             dashboard_state = capture_dashboard_state(
                 preflight=preflight, output_path=args.dashboard_state
             )
-            w6 = None
+            state_warning = None
         except RuntimeSafetyError as exc:
-            w6 = f"Dashboard state capture unavailable: {type(exc).__name__}"
+            state_warning = (
+                "Dashboard state capture unavailable: " f"{type(exc).__name__}"
+            )
     outcomes = {
-        key: os.getenv(env, "unknown")
-        for key, env in {
-            "preflight": "PHASE_PREFLIGHT_STATUS",
-            "portfolio_review": "PHASE_PORTFOLIO_REVIEW_STATUS",
-            "protection_reconciliation": "PHASE_PROTECTION_STATUS",
-            "scanner": "PHASE_SCANNER_STATUS",
-            "backtest": "PHASE_BACKTEST_STATUS",
-            "risk": "PHASE_RISK_STATUS",
-            "execution": "PHASE_EXECUTION_STATUS",
-            "final_reconciliation": "PHASE_FINAL_STATUS",
-            "workflow": "WORKFLOW_OUTCOME",
-        }.items()
+        key: os.getenv(env_name, "unknown") for key, env_name in PHASE_ENV.items()
     }
     artifact = build_hourly_operator_artifact(
         preflight=preflight,
@@ -518,7 +525,18 @@ def main() -> int:
         dashboard_state=dashboard_state,
         phase_outcomes=outcomes,
         workflow=workflow_from_env(),
-        warnings=[item for item in (w1, w2, w3, w4, w5, w6) if item],
+        warnings=[
+            item
+            for item in (
+                preflight_warning,
+                cycle_warning,
+                discovery_warning,
+                review_warning,
+                manager_warning,
+                state_warning,
+            )
+            if item
+        ],
     )
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(
