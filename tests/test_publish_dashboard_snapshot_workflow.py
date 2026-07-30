@@ -47,6 +47,19 @@ def test_publish_workflow_keeps_triggering_run_authoritative():
     assert 'if [ "$artifact_found" != true ] && has_hourly_artifact "$run_id"' in workflow
 
 
+def test_artifact_download_runs_inside_manager_checkout():
+    workflow = (
+        ROOT / ".github/workflows/publish-dashboard-snapshot.yml"
+    ).read_text(encoding="utf-8")
+    download_section = workflow.split(
+        "- name: Download verified hourly report artifact", 1
+    )[1].split("- name:", 1)[0]
+    assert "working-directory: source" in download_section
+    assert "mkdir -p reports/hourly-artifact" in download_section
+    assert "--dir reports/hourly-artifact" in download_section
+    assert "source/reports/hourly-artifact" not in download_section
+
+
 def test_artifactless_triggering_run_uses_current_metadata_not_old_cycle():
     workflow = (
         ROOT / ".github/workflows/publish-dashboard-snapshot.yml"

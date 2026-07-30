@@ -121,15 +121,16 @@ jobs:
       - name: Download verified hourly report artifact
         id: download
         if: steps.hourly_run.outputs.artifact_found == 'true'
+        working-directory: source
         env:
           GH_TOKEN: ${{ github.token }}
           RUN_ID: ${{ steps.hourly_run.outputs.run_id }}
         run: |
           set -euo pipefail
-          mkdir -p source/reports/hourly-artifact
+          mkdir -p reports/hourly-artifact
           gh run download "$RUN_ID" \
             --name hourly-auto-trading-report \
-            --dir source/reports/hourly-artifact
+            --dir reports/hourly-artifact
 
       - name: Build current-run fallback report when no artifact exists
         if: steps.hourly_run.outputs.artifact_found != 'true'
