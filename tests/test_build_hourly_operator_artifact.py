@@ -1,133 +1,72 @@
 import json
 
-from scripts.build_hourly_operator_artifact import (
-    build_hourly_operator_artifact,
-    main,
-)
+from scripts.build_hourly_operator_artifact import build_hourly_operator_artifact, main
 
 
-def _paper_preflight():
+def paper_preflight():
     return {
         "status": "ready",
         "portfolio_cycle_id": "hourly-paper-1",
         "market_mode": "PORTFOLIO_REVIEW_ONLY",
-        "runtime": {
-            "paper_automation": True,
-            "broker_mode": "ALPACA",
-            "dry_run": False,
-        },
+        "runtime": {"paper_automation": True, "broker_mode": "ALPACA", "dry_run": False},
     }
 
 
-def _cycle():
+def cycle():
     return {
-        "review": {
-            "generated_at": "2026-07-26T19:45:30+00:00",
-            "portfolio_cycle_id": "hourly-paper-1",
-            "protection_diagnostics": {
-                "status": "success",
-                "summary": {"protected_position_count": 1},
-            },
-        },
+        "review": {"generated_at": "2026-07-26T19:45:30+00:00", "portfolio_cycle_id": "hourly-paper-1"},
         "candidate_cycle": {
             "execute_requested": False,
-            "manager_response": {
-                "status": "success",
-                "data": {
-                    "execution": {
-                        "status": "not_attempted",
-                        "reason": "no_preselected_backtest_symbols",
-                    },
-                    "portfolio_summary": {"approved_positions": 0},
-                },
-            },
+            "manager_response": {"status": "success", "data": {"execution": {"status": "not_attempted", "reason": "no_preselected_backtest_symbols"}}},
         },
         "completed_at": "2026-07-26T19:49:06+00:00",
-        "status": "completed",
+        "status": "success",
     }
 
 
-def _discovery():
-    return {
-        "response": {
-            "status": "success",
-            "data": {
-                "ranked_candidates": [{"symbol": "BANX"}],
-                "exposure_gate": {
-                    "summary": {"global_new_entry_blocked": False}
-                },
-                "portfolio_summary": {
-                    "selected_positions": 0,
-                    "database_sync_status": "synced",
-                },
-            },
-        }
-    }
-
-
-def test_builds_truthful_alpaca_paper_report_and_merges_discovery():
+def test_builds_sanitized_alpaca_paper_report_with_phases():
     artifact = build_hourly_operator_artifact(
-        preflight=_paper_preflight(),
-        cycle=_cycle(),
-        discovery=_discovery(),
+        preflight=paper_preflight(),
+        cycle=cycle(),
+        discovery={"response": {"data": {"ranked_candidates": []}}},
+        phase_outcomes={"preflight": "success", "portfolio_review": "success", "scanner": "success", "final_reconciliation": "success"},
+        workflow={"runId": 123, "conclusion": "unknown"},
     )
-
     assert artifact["mode"] == "ALPACA_PAPER"
-    assert artifact["broker_mode"] == "ALPACA"
-    assert artifact["flow"] == "hourly_portfolio_cycle"
-    assert artifact["request"]["portfolio_cycle_id"] == "hourly-paper-1"
-    assert artifact["response"]["data"]["ranked_candidates"] == [
-        {"symbol": "BANX"}
-    ]
-    assert artifact["response"]["data"]["portfolio_summary"] == {
-        "selected_positions": 0,
-        "database_sync_status": "synced",
-        "approved_positions": 0,
-    }
-    assert artifact["protection_diagnostics"]["summary"][
-        "protected_position_count"
-    ] == 1
+    assert artifact["runtime"]["liveTradingEnabled"] is False
+    assert artifact["cycle"]["candidateCount"] == 0
+    phase_map = {row["name"]: row["status"] for row in artifact["phases"]}
+    assert phase_map["backtest"] == "skipped"
+    assert phase_map["risk"] == "skipped"
+    assert phase_map["execution"] == "not_attempted"
+    assert artifact["response"]["data"]["execution"]["reason"] == "no_preselected_backtest_symbols"
+
+
+def test_missing_phase_files_still_write_operator_report(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("sys.argv", ["build_hourly_operator_artifact.py"])
+    assert main() == 0
+    payload = json.loads((tmp_path / "reports/hourly-auto-trading-report.json").read_text(encoding="utf-8"))
+    assert payload["cycle"]["executionStatus"] == "not_attempted"
+    assert payload["warnings"]
+    assert payload["runtime"]["liveTradingEnabled"] is False
 
 
 def test_simulator_mode_remains_fail_closed():
-    preflight = _paper_preflight()
-    preflight["runtime"] = {
-        "paper_automation": False,
-        "broker_mode": "SIMULATOR",
-        "dry_run": True,
-    }
-
-    artifact = build_hourly_operator_artifact(
-        preflight=preflight,
-        cycle=_cycle(),
-    )
-
+    preflight = paper_preflight()
+    preflight["runtime"] = {"paper_automation": False, "broker_mode": "SIMULATOR", "dry_run": True}
+    artifact = build_hourly_operator_artifact(preflight=preflight, cycle=cycle())
     assert artifact["mode"] == "SIMULATOR"
     assert artifact["broker_mode"] == "SIMULATOR"
+    assert artifact["runtime"]["dryRun"] is True
 
 
-def test_main_writes_normalized_artifact(tmp_path, monkeypatch):
-    reports = tmp_path / "reports"
-    reports.mkdir()
-    (reports / "hourly-preflight.json").write_text(
-        json.dumps(_paper_preflight()), encoding="utf-8"
-    )
-    (reports / "hourly-portfolio-cycle.json").write_text(
-        json.dumps(_cycle()), encoding="utf-8"
-    )
-    (reports / "hourly-pre-backtest-discovery.json").write_text(
-        json.dumps(_discovery()), encoding="utf-8"
-    )
-    monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr("sys.argv", ["build_hourly_operator_artifact.py"])
-
-    assert main() == 0
-    payload = json.loads(
-        (reports / "hourly-auto-trading-report.json").read_text(
-            encoding="utf-8"
-        )
-    )
-    assert payload["mode"] == "ALPACA_PAPER"
-    assert payload["response"]["data"]["ranked_candidates"][0][
-        "symbol"
-    ] == "BANX"
+def test_report_never_copies_raw_order_identifiers():
+    payload = cycle()
+    payload["review"]["broker_snapshot"] = {
+        "orders": {"data": [{"id": "private-id", "client_order_id": "internal-id", "symbol": "ACGL", "qty": "1", "status": "new"}]}
+    }
+    artifact = build_hourly_operator_artifact(preflight=paper_preflight(), cycle=payload)
+    serialized = json.dumps(artifact)
+    assert "private-id" not in serialized
+    assert "internal-id" not in serialized
