@@ -2,14 +2,24 @@ name: Publish Dashboard Snapshot
 
 on:
   workflow_run:
-    workflows: ["Hourly Auto Trading"]
+    workflows:
+      - Hourly Auto Trading
+      - Alpaca Paper Soak
+      - Manual Alpaca Paper Trading
     types: [completed]
   workflow_dispatch:
     inputs:
       run_id:
-        description: "Optional Hourly Auto Trading run ID; latest completed run is used when empty"
+        description: "Optional artifact-producing run ID; latest valid run is used when empty"
         required: false
         default: ""
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/publish-dashboard-snapshot.yml"
+      - "scripts/build_hourly_operator_artifact.py"
+      - "scripts/capture_hourly_dashboard_state.py"
+      - "scripts/export_dashboard_snapshot.py"
 
 permissions:
   actions: read
@@ -38,7 +48,7 @@ jobs:
           path: dashboard-data
           fetch-depth: 0
 
-      - name: Resolve completed Hourly run metadata
+      - name: Resolve latest artifact-producing Paper run
         id: hourly_run
         env:
           GH_TOKEN: ${{ github.token }}
@@ -46,7 +56,28 @@ jobs:
           EVENT_RUN_ID: ${{ github.event.workflow_run.id || '' }}
         run: |
           set -euo pipefail
-          run_id="${EVENT_RUN_ID:-${REQUESTED_RUN_ID:-}}"
+
+          has_hourly_artifact() {
+            local candidate="$1"
+            [ -n "$candidate" ] || return 1
+            [ "$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${candidate}/artifacts" \
+              --jq '[.artifacts[] | select(.name == "hourly-auto-trading-report" and (.expired | not))] | length')" -gt 0 ]
+          }
+
+          run_id="${REQUESTED_RUN_ID:-${EVENT_RUN_ID:-}}"
+          artifact_found=false
+          if has_hourly_artifact "$run_id"; then
+            artifact_found=true
+          else
+            latest_artifact_run=$(gh api \
+              "repos/${GITHUB_REPOSITORY}/actions/artifacts?name=hourly-auto-trading-report&per_page=100" \
+              --jq '[.artifacts[] | select(.expired | not)] | sort_by(.created_at) | reverse | .[0].workflow_run.id // empty')
+            if has_hourly_artifact "$latest_artifact_run"; then
+              run_id="$latest_artifact_run"
+              artifact_found=true
+            fi
+          fi
+
           if [ -z "$run_id" ]; then
             run_id=$(gh run list \
               --workflow "Hourly Auto Trading" \
@@ -56,32 +87,35 @@ jobs:
               --jq '.[0].databaseId // empty')
           fi
           if [ -z "$run_id" ]; then
-            echo "No completed Hourly Auto Trading run was found."
+            echo "No completed Paper workflow run was found."
             exit 1
           fi
+
           mkdir -p source/reports
           gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}" \
-            --jq '{runId: .id, runNumber: .run_number, runUrl: .html_url, eventName: .event, status: .status, conclusion: (.conclusion // "unknown"), startedAt: .run_started_at, completedAt: .updated_at}' \
+            --jq '{runId: .id, runNumber: .run_number, runUrl: .html_url, workflowName: .name, eventName: .event, status: .status, conclusion: (.conclusion // "unknown"), startedAt: .run_started_at, completedAt: .updated_at}' \
             > source/reports/workflow-metadata.json
           echo "run_id=$run_id" >> "$GITHUB_OUTPUT"
+          echo "artifact_found=$artifact_found" >> "$GITHUB_OUTPUT"
 
-      - name: Download hourly report artifact when available
+      - name: Download verified hourly report artifact
         id: download
-        continue-on-error: true
+        if: steps.hourly_run.outputs.artifact_found == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
           RUN_ID: ${{ steps.hourly_run.outputs.run_id }}
         run: |
+          set -euo pipefail
           mkdir -p source/reports/hourly-artifact
           gh run download "$RUN_ID" \
             --name hourly-auto-trading-report \
             --dir source/reports/hourly-artifact
 
-      - name: Export frontend-safe snapshot v2 or workflow fallback
+      - name: Export frontend-safe snapshot v2 or retained fallback
         working-directory: source
         run: |
           set -euo pipefail
-          input_path=$(find reports/hourly-artifact -type f -name hourly-auto-trading-report.json -print -quit || true)
+          input_path=$(find reports/hourly-artifact -type f -name hourly-auto-trading-report.json -print -quit 2>/dev/null || true)
           if [ -z "$input_path" ]; then
             input_path=reports/hourly-artifact/hourly-auto-trading-report.json
           fi
@@ -102,11 +136,18 @@ jobs:
           python - <<'PY'
           import json
           from pathlib import Path
-          payload = json.loads(Path('reports/latest-dashboard-snapshot.json').read_text(encoding='utf-8'))
+
+          payload = json.loads(
+              Path('reports/latest-dashboard-snapshot.json').read_text(encoding='utf-8')
+          )
           assert payload['schemaVersion'] == 'dashboard-snapshot.v2'
           assert payload['runtime']['liveTradingEnabled'] is False
+          assert payload['runtime']['mode'] in {'PAPER', 'SIMULATOR'}
           assert 'error' in payload and 'freshness' in payload and 'lastSuccessfulRun' in payload
-          forbidden = ('authorization', 'github_token', 'operator_token', 'api_key', 'secret_key', 'password', 'client_order_id')
+          forbidden = (
+              'authorization', 'github_token', 'operator_token', 'api_key',
+              'secret_key', 'password', 'client_order_id'
+          )
           serialized = json.dumps(payload).lower()
           assert not any(item in serialized for item in forbidden)
           PY
