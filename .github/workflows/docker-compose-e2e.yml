@@ -1,0 +1,262 @@
+name: Agent Contract E2E
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  agent-contract-e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      BACKTEST_AGENT_ENABLED: "true"
+      ALPHA_AGENTS_ENABLED: "true"
+      MARKET_REGIME_AGENT_ENABLED: "true"
+      PERFORMANCE_AGENT_ENABLED: "true"
+      PORTFOLIO_AGENT_ENABLED: "true"
+      PROFIT_AGENT_ENABLED: "true"
+      PORTFOLIO_AGENT_API_KEY: dev_portfolio_key
+      PROFIT_AGENT_API_KEY: e2e_profit_contract_key
+      RUNTIME_SERVICES: database-agent technical-agent scanner-agent fundamental-agent risk-agent backtest-agent market-regime-agent performance-agent learning-agent execution-agent curator-agent portfolio-agent profit-agent manager-agent db
+
+    steps:
+      - name: Checkout Manager_Agent
+        uses: actions/checkout@v4
+        with:
+          path: Manager_Agent
+
+      - name: Checkout Scanner_Agent
+        uses: actions/checkout@v4
+        with:
+          repository: athipan1/Scanner_Agent
+          path: Scanner_Agent
+
+      - name: Checkout Technical_Agent
+        uses: actions/checkout@v4
+        with:
+          repository: athipan1/Technical_Agent
+          path: Technical_Agent
+
+      - name: Checkout Fundamental_Agent
+        uses: actions/checkout@v4
+        with:
+          repository: athipan1/Fundamental_Agent
+          path: Fundamental_Agent
+
+      - name: Checkout Database_Agent
+        uses: actions/checkout@v4
+        with:
+          repository: athipan1/Database_Agent
+          path: Database_Agent
+
+      - name: Checkout Risk_Agent
+        uses: actions/checkout@v4
+        with:
+          repository: athipan1/Risk_Agent
+          path: Risk_Agent
+
+      - name: Checkout Execution_Agent
+        uses: actions/checkout@v4
+        with:
+          repository: athipan1/Execution_Agent
+          path: Execution_Agent
+
+      - name: Checkout Learning_Agent
+        uses: actions/checkout@v4
+        with:
+          repository: athipan1/Learning_Agent
+          path: Learning_Agent
+
+      - name: Checkout Backtest_Agent
+        uses: actions/checkout@v4
+        with:
+          repository: athipan1/Backtest_Agent
+          path: Backtest_Agent
+
+      - name: Checkout Market_Regime_Agent
+        uses: actions/checkout@v4
+        with:
+          repository: athipan1/Market_Regime_Agent
+          path: Market_Regime_Agent
+
+      - name: Checkout Performance_Agent
+        uses: actions/checkout@v4
+        with:
+          repository: athipan1/Performance_Agent
+          path: Performance_Agent
+
+      - name: Checkout Curator_Agent
+        uses: actions/checkout@v4
+        with:
+          repository: athipan1/Curator_Agent
+          path: Curator_Agent
+
+      - name: Checkout Portfolio_Agent
+        uses: actions/checkout@v4
+        with:
+          repository: athipan1/Portfolio_Agent
+          path: Portfolio_Agent
+
+      - name: Checkout Profit_Agent
+        uses: actions/checkout@v4
+        with:
+          repository: athipan1/Profit_Agent
+          path: Profit_Agent
+
+      - name: Show Docker versions
+        run: |
+          docker --version
+          docker compose version
+
+      - name: Create compose override for extended agents
+        working-directory: Manager_Agent
+        run: |
+          cat > /tmp/agent-contract-compose.yml <<'YAML'
+          services:
+            manager-agent:
+              environment:
+                PORTFOLIO_AGENT_URL: http://portfolio-agent:8012
+                PORTFOLIO_AGENT_API_KEY: ${PORTFOLIO_AGENT_API_KEY:-dev_portfolio_key}
+                PROFIT_AGENT_URL: http://profit-agent:8011
+                PROFIT_AGENT_API_KEY: ${PROFIT_AGENT_API_KEY}
+                CURATOR_AGENT_URL: http://curator-agent:8010
+              depends_on:
+                portfolio-agent:
+                  condition: service_healthy
+                profit-agent:
+                  condition: service_healthy
+                curator-agent:
+                  condition: service_healthy
+
+            curator-agent:
+              build:
+                context: ../Curator_Agent
+                dockerfile: Dockerfile
+              image: painaidee/curator-agent:contract-e2e
+              restart: always
+              ports:
+                - "8010:8010"
+              healthcheck:
+                test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8010/health', timeout=3)\" || exit 1"]
+                interval: 10s
+                timeout: 5s
+                retries: 5
+                start_period: 30s
+              environment:
+                PYTHONPATH: /app
+                CURATOR_DB_PATH: /data/curator_skills.sqlite3
+                CURATOR_REQUIRE_DATABASE_TELEMETRY: "false"
+                CURATOR_CONTAINER_SANDBOX_ENABLED: "false"
+                CURATOR_CONTAINER_SANDBOX_FALLBACK: "false"
+
+            profit-agent:
+              build:
+                context: ../Profit_Agent
+                dockerfile: Dockerfile
+              image: painaidee/profit-agent:contract-e2e
+              restart: always
+              ports:
+                - "8011:8011"
+              healthcheck:
+                test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8011/health', timeout=3)\" || exit 1"]
+                interval: 10s
+                timeout: 5s
+                retries: 5
+                start_period: 30s
+              environment:
+                PYTHONPATH: /app
+                PROFIT_AGENT_API_KEY: ${PROFIT_AGENT_API_KEY}
+
+            portfolio-agent:
+              build:
+                context: ../Portfolio_Agent
+                dockerfile: Dockerfile
+              image: painaidee/portfolio-agent:contract-e2e
+              restart: always
+              ports:
+                - "8012:8012"
+              healthcheck:
+                test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8012/health', timeout=3)\" || exit 1"]
+                interval: 10s
+                timeout: 5s
+                retries: 5
+                start_period: 30s
+              environment:
+                PYTHONPATH: /app
+                PORTFOLIO_AGENT_API_KEY: ${PORTFOLIO_AGENT_API_KEY:-dev_portfolio_key}
+          YAML
+          docker compose -f docker-compose.yml -f /tmp/agent-contract-compose.yml --profile backtest config --quiet
+
+      - name: Build and start extended contract stack
+        working-directory: Manager_Agent
+        run: |
+          set +e
+          docker compose -f docker-compose.yml -f /tmp/agent-contract-compose.yml --profile backtest up --build -d 2>&1 | tee agent-contract-compose-up.log
+          status=${PIPESTATUS[0]}
+          if [ "$status" != "0" ]; then
+            docker compose -f docker-compose.yml -f /tmp/agent-contract-compose.yml --profile backtest ps || true
+            exit "$status"
+          fi
+
+      - name: Wait for extended stack health
+        working-directory: Manager_Agent
+        run: |
+          set -euo pipefail
+          for attempt in {1..72}; do
+            exited=$(docker compose -f docker-compose.yml -f /tmp/agent-contract-compose.yml --profile backtest ps --status exited -q $RUNTIME_SERVICES | wc -l | tr -d ' ')
+            if [ "$exited" != "0" ]; then
+              echo "One or more runtime containers exited."
+              exit 1
+            fi
+
+            manager=$(docker compose -f docker-compose.yml -f /tmp/agent-contract-compose.yml --profile backtest exec -T manager-agent python /app/healthcheck.py >/dev/null && echo ok || echo wait)
+            fundamental=$(curl -fsS http://localhost:8001/health >/dev/null && echo ok || echo wait)
+            technical=$(curl -fsS http://localhost:8002/health >/dev/null && echo ok || echo wait)
+            scanner=$(curl -fsS http://localhost:8003/health >/dev/null && echo ok || echo wait)
+            database=$(curl -fsS http://localhost:8004/health >/dev/null && echo ok || echo wait)
+            learning=$(curl -fsS http://localhost:8005/health >/dev/null && echo ok || echo wait)
+            execution=$(curl -fsS http://localhost:8006/health >/dev/null && echo ok || echo wait)
+            risk=$(curl -fsS http://localhost:8007/health >/dev/null && echo ok || echo wait)
+            curator=$(curl -fsS http://localhost:8010/health >/dev/null && echo ok || echo wait)
+            profit=$(curl -fsS http://localhost:8011/health >/dev/null && echo ok || echo wait)
+            portfolio=$(curl -fsS http://localhost:8012/health >/dev/null && echo ok || echo wait)
+            performance=$(curl -fsS http://localhost:8013/health >/dev/null && echo ok || echo wait)
+            market_regime=$(curl -fsS http://localhost:8014/health >/dev/null && echo ok || echo wait)
+            backtest=$(curl -fsS http://localhost:8016/health >/dev/null && echo ok || echo wait)
+
+            echo "health: manager=$manager fundamental=$fundamental technical=$technical scanner=$scanner database=$database learning=$learning execution=$execution risk=$risk curator=$curator profit=$profit portfolio=$portfolio performance=$performance market_regime=$market_regime backtest=$backtest"
+            if [ "$manager$fundamental$technical$scanner$database$learning$execution$risk$curator$profit$portfolio$performance$market_regime$backtest" = "okokokokokokokokokokokokokok" ]; then
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "Extended services did not become reachable in time."
+          exit 1
+
+      - name: Run direct API and Manager flow contracts
+        working-directory: Manager_Agent
+        run: python scripts/run_agent_contract_checks.py
+
+      - name: Show logs on failure
+        if: failure()
+        working-directory: Manager_Agent
+        run: |
+          docker compose -f docker-compose.yml -f /tmp/agent-contract-compose.yml --profile backtest ps || true
+          for service in $RUNTIME_SERVICES; do
+            echo "---- ${service} logs tail ----"
+            docker compose -f docker-compose.yml -f /tmp/agent-contract-compose.yml --profile backtest logs --tail=180 "$service" || true
+          done
+          tail -220 agent-contract-compose-up.log || true
+
+      - name: Stop extended stack
+        if: always()
+        working-directory: Manager_Agent
+        run: docker compose -f docker-compose.yml -f /tmp/agent-contract-compose.yml --profile backtest down -v || true
