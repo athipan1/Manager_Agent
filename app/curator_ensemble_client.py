@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 from typing import Any, Dict
 
+from .curator_auth import curator_auth_headers
 from .curator_client import CURATOR_AGENT_URL, json_safe_value
 from .resilient_client import ResilientAgentClient
 
@@ -49,6 +50,7 @@ class CuratorShadowEnsembleClient(ResilientAgentClient):
             max_retries=CURATOR_SHADOW_ENSEMBLE_MAX_RETRIES,
             failure_threshold=CURATOR_SHADOW_ENSEMBLE_FAILURE_THRESHOLD,
             cooldown_period=CURATOR_SHADOW_ENSEMBLE_COOLDOWN_SECONDS,
+            headers=curator_auth_headers(),
         )
 
     async def execute_shadow_ensemble(
