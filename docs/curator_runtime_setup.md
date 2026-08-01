@@ -1,25 +1,36 @@
 # Curator Agent runtime setup
 
-This guide explains how to run Curator_Agent beside Manager_Agent without changing the default trading flow.
+This guide explains how to run Curator_Agent beside Manager_Agent while preserving the mandatory Risk_Agent and Execution_Agent boundaries.
 
-## What this adds
+## Runtime contract
 
 `docker-compose.curator.yml` adds:
 
-- `curator-agent` service on port `8010`
-- persistent `curator_data` volume for the skill registry
-- Manager environment variables for the Curator client
-- Curator disabled by default via `CURATOR_AGENT_ENABLED=false`
+- `curator-agent` on port `8010`
+- persistent `curator_data` storage
+- authenticated Manager-to-Curator calls
+- authenticated Curator-to-Database calls
+- advisory-only skill execution and policy review
 
-## Start with Curator disabled
-
-This is the safest first run. Curator is available in Docker, but Manager will not call it yet.
+Curator credentials have no built-in default. Compose fails before startup when either required value is missing:
 
 ```bash
+export CURATOR_AGENT_API_KEY="$(python -c 'import secrets; print(secrets.token_urlsafe(32))')"
+export CURATOR_ADMIN_API_KEY="$(python -c 'import secrets; print(secrets.token_urlsafe(32))')"
+```
+
+Use a secret manager or protected deployment environment for persistent production credentials. Do not commit these values to the repository.
+
+## Start the stack
+
+Start with Manager calls disabled while validating the service itself:
+
+```bash
+export CURATOR_AGENT_ENABLED=false
 docker compose -f docker-compose.yml -f docker-compose.curator.yml up -d --build
 ```
 
-## Check health
+Check the public operational endpoint:
 
 ```bash
 curl http://localhost:8010/health
@@ -34,32 +45,36 @@ Expected result includes:
 }
 ```
 
-## Enable Curator signal enrichment
-
-Only enable after Curator_Agent PR #2 is deployed and at least one skill has been validated and approved.
+Enable advisory signal enrichment after health, authentication, sandbox availability, and an approved skill have been verified:
 
 ```bash
-CURATOR_AGENT_ENABLED=true \
+export CURATOR_AGENT_ENABLED=true
 docker compose -f docker-compose.yml -f docker-compose.curator.yml up -d --build
 ```
 
-## Safety behavior
+## Credential roles
 
-Manager_Agent uses Curator as advisory signal metadata only:
+Manager uses `CURATOR_AGENT_API_KEY` for read and execute operations such as recommendation, skill execution, and shadow ensemble.
 
-- Curator does not place orders.
-- Curator does not receive broker keys.
-- Curator is disabled by default.
-- Curator failures should not break Manager.
-- Risk_Agent remains responsible for approval.
-- Execution_Agent remains the only order submission path.
+Administrative lifecycle operations use `CURATOR_ADMIN_API_KEY`, including register, approve, deprecate, version, promote, rollback, and performance-policy curation.
+
+Operational endpoints remain open:
+
+```text
+GET /health
+GET /ready
+GET /version
+```
+
+All other endpoints require `X-API-KEY` because compose sets `CURATOR_REQUIRE_API_KEY=true`.
 
 ## Seed a test skill
 
-After Curator is running, register and approve a simple test skill:
+Register with the admin credential:
 
 ```bash
 curl -X POST http://localhost:8010/skills/register \
+  -H "X-API-KEY: ${CURATOR_ADMIN_API_KEY}" \
   -H 'Content-Type: application/json' \
   -d '{
     "name": "Manager Metadata Echo Signal",
@@ -69,20 +84,33 @@ curl -X POST http://localhost:8010/skills/register \
   }'
 ```
 
-Copy the returned `skill_id`, then approve it:
+Approve the returned `skill_id` with the same admin credential:
 
 ```bash
 curl -X POST http://localhost:8010/skills/<skill_id>/approve \
+  -H "X-API-KEY: ${CURATOR_ADMIN_API_KEY}" \
   -H 'Content-Type: application/json' \
   -d '{"approved_by":"operator","reason":"Runtime connectivity test"}'
 ```
 
-## Compose files
-
-Use this pair for normal Curator-enabled local integration:
+Execute with the execute-role credential:
 
 ```bash
-docker compose -f docker-compose.yml -f docker-compose.curator.yml ps
+curl -X POST http://localhost:8010/skills/<skill_id>/execute \
+  -H "X-API-KEY: ${CURATOR_AGENT_API_KEY}" \
+  -H 'Content-Type: application/json' \
+  -d '{"inputs":{"symbol":"TEST","ticker":"TEST","analysis":{}}}'
 ```
 
-Use existing trading safety environment variables as before. Curator does not replace Risk_Agent or Execution_Agent.
+## Scheduled workflow behavior
+
+`Bucket Profit Review` generates random Curator execute and admin credentials for each isolated GitHub Actions run, masks them in logs, and passes the same values to Manager and Curator. Persistent deployment workflows must provide managed secrets instead.
+
+## Safety behavior
+
+- Curator remains advisory-only and receives no broker credentials.
+- Risk_Agent remains mandatory before execution.
+- Execution_Agent remains the only order-submission path.
+- Manager fails closed in production when Curator is enabled without its execute credential.
+- Curator fails startup when compose authentication credentials are absent.
+- Sandbox fallback remains disabled unless an operator explicitly accepts the downgrade.
