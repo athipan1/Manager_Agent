@@ -1,3 +1,5 @@
+from pathlib import Path
+
 import pytest
 
 from app import curator_auth
@@ -19,6 +21,26 @@ def test_curator_auth_headers_are_omitted_when_unconfigured(monkeypatch):
 
     assert curator_auth.curator_auth_headers() == {}
     assert curator_auth.curator_auth_headers(admin=True) == {}
+
+
+def test_curator_compose_requires_external_credentials():
+    compose = Path("docker-compose.curator.yml").read_text(encoding="utf-8")
+
+    assert "dev_curator_execute_key" not in compose
+    assert "dev_curator_admin_key" not in compose
+    assert "${CURATOR_AGENT_API_KEY:?CURATOR_AGENT_API_KEY is required}" in compose
+    assert "${CURATOR_ADMIN_API_KEY:?CURATOR_ADMIN_API_KEY is required}" in compose
+
+
+def test_bucket_review_generates_ephemeral_curator_credentials():
+    workflow = Path(".github/workflows/bucket-profit-review.yml").read_text(
+        encoding="utf-8"
+    )
+
+    assert "Generate ephemeral Curator credentials" in workflow
+    assert "secrets.token_urlsafe(32)" in workflow
+    assert "CURATOR_AGENT_API_KEY=${execute_key}" in workflow
+    assert "CURATOR_ADMIN_API_KEY=${admin_key}" in workflow
 
 
 @pytest.mark.asyncio
