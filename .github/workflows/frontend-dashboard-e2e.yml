@@ -109,7 +109,12 @@ jobs:
         working-directory: Trading_Frontend
         env:
           PLAYWRIGHT_BASE_URL: http://127.0.0.1:5173
-        run: npx playwright test --config playwright.compose.config.js
+          PLAYWRIGHT_HTML_OPEN: never
+        run: |
+          mkdir -p ../dashboard-e2e-artifacts
+          set -o pipefail
+          npx playwright test --config playwright.compose.config.js --reporter=line,html 2>&1 \
+            | tee ../dashboard-e2e-artifacts/playwright-happy-path.log
 
       - name: Extract and scan production JavaScript bundle
         run: |
@@ -128,7 +133,12 @@ jobs:
         env:
           EXPECT_API_DOWN: "true"
           PLAYWRIGHT_BASE_URL: http://127.0.0.1:5173
-        run: npx playwright test --config playwright.compose.config.js
+          PLAYWRIGHT_HTML_OPEN: never
+        run: |
+          mkdir -p ../dashboard-e2e-artifacts
+          set -o pipefail
+          npx playwright test --config playwright.compose.config.js --reporter=line,html 2>&1 \
+            | tee ../dashboard-e2e-artifacts/playwright-api-down.log
 
       - name: Collect failure logs
         if: failure()
@@ -136,13 +146,17 @@ jobs:
           mkdir -p dashboard-e2e-artifacts
           docker compose $COMPOSE_FILES --profile dashboard ps > dashboard-e2e-artifacts/compose-ps.txt
           docker compose $COMPOSE_FILES --profile dashboard logs --no-color trading-frontend > dashboard-e2e-artifacts/frontend.log
+          docker compose $COMPOSE_FILES --profile dashboard logs --no-color manager-agent > dashboard-e2e-artifacts/manager.log
 
       - name: Upload failure artifacts
         if: failure()
         uses: actions/upload-artifact@v4
         with:
           name: frontend-dashboard-e2e-failure
-          path: dashboard-e2e-artifacts
+          path: |
+            dashboard-e2e-artifacts
+            Trading_Frontend/playwright-report
+            Trading_Frontend/test-results
           if-no-files-found: ignore
 
       - name: Stop dashboard stack

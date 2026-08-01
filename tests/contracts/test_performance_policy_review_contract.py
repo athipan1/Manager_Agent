@@ -46,6 +46,7 @@ class ContractAgentClient:
     def __init__(self, base_url, timeout=None, **kwargs):
         self.base_url = base_url
         self.timeout = timeout
+        self.headers = dict(kwargs.get("headers") or {})
 
     async def __aenter__(self):
         return self
@@ -122,6 +123,7 @@ class ContractAgentClient:
                 },
             }
         if endpoint == "/curate/performance-policy":
+            assert self.headers == {"X-API-KEY": "admin-key"}
             assert json_data["account_id"] == "1"
             assert json_data["learning_result"]["policy_deltas"]["strategy_bucket_weights"]["value_rebound"] == 0.05
             assert json_data["current_policy"]["risk"]["risk_per_trade"] == 0.01
@@ -166,7 +168,8 @@ async def test_performance_learning_curator_database_policy_review_contract(monk
     monkeypatch.setattr("app.services.performance_policy_review_service.config.POLICY_REVIEW_FLOW_ENABLED", True)
     monkeypatch.setattr("app.services.performance_policy_review_service.config.PERFORMANCE_AGENT_URL", "http://performance-agent")
     monkeypatch.setattr("app.services.performance_policy_review_service.config.AUTO_LEARNING_AGENT_URL", "http://learning-agent", raising=False)
-    monkeypatch.setattr("app.services.performance_policy_review_service.config.CURATOR_AGENT_URL", "http://curator-agent")
+    monkeypatch.setattr("app.services.performance_policy_review_service.CURATOR_AGENT_URL", "http://curator-agent")
+    monkeypatch.setattr("app.curator_auth.CURATOR_ADMIN_API_KEY", "admin-key")
     monkeypatch.setattr("app.services.performance_policy_review_service.config_manager.get", lambda key, default=None: {
         "AGENT_WEIGHTS": {"technical": 0.5, "fundamental": 0.5},
         "RISK_PER_TRADE": 0.01,

@@ -201,6 +201,15 @@ jobs:
           fi
           echo "Paper-only safety settings validated."
 
+      - name: Generate ephemeral Curator credentials
+        run: |
+          execute_key="$(python -c 'import secrets; print(secrets.token_urlsafe(32))')"
+          admin_key="$(python -c 'import secrets; print(secrets.token_urlsafe(32))')"
+          echo "::add-mask::${execute_key}"
+          echo "::add-mask::${admin_key}"
+          echo "CURATOR_AGENT_API_KEY=${execute_key}" >> "$GITHUB_ENV"
+          echo "CURATOR_ADMIN_API_KEY=${admin_key}" >> "$GITHUB_ENV"
+
       - name: Build and start trading stack
         working-directory: Manager_Agent
         run: |

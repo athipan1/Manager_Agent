@@ -11,6 +11,8 @@ from typing import Any, Dict, Optional, Union
 
 from .. import config
 from ..config_manager import config_manager
+from ..curator_auth import curator_auth_headers
+from ..curator_client import CURATOR_AGENT_URL
 from ..database_client import DatabaseAgentClient
 from ..logger import report_logger
 from ..resilient_client import ResilientAgentClient
@@ -181,8 +183,9 @@ async def _curate_learning_result(
         learning_result=learning_result,
     )
     async with ResilientAgentClient(
-        base_url=config.CURATOR_AGENT_URL,
+        base_url=CURATOR_AGENT_URL,
         timeout=config.CURATOR_AGENT_TIMEOUT,
+        headers=curator_auth_headers(admin=True),
     ) as client:
         response = await client._post(
             CURATOR_PERFORMANCE_POLICY_ENDPOINT,
@@ -322,4 +325,9 @@ async def run_performance_policy_review(
         report_logger.warning(
             f"Performance policy review failed: {exc}, correlation_id={correlation_id}"
         )
-        return {"status": "skipped", "reason": str(exc), "advisory_only": True, "auto_apply": False}
+        return {
+            "status": "skipped",
+            "reason": str(exc),
+            "advisory_only": True,
+            "auto_apply": False,
+        }
