@@ -6,6 +6,7 @@ from enum import Enum
 from typing import Any, Dict, List, Optional
 from urllib.parse import quote
 
+from .curator_auth import curator_auth_headers
 from .logger import report_logger
 from .resilient_client import AgentUnavailable, ResilientAgentClient
 
@@ -158,6 +159,7 @@ class CuratorAgentClient(ResilientAgentClient):
             max_retries=CURATOR_AGENT_MAX_RETRIES,
             failure_threshold=CURATOR_AGENT_FAILURE_THRESHOLD,
             cooldown_period=CURATOR_AGENT_COOLDOWN_SECONDS,
+            headers=curator_auth_headers(),
         )
 
     async def search_approved_skills(self, query: str, correlation_id: str) -> List[Dict[str, Any]]:
