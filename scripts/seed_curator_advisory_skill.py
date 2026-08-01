@@ -10,6 +10,10 @@ from typing import Any, Dict
 
 
 CURATOR_AGENT_URL = os.getenv("CURATOR_AGENT_URL", "http://localhost:8010").rstrip("/")
+CURATOR_AGENT_API_KEY = os.getenv("CURATOR_AGENT_API_KEY", "").strip()
+CURATOR_ADMIN_API_KEY = (
+    os.getenv("CURATOR_ADMIN_API_KEY", "").strip() or CURATOR_AGENT_API_KEY
+)
 SKILL_NAME = "Manager Advisory Score Signal"
 SIMULATOR_CURATOR_DISABLED_EXIT_CODE = 78
 
@@ -38,9 +42,20 @@ SKILL_CODE = """def manager_advisory_score_signal(symbol, analysis, ticker):
 """
 
 
-def request_json(path: str, *, payload: Dict[str, Any] | None = None, method: str | None = None) -> Dict[str, Any]:
+def _auth_headers(*, admin: bool = False) -> Dict[str, str]:
+    api_key = CURATOR_ADMIN_API_KEY if admin else CURATOR_AGENT_API_KEY
+    return {"X-API-KEY": api_key} if api_key else {}
+
+
+def request_json(
+    path: str,
+    *,
+    payload: Dict[str, Any] | None = None,
+    method: str | None = None,
+    admin: bool = False,
+) -> Dict[str, Any]:
     data = None
-    headers = {}
+    headers = _auth_headers(admin=admin)
     if payload is not None:
         data = json.dumps(payload).encode("utf-8")
         headers["Content-Type"] = "application/json"
@@ -91,6 +106,7 @@ def main() -> int:
 
         register_response = request_json(
             "/skills/register",
+            admin=True,
             payload={
                 "name": SKILL_NAME,
                 "description": "Advisory-only score signal for Manager_Agent payloads. Does not approve, size, or submit orders.",
@@ -126,6 +142,7 @@ def main() -> int:
 
         approve_response = request_json(
             f"/skills/{skill_id}/approve",
+            admin=True,
             payload={
                 "approved_by": "hourly-auto-trading-workflow",
                 "reason": "Advisory-only runtime signal; does not approve, size, or submit orders.",
