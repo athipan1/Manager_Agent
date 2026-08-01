@@ -1,0 +1,125 @@
+name: Curator Auth Contract
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches: [main]
+    paths:
+      - "app/curator_auth.py"
+      - "app/curator_client.py"
+      - "app/curator_ensemble_client.py"
+      - "scripts/check_curator_runtime.py"
+      - "scripts/seed_curator_advisory_skill.py"
+      - "docker-compose.curator.yml"
+      - ".github/workflows/curator-auth-contract.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  curator-auth-contract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      CURATOR_AGENT_URL: http://localhost:8010
+      CURATOR_AGENT_API_KEY: contract-execute-key
+      CURATOR_ADMIN_API_KEY: contract-admin-key
+
+    steps:
+      - name: Checkout Manager_Agent
+        uses: actions/checkout@v4
+        with:
+          path: Manager_Agent
+
+      - name: Checkout Curator_Agent main
+        uses: actions/checkout@v4
+        with:
+          repository: athipan1/Curator_Agent
+          ref: main
+          path: Curator_Agent
+
+      - name: Build Curator service image
+        run: docker build -t curator-agent:auth-contract Curator_Agent
+
+      - name: Start authenticated Curator service
+        run: |
+          docker run -d --name curator-auth-contract \
+            -p 8010:8010 \
+            -e CURATOR_DB_PATH=/tmp/curator-auth-contract.sqlite3 \
+            -e CURATOR_REQUIRE_API_KEY=true \
+            -e CURATOR_EXECUTE_API_KEY="$CURATOR_AGENT_API_KEY" \
+            -e CURATOR_ADMIN_API_KEY="$CURATOR_ADMIN_API_KEY" \
+            -e CURATOR_CONTAINER_SANDBOX_ENABLED=false \
+            -e CURATOR_CONTAINER_SANDBOX_FALLBACK=false \
+            curator-agent:auth-contract
+
+      - name: Wait for Curator health
+        run: |
+          for attempt in {1..30}; do
+            if curl -fsS http://localhost:8010/health >/dev/null; then
+              exit 0
+            fi
+            sleep 2
+          done
+          docker logs curator-auth-contract
+          exit 1
+
+      - name: Verify authorization boundaries
+        run: |
+          python - <<'PY'
+          import json
+          import urllib.error
+          import urllib.request
+
+          def request(method, path, key=None, payload=None):
+              headers = {}
+              if key:
+                  headers["X-API-KEY"] = key
+              data = None
+              if payload is not None:
+                  headers["Content-Type"] = "application/json"
+                  data = json.dumps(payload).encode("utf-8")
+              req = urllib.request.Request(
+                  f"http://localhost:8010{path}",
+                  data=data,
+                  headers=headers,
+                  method=method,
+              )
+              try:
+                  with urllib.request.urlopen(req, timeout=10) as response:
+                      return response.status, json.loads(response.read().decode("utf-8"))
+              except urllib.error.HTTPError as exc:
+                  return exc.code, json.loads(exc.read().decode("utf-8"))
+
+          status, body = request("GET", "/skills")
+          assert status == 401, body
+          assert body["error"]["code"] == "missing_api_key", body
+
+          status, body = request("GET", "/skills", "contract-execute-key")
+          assert status == 200, body
+
+          status, body = request(
+              "POST",
+              "/skills/register",
+              "contract-execute-key",
+              {
+                  "name": "Unauthorized lifecycle mutation",
+                  "description": "Execute key must not register skills.",
+                  "code": "def signal():\n    return {'signal': 'hold'}",
+              },
+          )
+          assert status == 403, body
+          assert body["error"]["code"] == "insufficient_api_key_role", body
+          PY
+
+      - name: Run Manager to Curator authenticated smoke flow
+        working-directory: Manager_Agent
+        run: python scripts/check_curator_runtime.py
+
+      - name: Show Curator logs on failure
+        if: failure()
+        run: docker logs curator-auth-contract || true
+
+      - name: Stop Curator service
+        if: always()
+        run: docker rm -f curator-auth-contract || true
