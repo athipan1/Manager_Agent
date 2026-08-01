@@ -11,9 +11,9 @@ HOURLY_COMPOSE = ROOT / "docker-compose.hourly-paper.yml"
 def test_readiness_workflow_uses_managed_role_secrets() -> None:
     workflow = READINESS_WORKFLOW.read_text(encoding="utf-8")
 
-    assert "secrets.CURATOR_AGENT_API_KEY" in workflow
-    assert "secrets.CURATOR_ADMIN_API_KEY" in workflow
-    assert "CURATOR_EXECUTE_API_KEY: ${{ secrets.CURATOR_AGENT_API_KEY }}" not in workflow
+    assert "CURATOR_AGENT_API_KEY: ${{ secrets.CURATOR_AGENT_API_KEY }}" in workflow
+    assert "CURATOR_EXECUTE_API_KEY: ${{ secrets.CURATOR_AGENT_API_KEY }}" in workflow
+    assert "CURATOR_ADMIN_API_KEY: ${{ secrets.CURATOR_ADMIN_API_KEY }}" in workflow
     assert "CURATOR_CONTAINER_SANDBOX_ENABLED: \"true\"" in workflow
     assert "CURATOR_CONTAINER_SANDBOX_FALLBACK: \"false\"" in workflow
     assert "sandbox/Dockerfile" in workflow
