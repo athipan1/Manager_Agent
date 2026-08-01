@@ -30,7 +30,23 @@ def test_publish_workflow_contract():
     assert "git pull --rebase" in workflow
     assert "for attempt in 1 2 3" in workflow
     assert "force" not in workflow.lower()
-    assert "DASHBOARD_SNAPSHOT_PRIVACY_MODE" in workflow
+    assert "PUBLIC_DASHBOARD_SNAPSHOT_PRIVACY_MODE: masked" in workflow
+    assert "vars.DASHBOARD_SNAPSHOT_PRIVACY_MODE" not in workflow
+    assert '--privacy-mode "$PUBLIC_DASHBOARD_SNAPSHOT_PRIVACY_MODE"' in workflow
+
+
+def test_public_dashboard_privacy_is_fail_closed():
+    workflow = (
+        ROOT / ".github/workflows/publish-dashboard-snapshot.yml"
+    ).read_text(encoding="utf-8")
+    validation = workflow.split("- name: Validate public snapshot contract", 1)[1]
+    assert "payload['privacy'] == {'mode': 'masked', 'valuesMasked': True}" in validation
+    assert "payload['account']['valuesMasked'] is True" in validation
+    assert "payload['account']['cash'] is None" in validation
+    assert "payload['account']['equity'] is None" in validation
+    assert "payload['account']['buyingPower'] is None" in validation
+    assert "item.get('valuesMasked') is True for item in payload['positions']" in validation
+    assert "item.get('valuesMasked') is True for item in payload['openOrders']" in validation
 
 
 def test_publish_workflow_keeps_triggering_run_authoritative():
