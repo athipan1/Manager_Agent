@@ -8,17 +8,36 @@ import urllib.request
 
 
 CURATOR_AGENT_URL = os.getenv("CURATOR_AGENT_URL", "http://localhost:8010").rstrip("/")
+CURATOR_AGENT_API_KEY = os.getenv("CURATOR_AGENT_API_KEY", "").strip()
+CURATOR_ADMIN_API_KEY = (
+    os.getenv("CURATOR_ADMIN_API_KEY", "").strip() or CURATOR_AGENT_API_KEY
+)
 
 
-def request_json(path: str, *, payload: dict | None = None) -> dict:
+def _auth_headers(*, admin: bool = False) -> dict[str, str]:
+    api_key = CURATOR_ADMIN_API_KEY if admin else CURATOR_AGENT_API_KEY
+    return {"X-API-KEY": api_key} if api_key else {}
+
+
+def request_json(
+    path: str,
+    *,
+    payload: dict | None = None,
+    admin: bool = False,
+) -> dict:
     data = None
-    headers = {}
+    headers = _auth_headers(admin=admin)
     method = "GET"
     if payload is not None:
         data = json.dumps(payload).encode("utf-8")
         headers["Content-Type"] = "application/json"
         method = "POST"
-    req = urllib.request.Request(f"{CURATOR_AGENT_URL}{path}", data=data, headers=headers, method=method)
+    req = urllib.request.Request(
+        f"{CURATOR_AGENT_URL}{path}",
+        data=data,
+        headers=headers,
+        method=method,
+    )
     with urllib.request.urlopen(req, timeout=10) as response:
         body = response.read().decode("utf-8")
         return json.loads(body) if body else {}
@@ -33,6 +52,7 @@ def main() -> int:
 
         register = request_json(
             "/skills/register",
+            admin=True,
             payload={
                 "name": "Curator Runtime Smoke Skill",
                 "description": "Harmless smoke-test skill for Manager_Agent runtime integration.",
@@ -47,6 +67,7 @@ def main() -> int:
 
         approve = request_json(
             f"/skills/{skill_id}/approve",
+            admin=True,
             payload={"approved_by": "runtime-smoke-check", "reason": "connectivity test"},
         )
         if (approve.get("data") or {}).get("approval_status") != "approved":
