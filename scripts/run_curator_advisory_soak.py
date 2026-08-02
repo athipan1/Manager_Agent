@@ -105,8 +105,13 @@ def validate_readiness(payload: dict[str, Any]) -> dict[str, Any]:
         "secure_execution_ready": execution.get("secure_execution_ready") is True,
         "fallback_disabled": execution.get("fallback_enabled") is False,
         "worker_container_mode": worker_execution.get("mode") == "container",
-        "worker_network_disabled": worker_execution.get("network_access") is False,
-        "worker_read_only": worker_execution.get("read_only_filesystem") is True,
+        "worker_secure_execution_ready": (
+            worker_execution.get("secure_execution_ready") is True
+        ),
+        "sandbox_image_available": bool(worker_execution.get("image")),
+        "docker_daemon_available": bool(
+            worker_execution.get("docker_server_version")
+        ),
         "shared_work_root_configured": (
             worker_execution.get("shared_work_root_configured") is True
         ),
