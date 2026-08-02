@@ -147,8 +147,9 @@ jobs:
           assert execution['fallback_enabled'] is False, payload
           assert 'worker_url' not in execution, payload
           assert worker['mode'] == 'container', payload
-          assert worker['network_access'] is False, payload
-          assert worker['read_only_filesystem'] is True, payload
+          assert worker['secure_execution_ready'] is True, payload
+          assert bool(worker.get('image')), payload
+          assert bool(worker.get('docker_server_version')), payload
           assert worker['shared_work_root_configured'] is True, payload
           assert worker['shared_work_root_required'] is True, payload
           PY
