@@ -18,6 +18,14 @@ on:
         required: true
         default: "TEST"
         type: string
+  pull_request:
+    branches: [main]
+    paths:
+      - ".github/workflows/curator-advisory-soak.yml"
+      - "scripts/run_curator_advisory_soak.py"
+      - "tests/test_curator_advisory_soak.py"
+      - "docs/curator_advisory_soak.md"
+      - "docker-compose.curator.yml"
   schedule:
     - cron: "25 * * * *"
 
@@ -30,7 +38,10 @@ concurrency:
 
 jobs:
   advisory-soak:
-    if: github.event_name == 'workflow_dispatch' || vars.CURATOR_ADVISORY_SOAK_ENABLED == 'true'
+    if: >-
+      github.event_name == 'pull_request' ||
+      github.event_name == 'workflow_dispatch' ||
+      vars.CURATOR_ADVISORY_SOAK_ENABLED == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 35
     env:
@@ -169,6 +180,7 @@ jobs:
             --score 0.5 \
             --run-id "${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
             --output-json reports/curator-advisory-soak.json
+          cp /tmp/curator-soak-ready.json reports/curator-soak-ready.json
 
       - name: Verify worker workspace cleanup
         run: |
@@ -187,8 +199,8 @@ jobs:
           name: curator-advisory-soak-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
             Manager_Agent/reports/curator-advisory-soak.json
+            Manager_Agent/reports/curator-soak-ready.json
             Manager_Agent/reports-curator-soak-compose-up.log
-            /tmp/curator-soak-ready.json
           if-no-files-found: warn
           retention-days: 14
 
