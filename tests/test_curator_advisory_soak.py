@@ -38,7 +38,11 @@ def _readiness_payload(*, fallback_enabled: bool = False) -> dict:
     }
 
 
-def _execution_payload(*, fallback_used: bool = False) -> dict:
+def _execution_payload(
+    *,
+    fallback_used: bool = False,
+    telemetry_status: str = "success",
+) -> dict:
     return {
         "status": "success",
         "data": {
@@ -59,6 +63,16 @@ def _execution_payload(*, fallback_used: bool = False) -> dict:
                 "order_placement": False,
                 "shared_work_root_configured": True,
                 "shared_work_root_required": True,
+            },
+            "database_telemetry": {
+                "status": telemetry_status,
+                "enabled": True,
+                "required": False,
+                "correlation_id": "soak-cycle-1",
+                "execution_log_id": (
+                    "execution-log-1" if telemetry_status == "success" else None
+                ),
+                "error": None if telemetry_status == "success" else "database_error",
             },
         },
     }
@@ -89,12 +103,22 @@ def test_execution_requires_deterministic_advisory_only_output() -> None:
     assert all(result["checks"].values())
     assert result["normalized_output"] == expected
     assert result["output_hash"]
+    assert result["database_telemetry"]["status"] == "success"
+    assert result["database_telemetry"]["execution_log_id"] == "execution-log-1"
 
     with pytest.raises(RuntimeError, match="fallback_not_used"):
         validate_execution(
             _execution_payload(fallback_used=True),
             expected_output=expected,
         )
+
+
+def test_execution_requires_successful_persisted_database_telemetry() -> None:
+    payload = _execution_payload(telemetry_status="failed")
+    expected = payload["data"]["output"]
+
+    with pytest.raises(RuntimeError, match="database_telemetry_success"):
+        validate_execution(payload, expected_output=expected)
 
 
 def test_advisory_normalization_accepts_representation_only_differences() -> None:
