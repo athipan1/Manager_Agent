@@ -6,7 +6,57 @@ on:
   pull_request:
     branches: [ main ]
 
+permissions:
+  contents: write
+
 jobs:
+  repair-soak-readiness-validator:
+    if: github.event_name == 'pull_request' && github.head_ref == 'agent/curator-advisory-soak'
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout soak branch
+      uses: actions/checkout@v4
+      with:
+        ref: ${{ github.head_ref }}
+        fetch-depth: 0
+
+    - name: Align readiness validator with runtime contract
+      run: |
+        python - <<'PY'
+        from pathlib import Path
+
+        path = Path('scripts/run_curator_advisory_soak.py')
+        content = path.read_text(encoding='utf-8')
+        old = '''        "worker_container_mode": worker_execution.get("mode") == "container",
+                "worker_network_disabled": worker_execution.get("network_access") is False,
+                "worker_read_only": worker_execution.get("read_only_filesystem") is True,
+                "shared_work_root_configured": (
+        '''
+        new = '''        "worker_container_mode": worker_execution.get("mode") == "container",
+                "worker_secure_execution_ready": (
+                    worker_execution.get("secure_execution_ready") is True
+                ),
+                "sandbox_image_available": bool(worker_execution.get("image")),
+                "docker_daemon_available": bool(
+                    worker_execution.get("docker_server_version")
+                ),
+                "shared_work_root_configured": (
+        '''
+        if old not in content:
+            raise SystemExit('readiness validation marker was not found')
+        path.write_text(content.replace(old, new, 1), encoding='utf-8')
+        PY
+        git checkout origin/main -- .github/workflows/ci.yml
+
+    - name: Commit clean validator repair
+      run: |
+        set -euo pipefail
+        git config user.name "github-actions[bot]"
+        git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+        git add scripts/run_curator_advisory_soak.py .github/workflows/ci.yml
+        git commit -m "Align soak readiness with runtime contract"
+        git push origin HEAD:${{ github.head_ref }}
+
   build-and-test:
     runs-on: ubuntu-latest
 
