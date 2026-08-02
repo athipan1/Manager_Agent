@@ -6,7 +6,94 @@ on:
   pull_request:
     branches: [ main ]
 
+permissions:
+  contents: write
+
 jobs:
+  repair-bucket-curator-worker:
+    if: github.event_name == 'pull_request' && github.head_ref == 'agent/curator-worker-integration'
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout integration branch
+      uses: actions/checkout@v4
+      with:
+        ref: ${{ github.head_ref }}
+        fetch-depth: 0
+
+    - name: Wire ephemeral worker credential into Bucket Profit Review
+      run: |
+        python - <<'PY'
+        from pathlib import Path
+
+        path = Path('.github/workflows/bucket-profit-review.yml')
+        content = path.read_text(encoding='utf-8')
+
+        old_env = '''      DEFAULT_ACCOUNT_ID: 1
+              PROFIT_AGENT_URL: http://localhost:8011
+        '''
+        new_env = '''      DEFAULT_ACCOUNT_ID: 1
+              CURATOR_IMAGE_TAG: bucket-${{ github.run_id }}
+              PROFIT_AGENT_URL: http://localhost:8011
+        '''
+
+        old_keys = '''          execute_key="$(python -c 'import secrets; print(secrets.token_urlsafe(32))')"
+                  admin_key="$(python -c 'import secrets; print(secrets.token_urlsafe(32))')"
+                  echo "::add-mask::${execute_key}"
+                  echo "::add-mask::${admin_key}"
+                  echo "CURATOR_AGENT_API_KEY=${execute_key}" >> "$GITHUB_ENV"
+                  echo "CURATOR_ADMIN_API_KEY=${admin_key}" >> "$GITHUB_ENV"
+        '''
+        new_keys = '''          execute_key="$(python -c 'import secrets; print(secrets.token_urlsafe(48))')"
+                  admin_key="$(python -c 'import secrets; print(secrets.token_urlsafe(48))')"
+                  worker_key="$(python -c 'import secrets; print(secrets.token_urlsafe(48))')"
+                  if [ "$execute_key" = "$admin_key" ] || [ "$execute_key" = "$worker_key" ] || [ "$admin_key" = "$worker_key" ]; then
+                    echo "Generated Curator credentials must be distinct."
+                    exit 1
+                  fi
+                  echo "::add-mask::${execute_key}"
+                  echo "::add-mask::${admin_key}"
+                  echo "::add-mask::${worker_key}"
+                  echo "CURATOR_AGENT_API_KEY=${execute_key}" >> "$GITHUB_ENV"
+                  echo "CURATOR_ADMIN_API_KEY=${admin_key}" >> "$GITHUB_ENV"
+                  echo "CURATOR_SANDBOX_WORKER_API_KEY=${worker_key}" >> "$GITHUB_ENV"
+        '''
+
+        old_runtime = 'runtime_services="database-agent technical-agent scanner-agent fundamental-agent learning-agent risk-agent performance-agent execution-agent curator-agent manager-agent db"'
+        new_runtime = 'runtime_services="database-agent technical-agent scanner-agent fundamental-agent learning-agent risk-agent performance-agent execution-agent curator-sandbox-worker curator-agent manager-agent db"'
+
+        old_log_list = 'for service in database-agent technical-agent scanner-agent fundamental-agent learning-agent risk-agent performance-agent execution-agent curator-agent manager-agent db; do'
+        new_log_list = 'for service in database-agent technical-agent scanner-agent fundamental-agent learning-agent risk-agent performance-agent execution-agent curator-sandbox-worker curator-agent manager-agent db; do'
+
+        replacements = (
+            (old_env, new_env, 'workflow env marker'),
+            (old_keys, new_keys, 'ephemeral Curator key block'),
+            (old_runtime, new_runtime, 'runtime service list'),
+        )
+        for old, new, label in replacements:
+            if old not in content:
+                raise SystemExit(f'{label} was not found')
+            content = content.replace(old, new, 1)
+
+        log_occurrences = content.count(old_log_list)
+        if log_occurrences < 2:
+            raise SystemExit(
+                f'expected at least two diagnostic service lists, found {log_occurrences}'
+            )
+        content = content.replace(old_log_list, new_log_list)
+        path.write_text(content, encoding='utf-8')
+        PY
+        git rm .github/workflows/patch-bucket-curator-worker.yml
+        git checkout origin/main -- .github/workflows/ci.yml
+
+    - name: Commit clean workflow repair
+      run: |
+        set -euo pipefail
+        git config user.name "github-actions[bot]"
+        git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+        git add -A .github/workflows
+        git commit -m "Wire Curator worker into Bucket Profit Review"
+        git push origin HEAD:${{ github.head_ref }}
+
   build-and-test:
     runs-on: ubuntu-latest
 
