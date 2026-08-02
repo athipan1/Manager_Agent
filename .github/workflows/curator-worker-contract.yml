@@ -1,0 +1,264 @@
+name: Curator Worker Contract
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches: [main]
+    paths:
+      - "docker-compose.curator.yml"
+      - "docker-compose.hourly-paper.yml"
+      - "scripts/check_curator_runtime.py"
+      - "tests/test_curator_worker_compose.py"
+      - ".github/workflows/curator-worker-contract.yml"
+      - "docs/curator_runtime_setup.md"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: curator-worker-contract-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  manager-curator-worker-contract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      CURATOR_AGENT_URL: http://127.0.0.1:8010
+      CURATOR_SANDBOX_IMAGE: painaidee/curator-skill-sandbox:manager-contract
+
+    steps:
+      - name: Checkout Manager_Agent
+        uses: actions/checkout@v4
+        with:
+          path: Manager_Agent
+
+      - name: Checkout Curator_Agent main
+        uses: actions/checkout@v4
+        with:
+          repository: athipan1/Curator_Agent
+          ref: main
+          path: Curator_Agent
+          fetch-depth: 1
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Generate ephemeral Curator credentials
+        shell: bash
+        run: |
+          set -euo pipefail
+          readarray -t keys < <(python - <<'PY'
+          import secrets
+          for _ in range(3):
+              print(secrets.token_urlsafe(48))
+          PY
+          )
+          execute_key="${keys[0]}"
+          admin_key="${keys[1]}"
+          worker_key="${keys[2]}"
+          if [ "$execute_key" = "$admin_key" ] || [ "$execute_key" = "$worker_key" ] || [ "$admin_key" = "$worker_key" ]; then
+            echo "Generated Curator credentials must be distinct."
+            exit 1
+          fi
+          for value in "$execute_key" "$admin_key" "$worker_key"; do
+            echo "::add-mask::$value"
+          done
+          echo "CURATOR_AGENT_API_KEY=$execute_key" >> "$GITHUB_ENV"
+          echo "CURATOR_ADMIN_API_KEY=$admin_key" >> "$GITHUB_ENV"
+          echo "CURATOR_SANDBOX_WORKER_API_KEY=$worker_key" >> "$GITHUB_ENV"
+
+      - name: Build Curator API worker and sandbox images
+        run: |
+          set -euo pipefail
+          docker build -t "$CURATOR_SANDBOX_IMAGE" -f Curator_Agent/sandbox/Dockerfile Curator_Agent
+          docker build -t curator-sandbox-worker:manager-contract -f Curator_Agent/worker.Dockerfile Curator_Agent
+          docker build -t curator-agent:manager-contract -f Curator_Agent/Dockerfile Curator_Agent
+
+      - name: Start isolated worker topology
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker network create curator-worker-contract
+          docker run -d --name curator-sandbox-worker \
+            --network curator-worker-contract \
+            --network-alias curator-sandbox-worker \
+            --read-only \
+            --tmpfs /tmp:rw,noexec,nosuid,size=16m \
+            --cap-drop ALL \
+            --security-opt no-new-privileges:true \
+            --pids-limit 128 \
+            --memory 256m \
+            --cpus 0.5 \
+            -e HOME=/tmp \
+            -e CURATOR_SANDBOX_WORKER_API_KEY="$CURATOR_SANDBOX_WORKER_API_KEY" \
+            -e CURATOR_SANDBOX_IMAGE="$CURATOR_SANDBOX_IMAGE" \
+            -e CURATOR_SANDBOX_WORKER_MAX_CONCURRENCY=2 \
+            -e CURATOR_SANDBOX_WORKER_QUEUE_TIMEOUT_SECONDS=1 \
+            -v /var/run/docker.sock:/var/run/docker.sock:ro \
+            curator-sandbox-worker:manager-contract
+
+          docker run -d --name curator-agent \
+            --network curator-worker-contract \
+            -p 8010:8010 \
+            --read-only \
+            --tmpfs /tmp:rw,noexec,nosuid,size=32m \
+            --cap-drop ALL \
+            --security-opt no-new-privileges:true \
+            -e CURATOR_DB_PATH=/tmp/curator-worker-contract.sqlite3 \
+            -e CURATOR_REQUIRE_API_KEY=true \
+            -e CURATOR_EXECUTE_API_KEY="$CURATOR_AGENT_API_KEY" \
+            -e CURATOR_ADMIN_API_KEY="$CURATOR_ADMIN_API_KEY" \
+            -e CURATOR_SANDBOX_WORKER_URL=http://curator-sandbox-worker:8020 \
+            -e CURATOR_SANDBOX_WORKER_API_KEY="$CURATOR_SANDBOX_WORKER_API_KEY" \
+            -e CURATOR_REQUIRE_SANDBOX_WORKER=true \
+            -e CURATOR_ALLOW_INSECURE_WORKER_HTTP=true \
+            -e CURATOR_CONTAINER_SANDBOX_ENABLED=false \
+            -e CURATOR_CONTAINER_SANDBOX_FALLBACK=false \
+            -e CURATOR_REQUIRE_DATABASE_TELEMETRY=false \
+            curator-agent:manager-contract
+
+      - name: Verify API has no Docker CLI or socket
+        run: |
+          set -euo pipefail
+          docker exec curator-agent sh -c 'test -z "$(command -v docker || true)"'
+          python - <<'PY'
+          import json
+          import subprocess
+
+          inspection = json.loads(
+              subprocess.check_output(
+                  ["docker", "inspect", "curator-agent"],
+                  text=True,
+              )
+          )[0]
+          mounts = inspection.get("Mounts") or []
+          assert all(mount.get("Destination") != "/var/run/docker.sock" for mount in mounts), mounts
+          PY
+
+      - name: Verify signed remote worker readiness
+        shell: bash
+        run: |
+          set -euo pipefail
+          for attempt in {1..40}; do
+            status="$(curl -sS -o /tmp/curator-worker-ready.json -w '%{http_code}' http://127.0.0.1:8010/ready || true)"
+            if [ "$status" = "200" ]; then
+              python - <<'PY'
+          import json
+
+          with open('/tmp/curator-worker-ready.json', encoding='utf-8') as handle:
+              payload = json.load(handle)
+
+          data = payload['data']
+          execution = data['execution']
+          assert data['ready'] is True, payload
+          assert execution['mode'] == 'remote_worker', payload
+          assert execution['secure_execution_ready'] is True, payload
+          assert execution['fallback_enabled'] is False, payload
+          assert 'worker_url' not in execution, payload
+          assert execution['worker_execution']['network_access'] is False, payload
+          assert execution['worker_execution']['read_only_filesystem'] is True, payload
+          PY
+              exit 0
+            fi
+            sleep 2
+          done
+          cat /tmp/curator-worker-ready.json || true
+          docker logs curator-sandbox-worker || true
+          docker logs curator-agent || true
+          exit 1
+
+      - name: Run Manager authenticated Curator smoke flow
+        working-directory: Manager_Agent
+        run: |
+          python scripts/check_curator_runtime.py | tee /tmp/manager-curator-worker-smoke.json
+          python - <<'PY'
+          import json
+
+          with open('/tmp/manager-curator-worker-smoke.json', encoding='utf-8') as handle:
+              payload = json.load(handle)
+
+          assert payload['ok'] is True, payload
+          execution = payload['execute']
+          assert execution['execution_status'] == 'success', payload
+          assert execution['execution_backend'] == 'remote_worker', payload
+          assert execution['fallback_used'] is False, payload
+          assert execution['sandbox']['mode'] == 'container', payload
+          assert execution['sandbox']['network_access'] is False, payload
+          assert execution['sandbox']['read_only_filesystem'] is True, payload
+          assert 'worker_url' not in execution, payload
+          PY
+
+      - name: Verify fail-closed behavior when worker stops
+        shell: bash
+        run: |
+          set -euo pipefail
+          skill_id="$(python - <<'PY'
+          import json
+          with open('/tmp/manager-curator-worker-smoke.json', encoding='utf-8') as handle:
+              print(json.load(handle)['skill_id'])
+          PY
+          )"
+          docker stop curator-sandbox-worker
+
+          for attempt in {1..20}; do
+            status="$(curl -sS -o /tmp/curator-worker-not-ready.json -w '%{http_code}' http://127.0.0.1:8010/ready || true)"
+            if [ "$status" = "503" ]; then
+              break
+            fi
+            sleep 1
+          done
+          test "$status" = "503"
+
+          SKILL_ID="$skill_id" python - <<'PY'
+          import json
+          import os
+          import urllib.request
+
+          body = json.dumps(
+              {
+                  'inputs': {
+                      'symbol': 'TEST',
+                      'ticker': 'TEST',
+                      'analysis': {},
+                  },
+                  'timeout_seconds': 1.0,
+              }
+          ).encode('utf-8')
+          request = urllib.request.Request(
+              f"http://127.0.0.1:8010/skills/{os.environ['SKILL_ID']}/execute",
+              data=body,
+              method='POST',
+              headers={
+                  'Content-Type': 'application/json',
+                  'X-API-KEY': os.environ['CURATOR_AGENT_API_KEY'],
+              },
+          )
+          with urllib.request.urlopen(request, timeout=15) as response:
+              payload = json.loads(response.read().decode('utf-8'))
+
+          execution = payload['data']
+          assert execution['execution_status'] == 'rejected_remote_worker_unavailable', payload
+          assert execution['fallback_used'] is False, payload
+          assert execution['output'] == {}, payload
+          assert execution['sandbox']['mode'] == 'remote_worker', payload
+          assert 'worker_url' not in execution, payload
+          PY
+
+      - name: Show diagnostics on failure
+        if: failure()
+        run: |
+          cat /tmp/curator-worker-ready.json || true
+          cat /tmp/curator-worker-not-ready.json || true
+          cat /tmp/manager-curator-worker-smoke.json || true
+          docker ps -a || true
+          docker logs curator-agent || true
+          docker logs curator-sandbox-worker || true
+
+      - name: Stop runtime
+        if: always()
+        run: |
+          docker rm -f curator-agent curator-sandbox-worker || true
+          docker network rm curator-worker-contract || true
