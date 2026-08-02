@@ -1,116 +1,159 @@
 # Curator Agent runtime setup
 
-This guide explains how to run Curator_Agent beside Manager_Agent while preserving the mandatory Risk_Agent and Execution_Agent boundaries.
+This guide runs Curator_Agent beside Manager_Agent while preserving the mandatory Risk_Agent and Execution_Agent boundaries.
 
-## Runtime contract
+## Runtime topology
 
-`docker-compose.curator.yml` adds:
+`docker-compose.curator.yml` now adds three separate runtime surfaces:
 
-- `curator-agent` on port `8010`
-- persistent `curator_data` storage
-- authenticated Manager-to-Curator calls
-- authenticated Curator-to-Database calls
-- advisory-only skill execution and policy review
+- `curator-agent` on port `8010`, responsible for registry, approval, schema validation, telemetry and Manager-facing authentication;
+- `curator-sandbox-worker` on the private internal Compose network, responsible only for authenticated sandbox execution;
+- `curator-skill-sandbox-image`, a build-only service that ensures the immutable execution image is present on the Docker host.
 
-Curator credentials have no built-in default. Compose fails before startup when either required value is missing:
+The request path is:
 
-```bash
-export CURATOR_AGENT_API_KEY="$(python -c 'import secrets; print(secrets.token_urlsafe(32))')"
-export CURATOR_ADMIN_API_KEY="$(python -c 'import secrets; print(secrets.token_urlsafe(32))')"
+```text
+Manager_Agent
+    -> Curator API
+    -> signed private worker request
+    -> ephemeral hardened skill container
 ```
 
-Use a secret manager or protected deployment environment for persistent production credentials. Do not commit these values to the repository.
+The Curator API has no Docker CLI and does not receive `/var/run/docker.sock`. Only the worker receives Docker-daemon access. The worker is not published to a host port.
 
-## Start the stack
+## Required credentials
 
-Start with Manager calls disabled while validating the service itself:
+Curator credentials have no built-in runtime default. Generate three different values:
+
+```bash
+export CURATOR_AGENT_API_KEY="$(python -c 'import secrets; print(secrets.token_urlsafe(48))')"
+export CURATOR_ADMIN_API_KEY="$(python -c 'import secrets; print(secrets.token_urlsafe(48))')"
+export CURATOR_SANDBOX_WORKER_API_KEY="$(python -c 'import secrets; print(secrets.token_urlsafe(48))')"
+```
+
+Use a secret manager or protected deployment environment for persistent credentials. Do not commit or print these values.
+
+The roles are intentionally separate:
+
+- `CURATOR_AGENT_API_KEY`: Manager read and execute operations;
+- `CURATOR_ADMIN_API_KEY`: skill registration, approval and lifecycle administration;
+- `CURATOR_SANDBOX_WORKER_API_KEY`: HMAC signing between the API and worker only.
+
+## Pin the runtime images
+
+Production must use images tagged with a tested Git commit SHA rather than mutable `latest` tags:
+
+```bash
+export CURATOR_IMAGE_TAG=<curator-agent-git-sha>
+```
+
+The compose overlay uses the same tag for:
+
+```text
+painaidee/curator-agent:<sha>
+painaidee/curator-sandbox-worker:<sha>
+painaidee/curator-skill-sandbox:<sha>
+```
+
+When building locally, Compose builds all three images from the checked-out `Curator_Agent` directory.
+
+## Start with Manager calls disabled
+
+Keep Manager enrichment disabled while validating the topology:
 
 ```bash
 export CURATOR_AGENT_ENABLED=false
-docker compose -f docker-compose.yml -f docker-compose.curator.yml up -d --build
+docker compose \
+  -f docker-compose.yml \
+  -f docker-compose.curator.yml \
+  up -d --build
 ```
 
-Check the public operational endpoint:
+The worker mounts the Docker socket. This grants host-equivalent Docker control and must be used only with a dedicated or rootless execution daemon. The API container must never receive this mount.
+
+## Verify liveness and readiness
+
+Liveness confirms the API process is running:
 
 ```bash
 curl http://localhost:8010/health
 ```
 
-Expected result includes:
+Readiness confirms the complete signed execution chain is available:
+
+```bash
+curl http://localhost:8010/ready
+```
+
+The readiness response must report:
 
 ```json
 {
-  "status": "success",
-  "agent_type": "curator-agent"
+  "data": {
+    "ready": true,
+    "execution": {
+      "mode": "remote_worker",
+      "secure_execution_ready": true,
+      "fallback_enabled": false
+    }
+  }
 }
 ```
 
-Enable advisory signal enrichment after health, authentication, sandbox availability, and an approved skill have been verified:
+A missing worker, unavailable Docker daemon or missing sandbox image must return HTTP `503`. Do not enable Curator when readiness is unavailable.
+
+## Run the authenticated smoke flow
+
+From `Manager_Agent`:
+
+```bash
+python scripts/check_curator_runtime.py
+```
+
+A successful result must include:
+
+```text
+execution_status=success
+execution_backend=remote_worker
+sandbox.mode=container
+fallback_used=false
+sandbox.network_access=false
+sandbox.read_only_filesystem=true
+```
+
+## Enable advisory enrichment
+
+Enable Manager-to-Curator calls only after the signed worker contract and smoke flow pass:
 
 ```bash
 export CURATOR_AGENT_ENABLED=true
-docker compose -f docker-compose.yml -f docker-compose.curator.yml up -d --build
+docker compose \
+  -f docker-compose.yml \
+  -f docker-compose.curator.yml \
+  up -d --build
 ```
 
-## Credential roles
+Curator remains advisory-only. It does not receive Alpaca credentials and cannot submit orders. Risk_Agent remains mandatory, and Execution_Agent remains the only order-submission path.
 
-Manager uses `CURATOR_AGENT_API_KEY` for read and execute operations such as recommendation, skill execution, and shadow ensemble.
+## GitHub Actions behavior
 
-Administrative lifecycle operations use `CURATOR_ADMIN_API_KEY`, including register, approve, deprecate, version, promote, rollback, and performance-policy curation.
+`Curator Worker Contract` generates three ephemeral credentials, starts the worker and API on separate execution surfaces, and proves:
 
-Operational endpoints remain open:
+- the API has no Docker CLI or socket;
+- the worker is reachable only through its private network;
+- signed readiness succeeds;
+- Manager executes an approved skill through the worker;
+- the ephemeral skill container has no network and a read-only filesystem;
+- stopping the worker makes readiness return `503` and execution fail closed without fallback.
 
-```text
-GET /health
-GET /ready
-GET /version
+Scheduled workflows that use `docker-compose.curator.yml` must generate or inject `CURATOR_SANDBOX_WORKER_API_KEY` in addition to the existing execute and admin credentials.
+
+## Hourly Paper rollout gate
+
+`docker-compose.hourly-paper.yml` intentionally keeps:
+
+```yaml
+CURATOR_AGENT_ENABLED: "false"
 ```
 
-All other endpoints require `X-API-KEY` because compose sets `CURATOR_REQUIRE_API_KEY=true`.
-
-## Seed a test skill
-
-Register with the admin credential:
-
-```bash
-curl -X POST http://localhost:8010/skills/register \
-  -H "X-API-KEY: ${CURATOR_ADMIN_API_KEY}" \
-  -H 'Content-Type: application/json' \
-  -d '{
-    "name": "Manager Metadata Echo Signal",
-    "description": "Returns a harmless hold signal from Manager payload metadata.",
-    "tags": ["technical", "manager", "test"],
-    "code": "def manager_echo_signal(symbol, analysis, ticker):\n    return {\"signal\": \"hold\", \"confidence\": 0.5, \"reason\": \"Curator test skill active\"}"
-  }'
-```
-
-Approve the returned `skill_id` with the same admin credential:
-
-```bash
-curl -X POST http://localhost:8010/skills/<skill_id>/approve \
-  -H "X-API-KEY: ${CURATOR_ADMIN_API_KEY}" \
-  -H 'Content-Type: application/json' \
-  -d '{"approved_by":"operator","reason":"Runtime connectivity test"}'
-```
-
-Execute with the execute-role credential:
-
-```bash
-curl -X POST http://localhost:8010/skills/<skill_id>/execute \
-  -H "X-API-KEY: ${CURATOR_AGENT_API_KEY}" \
-  -H 'Content-Type: application/json' \
-  -d '{"inputs":{"symbol":"TEST","ticker":"TEST","analysis":{}}}'
-```
-
-## Scheduled workflow behavior
-
-`Bucket Profit Review` generates random Curator execute and admin credentials for each isolated GitHub Actions run, masks them in logs, and passes the same values to Manager and Curator. Persistent deployment workflows must provide managed secrets instead.
-
-## Safety behavior
-
-- Curator remains advisory-only and receives no broker credentials.
-- Risk_Agent remains mandatory before execution.
-- Execution_Agent remains the only order-submission path.
-- Manager fails closed in production when Curator is enabled without its execute credential.
-- Curator fails startup when compose authentication credentials are absent.
-- Sandbox fallback remains disabled unless an operator explicitly accepts the downgrade.
+Do not change this value until the cross-repository worker contract passes on `main` and a separate advisory-only Hourly Paper soak test completes without duplicate decisions, fallback execution or readiness failures.
