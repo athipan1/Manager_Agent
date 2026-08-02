@@ -6,6 +6,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 CURATOR_COMPOSE = ROOT / "docker-compose.curator.yml"
 HOURLY_PAPER = ROOT / "docker-compose.hourly-paper.yml"
+BUCKET_REVIEW = ROOT / ".github" / "workflows" / "bucket-profit-review.yml"
 
 
 def _service_block(compose: str, service: str, next_service: str) -> str:
@@ -77,6 +78,20 @@ def test_worker_network_is_internal_and_api_bridges_only_control_plane() -> None
     assert "networks:\n      - curator_worker" in worker
     assert "networks:\n      - default\n      - curator_worker" in curator_api
     assert "curator_worker:\n    internal: true" in compose
+
+
+def test_bucket_review_generates_distinct_ephemeral_worker_key() -> None:
+    workflow = BUCKET_REVIEW.read_text(encoding="utf-8")
+
+    assert "CURATOR_IMAGE_TAG: bucket-${{ github.run_id }}" in workflow
+    assert "Generate ephemeral Curator credentials" in workflow
+    assert "worker_key=" in workflow
+    assert "CURATOR_SANDBOX_WORKER_API_KEY=${worker_key}" in workflow
+    assert "Generated Curator credentials must be distinct." in workflow
+    assert "curator-sandbox-worker curator-agent manager-agent" in workflow
+    assert "TRADING_MODE: PAPER" in workflow
+    assert 'ALLOW_LIVE_TRADING: "false"' in workflow
+    assert 'DRY_RUN: "true"' in workflow
 
 
 def test_hourly_paper_remains_curator_disabled() -> None:
