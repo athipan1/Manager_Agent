@@ -19,6 +19,19 @@ Each run:
 
 The workflow does not read Alpaca credentials and cannot submit orders.
 
+## Defect discovered during the initial soak
+
+The first real soak found that Curator's performance layer appended calibration fields after the skill output had already passed schema validation. That made the returned output conflict with `additionalProperties=false` while the schema status still reported valid.
+
+Curator_Agent PR #21 fixed the executor contract in merge commit `c4286bbab9abe529b2ded7e8266e5be9fe5221ce`:
+
+- schema-validated skill output is now immutable;
+- raw and calibrated confidence remain in advisory performance metadata;
+- `effective_confidence` is exposed outside the skill-defined output;
+- deterministic output and schema truthfulness are preserved.
+
+The soak must run against this commit or a later Curator `main` revision.
+
 ## Readiness versus execution evidence
 
 The worker readiness contract proves that the Docker daemon is reachable, the configured sandbox image exists, secure container execution is available, and the required shared work root is configured. Network isolation and read-only root filesystem flags are execution-result properties, so the soak verifies them on every real skill execution rather than expecting them from `/ready`.
