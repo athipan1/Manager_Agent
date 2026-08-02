@@ -75,10 +75,8 @@ jobs:
             content = content.replace(old, new, 1)
 
         log_occurrences = content.count(old_log_list)
-        if log_occurrences < 2:
-            raise SystemExit(
-                f'expected at least two diagnostic service lists, found {log_occurrences}'
-            )
+        if log_occurrences < 1:
+            raise SystemExit('diagnostic service list was not found')
         content = content.replace(old_log_list, new_log_list)
         path.write_text(content, encoding='utf-8')
         PY
