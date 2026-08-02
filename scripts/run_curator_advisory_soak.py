@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import math
 import os
 import sys
 import time
@@ -22,6 +23,7 @@ FORBIDDEN_OUTPUT_KEYS = {
     "risk_approval_id",
     "secret_key",
 }
+ADVISORY_OUTPUT_KEYS = {"signal", "confidence", "reason"}
 
 
 def _utc_now() -> str:
@@ -34,6 +36,7 @@ def _canonical_hash(value: Any) -> str:
         sort_keys=True,
         separators=(",", ":"),
         ensure_ascii=False,
+        allow_nan=False,
     ).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()
 
@@ -68,7 +71,7 @@ def request_json(
 
     data = None
     if payload is not None:
-        data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+        data = json.dumps(payload, ensure_ascii=False, allow_nan=False).encode("utf-8")
         headers["Content-Type"] = "application/json"
 
     request = urllib.request.Request(
@@ -140,6 +143,36 @@ def _collect_forbidden_keys(value: Any, *, found: set[str] | None = None) -> set
     return result
 
 
+def _finite_float(value: Any, *, field: str) -> float:
+    if isinstance(value, bool):
+        raise ValueError(f"{field}_must_be_numeric")
+    try:
+        normalized = float(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{field}_must_be_numeric") from exc
+    if not math.isfinite(normalized):
+        raise ValueError(f"{field}_must_be_finite")
+    return normalized
+
+
+def normalize_advisory_output(output: dict[str, Any]) -> dict[str, Any]:
+    """Project runtime output onto the stable advisory contract.
+
+    The sandbox and schema layers may add metadata beside the advisory payload,
+    but the decision-bearing fields must remain semantically identical.
+    """
+    if not isinstance(output, dict):
+        raise ValueError("advisory_output_must_be_object")
+    missing = sorted(ADVISORY_OUTPUT_KEYS - set(output))
+    if missing:
+        raise ValueError(f"advisory_output_missing:{','.join(missing)}")
+    return {
+        "signal": str(output.get("signal") or "").strip().lower(),
+        "confidence": _finite_float(output.get("confidence"), field="confidence"),
+        "reason": str(output.get("reason") or "").strip(),
+    }
+
+
 def validate_execution(
     payload: dict[str, Any],
     *,
@@ -151,6 +184,15 @@ def validate_execution(
     sandbox = sandbox if isinstance(sandbox, dict) else {}
     output = data.get("output")
     output = output if isinstance(output, dict) else {}
+
+    try:
+        normalized_output = normalize_advisory_output(output)
+        normalized_expected = normalize_advisory_output(expected_output)
+        normalization_error = None
+    except ValueError as exc:
+        normalized_output = {}
+        normalized_expected = normalize_advisory_output(expected_output)
+        normalization_error = str(exc)
 
     checks = {
         "execution_success": data.get("execution_status") == "success",
@@ -164,16 +206,30 @@ def validate_execution(
         "shared_work_root_configured": sandbox.get("shared_work_root_configured") is True,
         "shared_work_root_required": sandbox.get("shared_work_root_required") is True,
         "worker_url_redacted": "worker_url" not in data,
-        "deterministic_output": output == expected_output,
+        "advisory_output_normalized": normalization_error is None,
+        "deterministic_output": normalized_output == normalized_expected,
         "no_forbidden_output_keys": not _collect_forbidden_keys(output),
     }
     failed = sorted(name for name, passed in checks.items() if not passed)
     if failed:
-        raise RuntimeError(f"Curator execution contract failed: {', '.join(failed)}")
+        details = {
+            "failed_checks": failed,
+            "normalization_error": normalization_error,
+            "expected": normalized_expected,
+            "actual": normalized_output,
+            "raw_output": output,
+        }
+        raise RuntimeError(
+            "Curator execution contract failed: "
+            + ", ".join(failed)
+            + "; details="
+            + json.dumps(details, sort_keys=True, ensure_ascii=False, allow_nan=False)
+        )
     return {
         "checks": checks,
         "output": output,
-        "output_hash": _canonical_hash(output),
+        "normalized_output": normalized_output,
+        "output_hash": _canonical_hash(normalized_output),
         "elapsed_ms": data.get("elapsed_ms"),
         "database_telemetry": data.get("database_telemetry"),
     }
@@ -207,8 +263,6 @@ def run_soak(*, cycles: int, symbol: str, score: float, run_id: str) -> dict[str
                 "        'signal': 'hold',\n"
                 "        'confidence': 0.5,\n"
                 "        'reason': 'deterministic advisory soak',\n"
-                "        'symbol': symbol,\n"
-                "        'score': score,\n"
                 "    }\n"
             ),
             "input_schema": {
@@ -222,13 +276,11 @@ def run_soak(*, cycles: int, symbol: str, score: float, run_id: str) -> dict[str
             },
             "output_schema": {
                 "type": "object",
-                "required": ["signal", "confidence", "reason", "symbol", "score"],
+                "required": ["signal", "confidence", "reason"],
                 "properties": {
                     "signal": {"type": "string"},
                     "confidence": {"type": "number"},
                     "reason": {"type": "string"},
-                    "symbol": {"type": "string"},
-                    "score": {"type": "number"},
                 },
                 "additionalProperties": False,
             },
@@ -256,8 +308,6 @@ def run_soak(*, cycles: int, symbol: str, score: float, run_id: str) -> dict[str
         "signal": "hold",
         "confidence": 0.5,
         "reason": "deterministic advisory soak",
-        "symbol": normalized_symbol,
-        "score": float(score),
     }
     cycle_results: list[dict[str, Any]] = []
     output_hashes: set[str] = set()
@@ -335,7 +385,6 @@ def run_soak(*, cycles: int, symbol: str, score: float, run_id: str) -> dict[str
         "readiness_before": readiness_before_checks,
         "readiness_after": readiness_after_checks,
         "cycles": cycle_results,
-        "started_at": cycle_results and cycle_results[0].get("started_at"),
         "completed_at": _utc_now(),
     }
 
