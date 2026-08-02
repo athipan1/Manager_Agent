@@ -184,6 +184,10 @@ def validate_execution(
     sandbox = sandbox if isinstance(sandbox, dict) else {}
     output = data.get("output")
     output = output if isinstance(output, dict) else {}
+    database_telemetry = data.get("database_telemetry")
+    database_telemetry = (
+        database_telemetry if isinstance(database_telemetry, dict) else {}
+    )
 
     try:
         normalized_output = normalize_advisory_output(output)
@@ -206,6 +210,15 @@ def validate_execution(
         "shared_work_root_configured": sandbox.get("shared_work_root_configured") is True,
         "shared_work_root_required": sandbox.get("shared_work_root_required") is True,
         "worker_url_redacted": "worker_url" not in data,
+        "database_telemetry_success": (
+            database_telemetry.get("status") == "success"
+        ),
+        "database_execution_log_recorded": bool(
+            database_telemetry.get("execution_log_id")
+        ),
+        "database_correlation_preserved": bool(
+            database_telemetry.get("correlation_id")
+        ),
         "advisory_output_normalized": normalization_error is None,
         "deterministic_output": normalized_output == normalized_expected,
         "no_forbidden_output_keys": not _collect_forbidden_keys(output),
@@ -218,6 +231,7 @@ def validate_execution(
             "expected": normalized_expected,
             "actual": normalized_output,
             "raw_output": output,
+            "database_telemetry": database_telemetry,
         }
         raise RuntimeError(
             "Curator execution contract failed: "
