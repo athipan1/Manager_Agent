@@ -9,9 +9,18 @@ HOURLY_PAPER = ROOT / "docker-compose.hourly-paper.yml"
 BUCKET_REVIEW = ROOT / ".github" / "workflows" / "bucket-profit-review.yml"
 
 
-def _service_block(compose: str, service: str, next_service: str) -> str:
-    start = compose.index(f"  {service}:\n")
-    end = compose.index(f"  {next_service}:\n", start)
+def _service_block(
+    compose: str,
+    service: str,
+    *,
+    next_service: str | None = None,
+) -> str:
+    start_marker = f"\n  {service}:\n"
+    start = compose.index(start_marker) + 1
+    if next_service is not None:
+        end = compose.index(f"\n  {next_service}:\n", start)
+    else:
+        end = compose.index("\nvolumes:\n", start)
     return compose[start:end]
 
 
@@ -29,9 +38,14 @@ def test_worker_secret_and_shared_root_are_required() -> None:
 
 def test_docker_socket_is_exposed_only_to_worker() -> None:
     compose = CURATOR_COMPOSE.read_text(encoding="utf-8")
-    worker = _service_block(compose, "curator-sandbox-worker", "curator-agent")
-    curator_api = compose[compose.index("  curator-agent:\n") :]
+    worker = _service_block(
+        compose,
+        "curator-sandbox-worker",
+        next_service="curator-agent",
+    )
+    curator_api = _service_block(compose, "curator-agent")
 
+    assert compose.count("/var/run/docker.sock:/var/run/docker.sock:ro") == 1
     assert "/var/run/docker.sock:/var/run/docker.sock:ro" in worker
     assert "/var/run/docker.sock" not in curator_api
     assert "dockerfile: worker.Dockerfile" in worker
@@ -42,7 +56,11 @@ def test_docker_socket_is_exposed_only_to_worker() -> None:
 
 def test_worker_has_no_trading_credentials_or_published_port() -> None:
     compose = CURATOR_COMPOSE.read_text(encoding="utf-8")
-    worker = _service_block(compose, "curator-sandbox-worker", "curator-agent")
+    worker = _service_block(
+        compose,
+        "curator-sandbox-worker",
+        next_service="curator-agent",
+    )
 
     assert "expose:" in worker
     assert "ports:" not in worker
@@ -59,7 +77,7 @@ def test_worker_has_no_trading_credentials_or_published_port() -> None:
 
 def test_api_requires_remote_worker_and_truthful_readiness() -> None:
     compose = CURATOR_COMPOSE.read_text(encoding="utf-8")
-    curator_api = compose[compose.index("  curator-agent:\n") :]
+    curator_api = _service_block(compose, "curator-agent")
 
     assert "CURATOR_SANDBOX_WORKER_URL: http://curator-sandbox-worker:8020" in curator_api
     assert 'CURATOR_REQUIRE_SANDBOX_WORKER: "true"' in curator_api
@@ -72,8 +90,12 @@ def test_api_requires_remote_worker_and_truthful_readiness() -> None:
 
 def test_worker_network_is_internal_and_api_bridges_only_control_plane() -> None:
     compose = CURATOR_COMPOSE.read_text(encoding="utf-8")
-    worker = _service_block(compose, "curator-sandbox-worker", "curator-agent")
-    curator_api = compose[compose.index("  curator-agent:\n") :]
+    worker = _service_block(
+        compose,
+        "curator-sandbox-worker",
+        next_service="curator-agent",
+    )
+    curator_api = _service_block(compose, "curator-agent")
 
     assert "networks:\n      - curator_worker" in worker
     assert "networks:\n      - default\n      - curator_worker" in curator_api
@@ -85,7 +107,7 @@ def test_bucket_review_generates_distinct_ephemeral_worker_key() -> None:
 
     assert "CURATOR_IMAGE_TAG: bucket-${{ github.run_id }}" in workflow
     assert "Generate ephemeral Curator credentials" in workflow
-    assert "worker_key=" in workflow
+    assert workflow.count("secrets.token_urlsafe(48)") == 3
     assert "CURATOR_SANDBOX_WORKER_API_KEY=${worker_key}" in workflow
     assert "Generated Curator credentials must be distinct." in workflow
     assert "curator-sandbox-worker curator-agent manager-agent" in workflow
