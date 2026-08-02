@@ -9,6 +9,7 @@ import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict
+from uuid import uuid4
 
 from scripts.run_multi_strategy_backtests import (
     BALANCED_STRATEGY_IDS,
@@ -22,8 +23,9 @@ from scripts.run_multi_strategy_backtests import (
 )
 
 
-WALK_FORWARD_PROFILE = "rolling_walk_forward_v1"
+WALK_FORWARD_PROFILE = "nested_walk_forward_v2"
 WALK_FORWARD_ENDPOINT = "/backtest/multi-strategy/walk-forward"
+NESTED_SELECTION_METHOD = "nested_train_select_test_evaluate"
 
 
 def _load_walk_forward_runtime() -> Dict[str, Any]:
@@ -65,10 +67,18 @@ def _walk_forward_criteria() -> Dict[str, Any]:
     return {
         "train_bars": int(os.getenv("BACKTEST_WALK_FORWARD_TRAIN_BARS", "126")),
         "test_bars": int(os.getenv("BACKTEST_WALK_FORWARD_TEST_BARS", "126")),
-        "step_bars": int(os.getenv("BACKTEST_WALK_FORWARD_STEP_BARS", "63")),
+        "step_bars": int(os.getenv("BACKTEST_WALK_FORWARD_STEP_BARS", "126")),
+        "embargo_bars": int(os.getenv("BACKTEST_WALK_FORWARD_EMBARGO_BARS", "0")),
+        "allow_overlapping_test_windows": _bool_env(
+            "BACKTEST_WALK_FORWARD_ALLOW_OVERLAP",
+            False,
+        ),
         "min_windows": int(os.getenv("BACKTEST_WALK_FORWARD_MIN_WINDOWS", "4")),
         "min_window_trades": int(
             os.getenv("BACKTEST_WALK_FORWARD_MIN_WINDOW_TRADES", "1")
+        ),
+        "min_train_eligible_window_rate": float(
+            os.getenv("BACKTEST_WALK_FORWARD_MIN_TRAIN_ELIGIBLE_RATE", "0.50")
         ),
         "min_profitable_window_rate": float(
             os.getenv("BACKTEST_WALK_FORWARD_MIN_PROFITABLE_RATE", "0.60")
@@ -88,9 +98,41 @@ def _walk_forward_criteria() -> Dict[str, Any]:
     }
 
 
+def _statistical_criteria() -> Dict[str, Any]:
+    return {
+        "enabled": True,
+        "min_observations": int(
+            os.getenv("BACKTEST_STATISTICAL_MIN_OBSERVATIONS", "30")
+        ),
+        "min_trades": int(os.getenv("BACKTEST_STATISTICAL_MIN_TRADES", "10")),
+        "max_adjusted_p_value": float(
+            os.getenv("BACKTEST_STATISTICAL_MAX_ADJUSTED_P_VALUE", "0.05")
+        ),
+        "min_probabilistic_sharpe_ratio": float(
+            os.getenv("BACKTEST_STATISTICAL_MIN_PSR", "0.95")
+        ),
+        "min_deflated_sharpe_probability": float(
+            os.getenv("BACKTEST_STATISTICAL_MIN_DSR", "0.90")
+        ),
+        "min_bootstrap_annualized_return": float(
+            os.getenv("BACKTEST_STATISTICAL_MIN_BOOTSTRAP_RETURN", "0.0")
+        ),
+        "bootstrap_confidence": float(
+            os.getenv("BACKTEST_STATISTICAL_BOOTSTRAP_CONFIDENCE", "0.95")
+        ),
+        "bootstrap_simulations": int(
+            os.getenv("BACKTEST_STATISTICAL_BOOTSTRAP_SIMULATIONS", "500")
+        ),
+        "bootstrap_seed": int(
+            os.getenv("BACKTEST_STATISTICAL_BOOTSTRAP_SEED", "42")
+        ),
+    }
+
+
 def _walk_forward_request_kwargs(*, symbol: str, bars: list[Any]) -> Dict[str, Any]:
     payload = _request_kwargs(symbol=symbol, bars=bars)
     payload["walk_forward_criteria"] = _walk_forward_criteria()
+    payload["statistical_criteria"] = _statistical_criteria()
     return payload
 
 
@@ -114,6 +156,7 @@ def _deterministic_walk_forward_run_id(
         "selection_profile": "balanced_v1",
         "validation_profile": WALK_FORWARD_PROFILE,
         "walk_forward_criteria": walk_forward_criteria,
+        "statistical_criteria": _statistical_criteria(),
     }
     digest = hashlib.sha256(
         json.dumps(identity, sort_keys=True).encode("utf-8")
@@ -121,13 +164,32 @@ def _deterministic_walk_forward_run_id(
     return f"backtest-walk-forward-{digest[:24]}"
 
 
+def _correlation_id() -> str:
+    workflow_run_id = os.getenv("GITHUB_RUN_ID", "").strip()
+    if workflow_run_id:
+        return f"backtest-nested-{workflow_run_id}"
+    return f"backtest-nested-{uuid4()}"
+
+
 def _post_json(
-    *, base_url: str, path: str, payload: Dict[str, Any], timeout: float
+    *,
+    base_url: str,
+    path: str,
+    payload: Dict[str, Any],
+    timeout: float,
+    correlation_id: str,
 ) -> Dict[str, Any]:
+    headers = {
+        "Content-Type": "application/json",
+        "X-Correlation-ID": correlation_id,
+    }
+    api_key = os.getenv("BACKTEST_AGENT_API_KEY", "").strip()
+    if api_key:
+        headers["X-API-KEY"] = api_key
     request = urllib.request.Request(
         f"{base_url.rstrip('/')}{path}",
         data=json.dumps(payload).encode("utf-8"),
-        headers={"Content-Type": "application/json"},
+        headers=headers,
         method="POST",
     )
     try:
@@ -148,12 +210,18 @@ def _post_json(
     return parsed
 
 
-def _run_walk_forward_selection(*, request: Any, runtime: Dict[str, Any]) -> Any:
+def _run_walk_forward_selection(
+    *,
+    request: Any,
+    runtime: Dict[str, Any],
+    correlation_id: str,
+) -> Any:
     response = _post_json(
         base_url=os.getenv("BACKTEST_AGENT_URL", "http://localhost:8016"),
         path=os.getenv("BACKTEST_WALK_FORWARD_ENDPOINT", WALK_FORWARD_ENDPOINT),
         payload=request.model_dump(mode="json"),
         timeout=float(os.getenv("BACKTEST_WALK_FORWARD_TIMEOUT_SECONDS", "900")),
+        correlation_id=correlation_id,
     )
     if response.get("status") != "success" or not isinstance(response.get("data"), dict):
         raise RuntimeError(
@@ -166,20 +234,48 @@ def _run_walk_forward_selection(*, request: Any, runtime: Dict[str, Any]) -> Any
 def _walk_forward_metadata(selection: Any) -> Dict[str, Any]:
     if selection.best_eligible is None:
         raise RuntimeError("walk-forward metadata requested without best_eligible")
-    evidence = selection.best_eligible.walk_forward.model_dump(mode="json")
+
+    evidence = selection.nested_walk_forward.model_dump(mode="json")
+    criteria = selection.walk_forward_criteria.model_dump(mode="json")
+    statistical_criteria = _statistical_criteria()
+    selected_strategy_id = selection.best_eligible.strategy_id
+    latest_strategy_id = str(evidence.get("latest_selected_strategy_id") or "")
+    promotion_gates = {
+        "nested_validation_passed": evidence.get("passed") is True,
+        "latest_selection_eligible": evidence.get("latest_selection_eligible") is True,
+        "exact_strategy_match": latest_strategy_id == selected_strategy_id,
+        "independent_test_windows": evidence.get("overlapping_test_windows") is False,
+        "statistical_validation_enabled": statistical_criteria.get("enabled") is True,
+    }
+    if not all(promotion_gates.values()):
+        failed = sorted(name for name, passed in promotion_gates.items() if not passed)
+        raise RuntimeError(
+            "nested promotion gates failed: " + ", ".join(failed)
+        )
+    if evidence.get("selection_method") != NESTED_SELECTION_METHOD:
+        raise RuntimeError("nested selection method mismatch")
+    if evidence.get("status") != "completed":
+        raise RuntimeError("nested walk-forward validation is incomplete")
+
     return {
         "validation_profile": WALK_FORWARD_PROFILE,
+        "selection_method": NESTED_SELECTION_METHOD,
         "walk_forward_required": True,
-        "walk_forward_passed": bool(evidence.get("passed")),
+        "walk_forward_passed": True,
         "walk_forward_status": evidence.get("status"),
         "walk_forward_stability_score": evidence.get("stability_score"),
         "walk_forward_evaluated_windows": evidence.get("evaluated_windows"),
         "walk_forward_profitable_window_rate": evidence.get("profitable_window_rate"),
+        "walk_forward_train_eligible_window_rate": evidence.get(
+            "train_eligible_window_rate"
+        ),
         "walk_forward_median_sharpe_ratio": evidence.get("median_sharpe_ratio"),
         "walk_forward_median_profit_factor": evidence.get("median_profit_factor"),
         "walk_forward_worst_max_drawdown": evidence.get("worst_max_drawdown"),
         "walk_forward_validation": evidence,
-        "walk_forward_criteria": selection.walk_forward_criteria.model_dump(mode="json"),
+        "walk_forward_criteria": criteria,
+        "promotion_gates": promotion_gates,
+        "statistical_criteria": statistical_criteria,
     }
 
 
@@ -197,6 +293,7 @@ def run_hourly_walk_forward_multi_strategy(report_path: Path) -> Dict[str, Any]:
     publish_to_database = _bool_env("PUBLISH_TO_DATABASE", True)
     batch_seed = os.getenv("GITHUB_RUN_ID") or datetime.now(timezone.utc).isoformat()
     batch_id = f"walk-forward-multi-strategy-{batch_seed}"
+    correlation_id = _correlation_id()
 
     provider = runtime["AlpacaMarketDataProvider"](
         api_key=os.getenv("ALPACA_API_KEY_ID", ""),
@@ -222,7 +319,11 @@ def run_hourly_walk_forward_multi_strategy(report_path: Path) -> Dict[str, Any]:
             request = runtime["WalkForwardMultiStrategyRequest"](
                 **_walk_forward_request_kwargs(symbol=symbol, bars=bars)
             )
-            selection = _run_walk_forward_selection(request=request, runtime=runtime)
+            selection = _run_walk_forward_selection(
+                request=request,
+                runtime=runtime,
+                correlation_id=correlation_id,
+            )
             selection_json = selection.model_dump(mode="json")
 
             if selection.best_eligible is None:
@@ -251,10 +352,6 @@ def run_hourly_walk_forward_multi_strategy(report_path: Path) -> Dict[str, Any]:
             selected_result = selection.selected_result
             if selected_result is None:
                 raise RuntimeError("best_eligible was returned without selected_result")
-            if not selection.best_eligible.walk_forward.passed:
-                raise RuntimeError(
-                    "best_eligible was returned without passing walk-forward evidence"
-                )
             walk_forward_metadata = _walk_forward_metadata(selection)
             run_id = _deterministic_walk_forward_run_id(
                 symbol=symbol,
@@ -279,6 +376,7 @@ def run_hourly_walk_forward_multi_strategy(report_path: Path) -> Dict[str, Any]:
                     skill_id=skill_id,
                     strategy_id=selected_strategy_id,
                     timeframe=timeframe,
+                    correlation_id=correlation_id,
                     metadata={
                         "multi_strategy_selected": True,
                         "multi_strategy_walk_forward_selected": True,
@@ -364,10 +462,12 @@ def run_hourly_walk_forward_multi_strategy(report_path: Path) -> Dict[str, Any]:
     output = {
         "status": "success" if all_succeeded else "error",
         "agent_type": "backtest-agent",
+        "correlation_id": correlation_id,
         "data": {
-            "mode": "walk_forward_multi_strategy_selection",
+            "mode": "nested_walk_forward_multi_strategy_selection",
             "selection_profile": "balanced_v1",
             "validation_profile": WALK_FORWARD_PROFILE,
+            "selection_method": NESTED_SELECTION_METHOD,
             "endpoint": WALK_FORWARD_ENDPOINT,
             "batch_id": batch_id,
             "symbols": symbols,
@@ -391,7 +491,7 @@ def run_hourly_walk_forward_multi_strategy(report_path: Path) -> Dict[str, Any]:
         "error": (
             None
             if all_succeeded
-            else "One or more walk-forward multi-strategy Backtests failed operationally."
+            else "One or more nested walk-forward Backtests failed operationally."
         ),
     }
 
@@ -420,7 +520,7 @@ def main() -> None:
     print(json.dumps(output, indent=2, sort_keys=True))
     if output.get("status") != "success":
         raise SystemExit(
-            "One or more walk-forward multi-strategy Backtests failed; see report."
+            "One or more nested walk-forward Backtests failed; see report."
         )
 
 
