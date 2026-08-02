@@ -1,0 +1,218 @@
+name: Curator Advisory Soak
+
+on:
+  workflow_dispatch:
+    inputs:
+      cycles:
+        description: "Repeated advisory executions in this run"
+        required: true
+        default: "12"
+        type: choice
+        options:
+          - "3"
+          - "12"
+          - "24"
+          - "60"
+      symbol:
+        description: "Synthetic symbol recorded in the advisory output"
+        required: true
+        default: "TEST"
+        type: string
+  schedule:
+    - cron: "25 * * * *"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: curator-advisory-soak
+  cancel-in-progress: false
+
+jobs:
+  advisory-soak:
+    if: github.event_name == 'workflow_dispatch' || vars.CURATOR_ADVISORY_SOAK_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    env:
+      CURATOR_AGENT_URL: http://127.0.0.1:8010
+      CURATOR_IMAGE_TAG: soak-${{ github.run_id }}
+      CURATOR_SHARED_WORK_ROOT: /var/lib/curator-worker
+      SOAK_CYCLES: ${{ github.event_name == 'workflow_dispatch' && inputs.cycles || '12' }}
+      SOAK_SYMBOL: ${{ github.event_name == 'workflow_dispatch' && inputs.symbol || 'TEST' }}
+
+    steps:
+      - name: Checkout Manager_Agent
+        uses: actions/checkout@v4
+        with:
+          path: Manager_Agent
+
+      - name: Checkout Curator_Agent main
+        uses: actions/checkout@v4
+        with:
+          repository: athipan1/Curator_Agent
+          ref: main
+          path: Curator_Agent
+          fetch-depth: 1
+
+      - name: Checkout Database_Agent main
+        uses: actions/checkout@v4
+        with:
+          repository: athipan1/Database_Agent
+          ref: main
+          path: Database_Agent
+          fetch-depth: 1
+
+      - name: Generate ephemeral Curator credentials
+        shell: bash
+        run: |
+          set -euo pipefail
+          execute_key="$(openssl rand -hex 32)"
+          admin_key="$(openssl rand -hex 32)"
+          worker_key="$(openssl rand -hex 32)"
+          database_key="$(openssl rand -hex 32)"
+          if [ "$execute_key" = "$admin_key" ] || \
+             [ "$execute_key" = "$worker_key" ] || \
+             [ "$admin_key" = "$worker_key" ]; then
+            echo "Generated Curator credentials must be distinct."
+            exit 1
+          fi
+          for value in "$execute_key" "$admin_key" "$worker_key" "$database_key"; do
+            echo "::add-mask::$value"
+          done
+          echo "CURATOR_AGENT_API_KEY=$execute_key" >> "$GITHUB_ENV"
+          echo "CURATOR_ADMIN_API_KEY=$admin_key" >> "$GITHUB_ENV"
+          echo "CURATOR_SANDBOX_WORKER_API_KEY=$worker_key" >> "$GITHUB_ENV"
+          echo "DATABASE_AGENT_API_KEY=$database_key" >> "$GITHUB_ENV"
+
+      - name: Prepare host-visible worker workspace
+        run: |
+          set -euo pipefail
+          sudo rm -rf "$CURATOR_SHARED_WORK_ROOT"
+          sudo mkdir -p "$CURATOR_SHARED_WORK_ROOT"
+          sudo chmod 0700 "$CURATOR_SHARED_WORK_ROOT"
+
+      - name: Validate isolated Curator topology
+        working-directory: Manager_Agent
+        run: |
+          docker compose \
+            -f docker-compose.yml \
+            -f docker-compose.curator.yml \
+            config --quiet
+
+      - name: Start Curator API worker and telemetry database
+        working-directory: Manager_Agent
+        run: |
+          set +e
+          docker compose \
+            -f docker-compose.yml \
+            -f docker-compose.curator.yml \
+            up --build -d curator-agent 2>&1 | tee reports-curator-soak-compose-up.log
+          status=${PIPESTATUS[0]}
+          if [ "$status" != "0" ]; then
+            docker compose \
+              -f docker-compose.yml \
+              -f docker-compose.curator.yml \
+              ps || true
+            exit "$status"
+          fi
+
+      - name: Wait for secure remote-worker readiness
+        working-directory: Manager_Agent
+        run: |
+          set -euo pipefail
+          for attempt in {1..72}; do
+            if curl -fsS http://127.0.0.1:8010/ready > /tmp/curator-soak-ready.json; then
+              python - <<'PY'
+          import json
+
+          with open('/tmp/curator-soak-ready.json', encoding='utf-8') as handle:
+              payload = json.load(handle)
+
+          execution = payload['data']['execution']
+          worker = execution['worker_execution']
+          assert payload['data']['ready'] is True, payload
+          assert execution['mode'] == 'remote_worker', payload
+          assert execution['secure_execution_ready'] is True, payload
+          assert execution['fallback_enabled'] is False, payload
+          assert 'worker_url' not in execution, payload
+          assert worker['mode'] == 'container', payload
+          assert worker['network_access'] is False, payload
+          assert worker['read_only_filesystem'] is True, payload
+          assert worker['shared_work_root_configured'] is True, payload
+          assert worker['shared_work_root_required'] is True, payload
+          PY
+              exit 0
+            fi
+            sleep 5
+          done
+          cat /tmp/curator-soak-ready.json || true
+          exit 1
+
+      - name: Verify control-plane isolation
+        working-directory: Manager_Agent
+        run: |
+          set -euo pipefail
+          api_id="$(docker compose -f docker-compose.yml -f docker-compose.curator.yml ps -q curator-agent)"
+          worker_id="$(docker compose -f docker-compose.yml -f docker-compose.curator.yml ps -q curator-sandbox-worker)"
+          docker exec "$api_id" sh -c '! command -v docker'
+          docker exec "$api_id" sh -c 'test ! -S /var/run/docker.sock'
+          docker exec "$worker_id" sh -c 'command -v docker'
+          docker exec "$worker_id" sh -c 'test -S /var/run/docker.sock'
+          test -z "$(docker port "$worker_id")"
+
+      - name: Run deterministic advisory soak cycles
+        working-directory: Manager_Agent
+        run: |
+          python scripts/run_curator_advisory_soak.py \
+            --cycles "$SOAK_CYCLES" \
+            --symbol "$SOAK_SYMBOL" \
+            --score 0.5 \
+            --run-id "${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
+            --output-json reports/curator-advisory-soak.json
+
+      - name: Verify worker workspace cleanup
+        run: |
+          set -euo pipefail
+          residue="$(sudo find "$CURATOR_SHARED_WORK_ROOT" -mindepth 1 -maxdepth 1 -print -quit)"
+          if [ -n "$residue" ]; then
+            echo "Sandbox workspace residue detected: $residue"
+            sudo find "$CURATOR_SHARED_WORK_ROOT" -mindepth 1 -maxdepth 2 -print
+            exit 1
+          fi
+
+      - name: Upload advisory soak evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: curator-advisory-soak-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            Manager_Agent/reports/curator-advisory-soak.json
+            Manager_Agent/reports-curator-soak-compose-up.log
+            /tmp/curator-soak-ready.json
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Show diagnostics on failure
+        if: failure()
+        working-directory: Manager_Agent
+        run: |
+          cat reports/curator-advisory-soak.json || true
+          cat /tmp/curator-soak-ready.json || true
+          docker compose -f docker-compose.yml -f docker-compose.curator.yml ps || true
+          for service in database-agent curator-sandbox-worker curator-agent; do
+            echo "---- ${service} logs tail ----"
+            docker compose \
+              -f docker-compose.yml \
+              -f docker-compose.curator.yml \
+              logs --tail=220 "$service" || true
+          done
+
+      - name: Stop isolated Curator topology
+        if: always()
+        working-directory: Manager_Agent
+        run: |
+          docker compose \
+            -f docker-compose.yml \
+            -f docker-compose.curator.yml \
+            down -v || true
+          sudo rm -rf "$CURATOR_SHARED_WORK_ROOT" || true
