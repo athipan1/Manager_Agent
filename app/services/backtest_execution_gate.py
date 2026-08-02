@@ -7,7 +7,14 @@ from datetime import datetime, timezone
 from typing import Any, Dict, Iterable, List, Optional
 
 
-WALK_FORWARD_VALIDATION_PROFILE = "rolling_walk_forward_v1"
+LEGACY_WALK_FORWARD_VALIDATION_PROFILE = "rolling_walk_forward_v1"
+NESTED_WALK_FORWARD_VALIDATION_PROFILE = "nested_walk_forward_v2"
+WALK_FORWARD_VALIDATION_PROFILE = NESTED_WALK_FORWARD_VALIDATION_PROFILE
+SUPPORTED_WALK_FORWARD_VALIDATION_PROFILES = (
+    NESTED_WALK_FORWARD_VALIDATION_PROFILE,
+    LEGACY_WALK_FORWARD_VALIDATION_PROFILE,
+)
+NESTED_SELECTION_METHOD = "nested_train_select_test_evaluate"
 
 
 def _symbol(value: Any) -> str:
@@ -126,12 +133,91 @@ def _walk_forward_evidence(
     return metadata, validation, criteria
 
 
+def _all_boolean_gates_pass(value: Any) -> bool:
+    return (
+        isinstance(value, dict)
+        and bool(value)
+        and all(item is True for item in value.values())
+    )
+
+
+def _window_count_is_valid(
+    validation: Dict[str, Any],
+    criteria: Dict[str, Any],
+) -> bool:
+    try:
+        minimum_windows = int(criteria.get("min_windows"))
+        evaluated_windows = int(validation.get("evaluated_windows"))
+    except (TypeError, ValueError):
+        return False
+    return minimum_windows >= 1 and evaluated_windows >= minimum_windows
+
+
+def _legacy_walk_forward_rejection_codes(
+    *,
+    metadata: Dict[str, Any],
+    validation: Dict[str, Any],
+) -> List[str]:
+    reasons: List[str] = []
+    selection_gates = metadata.get("selection_gates")
+    if not _all_boolean_gates_pass(validation.get("gates")) or not _all_boolean_gates_pass(
+        selection_gates
+    ):
+        reasons.append("backtest_walk_forward_gates_failed")
+    return reasons
+
+
+def _nested_walk_forward_rejection_codes(
+    *,
+    run: Dict[str, Any],
+    metadata: Dict[str, Any],
+    validation: Dict[str, Any],
+) -> List[str]:
+    reasons: List[str] = []
+
+    selection_method = (
+        validation.get("selection_method")
+        or metadata.get("selection_method")
+    )
+    if selection_method != NESTED_SELECTION_METHOD:
+        reasons.append("backtest_nested_selection_method_invalid")
+
+    if validation.get("overlapping_test_windows") is not False:
+        reasons.append("backtest_nested_test_windows_overlap")
+
+    if validation.get("latest_selection_eligible") is not True:
+        reasons.append("backtest_nested_latest_selection_ineligible")
+
+    latest_strategy_id = str(
+        validation.get("latest_selected_strategy_id") or ""
+    )
+    run_strategy_id = str(run.get("strategy_id") or "")
+    if not latest_strategy_id or latest_strategy_id != run_strategy_id:
+        reasons.append("backtest_nested_strategy_mismatch")
+
+    if not _all_boolean_gates_pass(validation.get("gates")):
+        reasons.append("backtest_walk_forward_gates_failed")
+
+    promotion_gates = metadata.get("promotion_gates")
+    if not _all_boolean_gates_pass(promotion_gates):
+        reasons.append("backtest_nested_promotion_gates_failed")
+
+    statistical_criteria = metadata.get("statistical_criteria")
+    if not isinstance(statistical_criteria, dict):
+        reasons.append("backtest_statistical_evidence_missing")
+    elif statistical_criteria.get("enabled") is not True:
+        reasons.append("backtest_statistical_validation_disabled")
+
+    return reasons
+
+
 def _walk_forward_rejection_codes(run: Dict[str, Any]) -> List[str]:
     metadata, validation, criteria = _walk_forward_evidence(run)
     reasons: List[str] = []
+    profile = metadata.get("validation_profile")
 
     if (
-        metadata.get("validation_profile") != WALK_FORWARD_VALIDATION_PROFILE
+        profile not in SUPPORTED_WALK_FORWARD_VALIDATION_PROFILES
         or metadata.get("walk_forward_required") is not True
         or not validation
         or not criteria
@@ -150,37 +236,26 @@ def _walk_forward_rejection_codes(run: Dict[str, Any]) -> List[str]:
     ):
         reasons.append("backtest_walk_forward_incomplete")
 
-    walk_forward_gates = (
-        validation.get("gates")
-        if isinstance(validation.get("gates"), dict)
-        else {}
-    )
-    selection_gates = (
-        metadata.get("selection_gates")
-        if isinstance(metadata.get("selection_gates"), dict)
-        else {}
-    )
-    if (
-        not walk_forward_gates
-        or not all(value is True for value in walk_forward_gates.values())
-        or not selection_gates
-        or not all(value is True for value in selection_gates.values())
-    ):
-        reasons.append("backtest_walk_forward_gates_failed")
-
-    evaluated_windows = validation.get("evaluated_windows")
-    minimum_windows = criteria.get("min_windows")
-    try:
-        window_count_valid = (
-            int(evaluated_windows) >= int(minimum_windows)
-            and int(minimum_windows) >= 1
-        )
-    except (TypeError, ValueError):
-        window_count_valid = False
-    if not window_count_valid:
+    if not _window_count_is_valid(validation, criteria):
         reasons.append("backtest_walk_forward_window_count_invalid")
 
-    return reasons
+    if profile == NESTED_WALK_FORWARD_VALIDATION_PROFILE:
+        reasons.extend(
+            _nested_walk_forward_rejection_codes(
+                run=run,
+                metadata=metadata,
+                validation=validation,
+            )
+        )
+    elif profile == LEGACY_WALK_FORWARD_VALIDATION_PROFILE:
+        reasons.extend(
+            _legacy_walk_forward_rejection_codes(
+                metadata=metadata,
+                validation=validation,
+            )
+        )
+
+    return sorted(set(reasons))
 
 
 def _decision(
@@ -269,6 +344,7 @@ def _decision(
         "run_strategy_id": run.get("strategy_id"),
         "run_timeframe": run.get("timeframe"),
         "walk_forward_required": walk_forward_required,
+        "validation_profile": metadata.get("validation_profile"),
         "walk_forward_passed": metadata.get("walk_forward_passed"),
         "walk_forward_status": metadata.get("walk_forward_status"),
         "walk_forward_stability_score": metadata.get(
@@ -276,6 +352,8 @@ def _decision(
         ),
         "walk_forward_validation": validation or None,
         "walk_forward_criteria": criteria or None,
+        "promotion_gates": metadata.get("promotion_gates"),
+        "statistical_criteria": metadata.get("statistical_criteria"),
         "mode": "required",
     }
 
@@ -479,6 +557,11 @@ async def filter_candidates_with_backtest_gate(
             WALK_FORWARD_VALIDATION_PROFILE
             if resolved_walk_forward_required
             else None
+        ),
+        "supported_validation_profiles": (
+            list(SUPPORTED_WALK_FORWARD_VALIDATION_PROFILES)
+            if resolved_walk_forward_required
+            else []
         ),
         "timeframe": timeframe,
         "max_age_hours": max_age_hours,
