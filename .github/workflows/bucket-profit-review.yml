@@ -47,6 +47,7 @@ jobs:
       DATABASE_AGENT_URL: http://localhost:8004
       DATABASE_AGENT_API_KEY: ${{ secrets.DATABASE_AGENT_API_KEY || 'dev_database_key' }}
       DEFAULT_ACCOUNT_ID: 1
+      CURATOR_IMAGE_TAG: bucket-${{ github.run_id }}
       PROFIT_AGENT_URL: http://localhost:8011
       PROFIT_AGENT_API_KEY: ${{ secrets.PROFIT_AGENT_API_KEY }}
       RISK_AGENT_URL: http://localhost:8007
@@ -203,12 +204,19 @@ jobs:
 
       - name: Generate ephemeral Curator credentials
         run: |
-          execute_key="$(python -c 'import secrets; print(secrets.token_urlsafe(32))')"
-          admin_key="$(python -c 'import secrets; print(secrets.token_urlsafe(32))')"
+          execute_key="$(python -c 'import secrets; print(secrets.token_urlsafe(48))')"
+          admin_key="$(python -c 'import secrets; print(secrets.token_urlsafe(48))')"
+          worker_key="$(python -c 'import secrets; print(secrets.token_urlsafe(48))')"
+          if [ "$execute_key" = "$admin_key" ] || [ "$execute_key" = "$worker_key" ] || [ "$admin_key" = "$worker_key" ]; then
+            echo "Generated Curator credentials must be distinct."
+            exit 1
+          fi
           echo "::add-mask::${execute_key}"
           echo "::add-mask::${admin_key}"
+          echo "::add-mask::${worker_key}"
           echo "CURATOR_AGENT_API_KEY=${execute_key}" >> "$GITHUB_ENV"
           echo "CURATOR_ADMIN_API_KEY=${admin_key}" >> "$GITHUB_ENV"
+          echo "CURATOR_SANDBOX_WORKER_API_KEY=${worker_key}" >> "$GITHUB_ENV"
 
       - name: Build and start trading stack
         working-directory: Manager_Agent
@@ -227,7 +235,7 @@ jobs:
         working-directory: Manager_Agent
         run: |
           compose="docker compose -f docker-compose.yml -f docker-compose.risk.yml -f docker-compose.curator.yml"
-          runtime_services="database-agent technical-agent scanner-agent fundamental-agent learning-agent risk-agent performance-agent execution-agent curator-agent manager-agent db"
+          runtime_services="database-agent technical-agent scanner-agent fundamental-agent learning-agent risk-agent performance-agent execution-agent curator-sandbox-worker curator-agent manager-agent db"
           for i in {1..60}; do
             $compose ps
             exited=$($compose ps --status exited -q $runtime_services | wc -l | tr -d ' ')
@@ -328,7 +336,7 @@ jobs:
         run: |
           compose="docker compose -f docker-compose.yml -f docker-compose.risk.yml -f docker-compose.curator.yml"
           $compose ps || true
-          for service in database-agent technical-agent scanner-agent fundamental-agent learning-agent risk-agent performance-agent execution-agent curator-agent manager-agent db; do
+          for service in database-agent technical-agent scanner-agent fundamental-agent learning-agent risk-agent performance-agent execution-agent curator-sandbox-worker curator-agent manager-agent db; do
             echo "---- ${service} logs tail ----"
             $compose logs --tail=180 "$service" || true
           done

@@ -1,0 +1,246 @@
+name: Curator Worker Integration
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - "docker-compose.curator.yml"
+      - "scripts/check_curator_runtime.py"
+      - "tests/test_curator_worker_topology.py"
+      - "docs/curator_runtime_setup.md"
+      - ".github/workflows/curator-worker-integration.yml"
+  push:
+    branches:
+      - main
+    paths:
+      - "docker-compose.curator.yml"
+      - "scripts/check_curator_runtime.py"
+      - "tests/test_curator_worker_topology.py"
+      - "docs/curator_runtime_setup.md"
+      - ".github/workflows/curator-worker-integration.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: curator-worker-integration-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  curator-worker-integration:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    env:
+      CURATOR_IMAGE_TAG: manager-worker-e2e
+      CURATOR_SHARED_WORK_ROOT: /var/lib/curator-worker
+
+    steps:
+      - name: Checkout Manager_Agent
+        uses: actions/checkout@v4
+        with:
+          path: Manager_Agent
+
+      - name: Checkout Curator_Agent main
+        uses: actions/checkout@v4
+        with:
+          repository: athipan1/Curator_Agent
+          ref: main
+          path: Curator_Agent
+          fetch-depth: 1
+
+      - name: Checkout Database_Agent main
+        uses: actions/checkout@v4
+        with:
+          repository: athipan1/Database_Agent
+          ref: main
+          path: Database_Agent
+          fetch-depth: 1
+
+      - name: Generate ephemeral credentials
+        shell: bash
+        run: |
+          set -euo pipefail
+          execute_key="$(openssl rand -hex 32)"
+          admin_key="$(openssl rand -hex 32)"
+          worker_key="$(openssl rand -hex 32)"
+          database_key="$(openssl rand -hex 32)"
+          for value in "$execute_key" "$admin_key" "$worker_key" "$database_key"; do
+            echo "::add-mask::$value"
+          done
+          echo "CURATOR_AGENT_API_KEY=$execute_key" >> "$GITHUB_ENV"
+          echo "CURATOR_ADMIN_API_KEY=$admin_key" >> "$GITHUB_ENV"
+          echo "CURATOR_SANDBOX_WORKER_API_KEY=$worker_key" >> "$GITHUB_ENV"
+          echo "DATABASE_AGENT_API_KEY=$database_key" >> "$GITHUB_ENV"
+
+      - name: Prepare host-visible worker workspace
+        run: |
+          sudo rm -rf "$CURATOR_SHARED_WORK_ROOT"
+          sudo mkdir -p "$CURATOR_SHARED_WORK_ROOT"
+          sudo chmod 0700 "$CURATOR_SHARED_WORK_ROOT"
+
+      - name: Validate composed topology
+        working-directory: Manager_Agent
+        run: |
+          docker compose \
+            -f docker-compose.yml \
+            -f docker-compose.curator.yml \
+            config --quiet
+
+      - name: Build and start Curator dependency chain
+        working-directory: Manager_Agent
+        run: |
+          set +e
+          docker compose \
+            -f docker-compose.yml \
+            -f docker-compose.curator.yml \
+            up --build -d curator-agent 2>&1 | tee curator-worker-compose-up.log
+          status=${PIPESTATUS[0]}
+          if [ "$status" != "0" ]; then
+            docker compose \
+              -f docker-compose.yml \
+              -f docker-compose.curator.yml \
+              ps || true
+            exit "$status"
+          fi
+
+      - name: Wait for dependency-aware Curator readiness
+        working-directory: Manager_Agent
+        run: |
+          set -euo pipefail
+          for attempt in {1..72}; do
+            if curl -fsS http://127.0.0.1:8010/ready > /tmp/curator-worker-ready.json; then
+              python - <<'PY'
+          import json
+
+          with open('/tmp/curator-worker-ready.json', encoding='utf-8') as handle:
+              payload = json.load(handle)
+
+          execution = payload['data']['execution']
+          worker_execution = execution['worker_execution']
+          assert payload['data']['ready'] is True, payload
+          assert execution['mode'] == 'remote_worker', payload
+          assert execution['secure_execution_ready'] is True, payload
+          assert execution['fallback_enabled'] is False, payload
+          assert worker_execution['mode'] == 'container', payload
+          assert worker_execution['shared_work_root_configured'] is True, payload
+          assert worker_execution['shared_work_root_required'] is True, payload
+          PY
+              exit 0
+            fi
+
+            for service in database-agent curator-sandbox-worker curator-agent; do
+              container_id="$(docker compose -f docker-compose.yml -f docker-compose.curator.yml ps -q "$service")"
+              if [ -n "$container_id" ] && [ "$(docker inspect -f '{{.State.Status}}' "$container_id")" = "exited" ]; then
+                echo "$service exited before readiness."
+                docker compose -f docker-compose.yml -f docker-compose.curator.yml logs --tail=200 "$service" || true
+                exit 1
+              fi
+            done
+            sleep 5
+          done
+          echo "Curator worker topology did not become ready."
+          exit 1
+
+      - name: Verify container isolation topology
+        working-directory: Manager_Agent
+        run: |
+          set -euo pipefail
+          api_id="$(docker compose -f docker-compose.yml -f docker-compose.curator.yml ps -q curator-agent)"
+          worker_id="$(docker compose -f docker-compose.yml -f docker-compose.curator.yml ps -q curator-sandbox-worker)"
+          docker exec "$api_id" sh -c '! command -v docker'
+          docker exec "$api_id" sh -c 'test ! -S /var/run/docker.sock'
+          docker exec "$worker_id" sh -c 'command -v docker'
+          docker exec "$worker_id" sh -c 'test -S /var/run/docker.sock'
+          docker exec "$worker_id" sh -c 'test -d /var/lib/curator-worker'
+          test -z "$(docker port "$worker_id")"
+
+          API_ID="$api_id" WORKER_ID="$worker_id" python - <<'PY'
+          import json
+          import os
+          import subprocess
+
+          def inspect(container_id):
+              return json.loads(
+                  subprocess.check_output(
+                      ['docker', 'inspect', container_id],
+                      text=True,
+                  )
+              )[0]
+
+          api = inspect(os.environ['API_ID'])
+          worker = inspect(os.environ['WORKER_ID'])
+          api_sources = {mount.get('Source') for mount in api.get('Mounts', [])}
+          worker_mounts = {
+              (mount.get('Source'), mount.get('Destination'))
+              for mount in worker.get('Mounts', [])
+          }
+          assert '/var/run/docker.sock' not in api_sources, api_sources
+          assert ('/var/run/docker.sock', '/var/run/docker.sock') in worker_mounts, worker_mounts
+          assert ('/var/lib/curator-worker', '/var/lib/curator-worker') in worker_mounts, worker_mounts
+          assert len(worker['NetworkSettings']['Networks']) == 1, worker['NetworkSettings']['Networks']
+          assert any(name.endswith('_curator_worker') for name in worker['NetworkSettings']['Networks'])
+          assert len(api['NetworkSettings']['Networks']) == 2, api['NetworkSettings']['Networks']
+          PY
+
+      - name: Run Manager authenticated Curator flow
+        working-directory: Manager_Agent
+        env:
+          CURATOR_AGENT_URL: http://127.0.0.1:8010
+        run: |
+          set -euo pipefail
+          python scripts/check_curator_runtime.py | tee /tmp/manager-curator-worker-smoke.json
+          python - <<'PY'
+          import json
+
+          with open('/tmp/manager-curator-worker-smoke.json', encoding='utf-8') as handle:
+              payload = json.load(handle)
+
+          assert payload['ok'] is True, payload
+          execution = payload['execute']
+          assert execution['execution_status'] == 'success', payload
+          assert execution['execution_backend'] == 'remote_worker', payload
+          assert execution['fallback_used'] is False, payload
+          assert execution['sandbox']['mode'] == 'container', payload
+          assert execution['sandbox']['shared_work_root_configured'] is True, payload
+          assert execution['sandbox']['shared_work_root_required'] is True, payload
+          assert execution['sandbox']['network_access'] is False, payload
+          assert execution['sandbox']['broker_access'] is False, payload
+          assert execution['sandbox']['order_placement'] is False, payload
+          PY
+
+      - name: Verify worker workspace cleanup
+        run: |
+          set -euo pipefail
+          test -z "$(sudo find "$CURATOR_SHARED_WORK_ROOT" -mindepth 1 -maxdepth 1 -print -quit)"
+
+      - name: Show diagnostics on failure
+        if: failure()
+        working-directory: Manager_Agent
+        run: |
+          cat /tmp/curator-worker-ready.json || true
+          cat /tmp/manager-curator-worker-smoke.json || true
+          docker compose \
+            -f docker-compose.yml \
+            -f docker-compose.curator.yml \
+            ps || true
+          for service in database-agent curator-skill-sandbox-image curator-sandbox-worker curator-agent; do
+            echo "---- ${service} logs ----"
+            docker compose \
+              -f docker-compose.yml \
+              -f docker-compose.curator.yml \
+              logs --tail=220 "$service" || true
+          done
+          tail -220 curator-worker-compose-up.log || true
+          sudo find "$CURATOR_SHARED_WORK_ROOT" -maxdepth 3 -ls || true
+
+      - name: Stop Curator dependency chain
+        if: always()
+        working-directory: Manager_Agent
+        run: |
+          docker compose \
+            -f docker-compose.yml \
+            -f docker-compose.curator.yml \
+            down -v || true
+          sudo rm -rf "$CURATOR_SHARED_WORK_ROOT"

@@ -30,6 +30,10 @@ def test_curator_compose_requires_external_credentials():
     assert "dev_curator_admin_key" not in compose
     assert "${CURATOR_AGENT_API_KEY:?CURATOR_AGENT_API_KEY is required}" in compose
     assert "${CURATOR_ADMIN_API_KEY:?CURATOR_ADMIN_API_KEY is required}" in compose
+    assert (
+        "${CURATOR_SANDBOX_WORKER_API_KEY:?CURATOR_SANDBOX_WORKER_API_KEY is required}"
+        in compose
+    )
 
 
 def test_bucket_review_generates_ephemeral_curator_credentials():
@@ -38,9 +42,12 @@ def test_bucket_review_generates_ephemeral_curator_credentials():
     )
 
     assert "Generate ephemeral Curator credentials" in workflow
-    assert "secrets.token_urlsafe(32)" in workflow
+    assert workflow.count("secrets.token_urlsafe(48)") == 3
     assert "CURATOR_AGENT_API_KEY=${execute_key}" in workflow
     assert "CURATOR_ADMIN_API_KEY=${admin_key}" in workflow
+    assert "CURATOR_SANDBOX_WORKER_API_KEY=${worker_key}" in workflow
+    assert "Generated Curator credentials must be distinct." in workflow
+    assert 'echo "::add-mask::${worker_key}"' in workflow
 
 
 @pytest.mark.asyncio
