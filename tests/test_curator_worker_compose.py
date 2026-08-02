@@ -7,6 +7,7 @@ ROOT = Path(__file__).resolve().parents[1]
 CURATOR_COMPOSE = ROOT / "docker-compose.curator.yml"
 HOURLY_PAPER_COMPOSE = ROOT / "docker-compose.hourly-paper.yml"
 WORKER_WORKFLOW = ROOT / ".github" / "workflows" / "curator-worker-contract.yml"
+BUCKET_WORKFLOW = ROOT / ".github" / "workflows" / "bucket-profit-review.yml"
 
 
 def _service_block(compose: str, service: str, next_service: str | None) -> str:
@@ -76,3 +77,20 @@ def test_cross_repo_worker_contract_uses_ephemeral_distinct_credentials() -> Non
     assert "Verify API has no Docker CLI or socket" in workflow
     assert "Verify fail-closed behavior when worker stops" in workflow
     assert "rejected_remote_worker_unavailable" in workflow
+
+
+def test_bucket_review_generates_a_distinct_ephemeral_worker_key() -> None:
+    workflow = BUCKET_WORKFLOW.read_text(encoding="utf-8")
+
+    assert "CURATOR_IMAGE_TAG: bucket-${{ github.run_id }}" in workflow
+    assert 'worker_key="$(python -c \'import secrets; print(secrets.token_urlsafe(48))\')"' in workflow
+    assert 'echo "::add-mask::${worker_key}"' in workflow
+    assert (
+        'echo "CURATOR_SANDBOX_WORKER_API_KEY=${worker_key}" >> "$GITHUB_ENV"'
+        in workflow
+    )
+    assert "Generated Curator credentials must be distinct." in workflow
+    assert "curator-sandbox-worker curator-agent manager-agent" in workflow
+    assert 'TRADING_MODE: PAPER' in workflow
+    assert 'ALLOW_LIVE_TRADING: "false"' in workflow
+    assert 'DRY_RUN: "true"' in workflow
