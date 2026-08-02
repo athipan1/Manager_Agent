@@ -98,9 +98,41 @@ def _walk_forward_criteria() -> Dict[str, Any]:
     }
 
 
+def _statistical_criteria() -> Dict[str, Any]:
+    return {
+        "enabled": True,
+        "min_observations": int(
+            os.getenv("BACKTEST_STATISTICAL_MIN_OBSERVATIONS", "30")
+        ),
+        "min_trades": int(os.getenv("BACKTEST_STATISTICAL_MIN_TRADES", "10")),
+        "max_adjusted_p_value": float(
+            os.getenv("BACKTEST_STATISTICAL_MAX_ADJUSTED_P_VALUE", "0.05")
+        ),
+        "min_probabilistic_sharpe_ratio": float(
+            os.getenv("BACKTEST_STATISTICAL_MIN_PSR", "0.95")
+        ),
+        "min_deflated_sharpe_probability": float(
+            os.getenv("BACKTEST_STATISTICAL_MIN_DSR", "0.90")
+        ),
+        "min_bootstrap_annualized_return": float(
+            os.getenv("BACKTEST_STATISTICAL_MIN_BOOTSTRAP_RETURN", "0.0")
+        ),
+        "bootstrap_confidence": float(
+            os.getenv("BACKTEST_STATISTICAL_BOOTSTRAP_CONFIDENCE", "0.95")
+        ),
+        "bootstrap_simulations": int(
+            os.getenv("BACKTEST_STATISTICAL_BOOTSTRAP_SIMULATIONS", "500")
+        ),
+        "bootstrap_seed": int(
+            os.getenv("BACKTEST_STATISTICAL_BOOTSTRAP_SEED", "42")
+        ),
+    }
+
+
 def _walk_forward_request_kwargs(*, symbol: str, bars: list[Any]) -> Dict[str, Any]:
     payload = _request_kwargs(symbol=symbol, bars=bars)
     payload["walk_forward_criteria"] = _walk_forward_criteria()
+    payload["statistical_criteria"] = _statistical_criteria()
     return payload
 
 
@@ -124,6 +156,7 @@ def _deterministic_walk_forward_run_id(
         "selection_profile": "balanced_v1",
         "validation_profile": WALK_FORWARD_PROFILE,
         "walk_forward_criteria": walk_forward_criteria,
+        "statistical_criteria": _statistical_criteria(),
     }
     digest = hashlib.sha256(
         json.dumps(identity, sort_keys=True).encode("utf-8")
@@ -204,7 +237,7 @@ def _walk_forward_metadata(selection: Any) -> Dict[str, Any]:
 
     evidence = selection.nested_walk_forward.model_dump(mode="json")
     criteria = selection.walk_forward_criteria.model_dump(mode="json")
-    statistical_criteria = selection.statistical_criteria.model_dump(mode="json")
+    statistical_criteria = _statistical_criteria()
     selected_strategy_id = selection.best_eligible.strategy_id
     latest_strategy_id = str(evidence.get("latest_selected_strategy_id") or "")
     promotion_gates = {
@@ -224,9 +257,6 @@ def _walk_forward_metadata(selection: Any) -> Dict[str, Any]:
     if evidence.get("status") != "completed":
         raise RuntimeError("nested walk-forward validation is incomplete")
 
-    statistical_evidence = selection.best_eligible.statistical_evidence.model_dump(
-        mode="json"
-    )
     return {
         "validation_profile": WALK_FORWARD_PROFILE,
         "selection_method": NESTED_SELECTION_METHOD,
@@ -246,7 +276,6 @@ def _walk_forward_metadata(selection: Any) -> Dict[str, Any]:
         "walk_forward_criteria": criteria,
         "promotion_gates": promotion_gates,
         "statistical_criteria": statistical_criteria,
-        "statistical_evidence": statistical_evidence,
     }
 
 
