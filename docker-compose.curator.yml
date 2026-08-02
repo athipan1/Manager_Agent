@@ -55,11 +55,63 @@ services:
       retries: 5
       start_period: 10s
 
+  curator-skill-sandbox-image:
+    build:
+      context: ../Curator_Agent
+      dockerfile: sandbox/Dockerfile
+    image: painaidee/curator-skill-sandbox:${CURATOR_IMAGE_TAG:-latest}
+    entrypoint: ["/bin/true"]
+    restart: "no"
+    network_mode: none
+
+  curator-sandbox-worker:
+    build:
+      context: ../Curator_Agent
+      dockerfile: worker.Dockerfile
+    image: painaidee/curator-sandbox-worker:${CURATOR_IMAGE_TAG:-latest}
+    restart: always
+    expose:
+      - "8020"
+    environment:
+      CURATOR_SANDBOX_WORKER_API_KEY: ${CURATOR_SANDBOX_WORKER_API_KEY:?CURATOR_SANDBOX_WORKER_API_KEY is required}
+      CURATOR_SANDBOX_IMAGE: painaidee/curator-skill-sandbox:${CURATOR_IMAGE_TAG:-latest}
+      CURATOR_SANDBOX_WORKER_MAX_BODY_BYTES: ${CURATOR_SANDBOX_WORKER_MAX_BODY_BYTES:-65536}
+      CURATOR_SANDBOX_WORKER_MAX_CLOCK_SKEW_SECONDS: ${CURATOR_SANDBOX_WORKER_MAX_CLOCK_SKEW_SECONDS:-30}
+      CURATOR_SANDBOX_WORKER_MAX_CONCURRENCY: ${CURATOR_SANDBOX_WORKER_MAX_CONCURRENCY:-2}
+      CURATOR_SANDBOX_WORKER_QUEUE_TIMEOUT_SECONDS: ${CURATOR_SANDBOX_WORKER_QUEUE_TIMEOUT_SECONDS:-1}
+      PYTHONPATH: /app
+      HOME: /tmp
+    depends_on:
+      curator-skill-sandbox-image:
+        condition: service_completed_successfully
+    volumes:
+      # Docker socket access is host-equivalent. It is intentionally isolated to
+      # this worker and must target a dedicated or rootless execution daemon.
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=16m
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 128
+    mem_limit: 256m
+    cpus: 0.50
+    networks:
+      - curator_worker
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8020/health', timeout=3).read()\" || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
   curator-agent:
     build:
       context: ../Curator_Agent
       dockerfile: Dockerfile
-    image: painaidee/curator-agent:latest
+    image: painaidee/curator-agent:${CURATOR_IMAGE_TAG:-latest}
     restart: always
     ports:
       - "8010:8010"
@@ -71,20 +123,43 @@ services:
       CURATOR_REQUIRE_API_KEY: "true"
       CURATOR_EXECUTE_API_KEY: ${CURATOR_AGENT_API_KEY:?CURATOR_AGENT_API_KEY is required}
       CURATOR_ADMIN_API_KEY: ${CURATOR_ADMIN_API_KEY:?CURATOR_ADMIN_API_KEY is required}
+      CURATOR_SANDBOX_WORKER_URL: http://curator-sandbox-worker:8020
+      CURATOR_SANDBOX_WORKER_API_KEY: ${CURATOR_SANDBOX_WORKER_API_KEY:?CURATOR_SANDBOX_WORKER_API_KEY is required}
+      CURATOR_REQUIRE_SANDBOX_WORKER: "true"
+      # The worker is reachable only over the internal Compose network below.
+      CURATOR_ALLOW_INSECURE_WORKER_HTTP: "true"
+      CURATOR_CONTAINER_SANDBOX_ENABLED: "false"
+      CURATOR_CONTAINER_SANDBOX_FALLBACK: "false"
       DATABASE_AGENT_URL: http://database-agent:8004
       DATABASE_AGENT_API_KEY: ${DATABASE_AGENT_API_KEY:-dev_database_key}
       PYTHONPATH: /app
     depends_on:
       database-agent:
         condition: service_healthy
+      curator-sandbox-worker:
+        condition: service_healthy
     volumes:
       - curator_data:/data
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=16m
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    networks:
+      - default
+      - curator_worker
     healthcheck:
-      test: ["CMD-SHELL", "python - <<'PY'\nimport urllib.request\nurllib.request.urlopen('http://localhost:8010/health', timeout=3).read()\nPY"]
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8010/ready', timeout=5).read()\" || exit 1"]
       interval: 10s
-      timeout: 5s
-      retries: 5
-      start_period: 30s
+      timeout: 8s
+      retries: 8
+      start_period: 40s
 
 volumes:
   curator_data:
+
+networks:
+  curator_worker:
+    internal: true
