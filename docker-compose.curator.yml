@@ -75,6 +75,8 @@ services:
     environment:
       CURATOR_SANDBOX_WORKER_API_KEY: ${CURATOR_SANDBOX_WORKER_API_KEY:?CURATOR_SANDBOX_WORKER_API_KEY is required}
       CURATOR_SANDBOX_IMAGE: painaidee/curator-skill-sandbox:${CURATOR_IMAGE_TAG:-latest}
+      CURATOR_SANDBOX_WORK_ROOT: /var/lib/curator-worker
+      CURATOR_REQUIRE_SANDBOX_WORK_ROOT: "true"
       CURATOR_SANDBOX_WORKER_MAX_BODY_BYTES: ${CURATOR_SANDBOX_WORKER_MAX_BODY_BYTES:-65536}
       CURATOR_SANDBOX_WORKER_MAX_CLOCK_SKEW_SECONDS: ${CURATOR_SANDBOX_WORKER_MAX_CLOCK_SKEW_SECONDS:-30}
       CURATOR_SANDBOX_WORKER_MAX_CONCURRENCY: ${CURATOR_SANDBOX_WORKER_MAX_CONCURRENCY:-2}
@@ -88,6 +90,9 @@ services:
       # Docker socket access is host-equivalent. It is intentionally isolated to
       # this worker and must target a dedicated or rootless execution daemon.
       - /var/run/docker.sock:/var/run/docker.sock:ro
+      # Docker-outside-of-Docker bind sources are resolved on the daemon host.
+      # The absolute path must therefore be identical on host and worker.
+      - /var/lib/curator-worker:/var/lib/curator-worker
     read_only: true
     tmpfs:
       - /tmp:rw,noexec,nosuid,size=16m
