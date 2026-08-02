@@ -13,13 +13,14 @@ Each run:
 - registers one deterministic advisory-only skill;
 - executes the same input repeatedly through the remote worker;
 - requires identical output on every cycle;
+- requires every execution to persist a Database telemetry record with correlation ID;
 - rejects fallback, broker/order fields, network access or writable sandbox roots;
 - verifies that the shared host workspace is empty after execution;
 - uploads a JSON evidence report for 14 days.
 
 The workflow does not read Alpaca credentials and cannot submit orders.
 
-## Defect discovered during the initial soak
+## Defects discovered during the initial soak
 
 The first real soak found that Curator's performance layer appended calibration fields after the skill output had already passed schema validation. That made the returned output conflict with `additionalProperties=false` while the schema status still reported valid.
 
@@ -30,7 +31,9 @@ Curator_Agent PR #21 fixed the executor contract in merge commit `c4286bbab9abe5
 - `effective_confidence` is exposed outside the skill-defined output;
 - deterministic output and schema truthfulness are preserved.
 
-The soak must run against this commit or a later Curator `main` revision.
+The same soak then exposed HTTP 500 responses from Database skill-performance persistence. `create_skill_execution_log()` passed `symbol` twice, and `create_skill_trade_outcome()` passed `symbol` and `closed_at` twice. Database_Agent PR #117 fixed both constructors in merge commit `a2d1b75b77b42f9fc381daab73bb4c7522672578` and added PostgreSQL-backed CI plus focused repository regression tests.
+
+The soak must run against these commits or later `main` revisions. A cycle now fails unless Database telemetry returns `status=success`, preserves a correlation ID and returns a real `execution_log_id`.
 
 ## Readiness versus execution evidence
 
@@ -68,6 +71,18 @@ A successful report has:
 }
 ```
 
+Every cycle must also contain:
+
+```json
+{
+  "database_telemetry": {
+    "status": "success",
+    "correlation_id": "present",
+    "execution_log_id": "present"
+  }
+}
+```
+
 ## Hourly 24–72 hour soak
 
 The hourly cron is fail-safe disabled unless this Repository Variable is set:
@@ -93,6 +108,7 @@ For a 24-hour soak, enable the variable and inspect 24 consecutive hourly artifa
 
 - `fallback_count = 0`;
 - one unique output hash;
+- successful Database telemetry on every cycle;
 - secure remote-worker readiness before and after execution;
 - no workspace residue;
 - no failed or incomplete cycles.
@@ -104,6 +120,7 @@ Do not enable Curator in `docker-compose.hourly-paper.yml` until the selected so
 - readiness failures;
 - worker restarts during execution;
 - process fallback;
+- telemetry persistence failures;
 - nondeterministic output;
 - duplicate or forbidden order identifiers;
 - workspace residue;
