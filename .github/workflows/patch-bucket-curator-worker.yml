@@ -1,6 +1,11 @@
 name: Patch Bucket Review Curator Worker Wiring
 
 on:
+  push:
+    branches:
+      - agent/curator-worker-integration
+    paths:
+      - ".github/workflows/patch-bucket-curator-worker.yml"
   pull_request:
     branches: [main]
     paths:
@@ -11,13 +16,13 @@ permissions:
 
 jobs:
   patch-bucket-review:
-    if: github.head_ref == 'agent/curator-worker-integration'
+    if: github.event_name == 'push' || github.head_ref == 'agent/curator-worker-integration'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout integration branch
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.head_ref }}
+          ref: agent/curator-worker-integration
           fetch-depth: 0
 
       - name: Wire ephemeral worker credential into Bucket Profit Review
@@ -91,4 +96,4 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add .github/workflows/bucket-profit-review.yml
           git commit -m "Wire Curator worker into Bucket Profit Review"
-          git push origin HEAD:${{ github.head_ref }}
+          git push origin HEAD:agent/curator-worker-integration
