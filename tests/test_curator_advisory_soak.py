@@ -26,8 +26,9 @@ def _readiness_payload(*, fallback_enabled: bool = False) -> dict:
                 "fallback_enabled": fallback_enabled,
                 "worker_execution": {
                     "mode": "container",
-                    "network_access": False,
-                    "read_only_filesystem": True,
+                    "image": "painaidee/curator-skill-sandbox:test",
+                    "docker_server_version": "28.0.4",
+                    "secure_execution_ready": True,
                     "shared_work_root_configured": True,
                     "shared_work_root_required": True,
                 },
@@ -71,6 +72,15 @@ def test_readiness_requires_secure_remote_worker_without_fallback() -> None:
 
     with pytest.raises(RuntimeError, match="fallback_disabled"):
         validate_readiness(_readiness_payload(fallback_enabled=True))
+
+
+def test_readiness_checks_runtime_availability_not_execution_metadata() -> None:
+    payload = _readiness_payload()
+    worker = payload["data"]["execution"]["worker_execution"]
+
+    assert "network_access" not in worker
+    assert "read_only_filesystem" not in worker
+    assert all(validate_readiness(payload).values())
 
 
 def test_execution_requires_deterministic_advisory_only_output() -> None:
