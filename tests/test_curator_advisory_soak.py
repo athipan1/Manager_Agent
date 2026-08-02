@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 
 from scripts.run_curator_advisory_soak import (
+    normalize_advisory_output,
     validate_execution,
     validate_readiness,
 )
@@ -49,8 +50,6 @@ def _execution_payload(*, fallback_used: bool = False) -> dict:
                 "signal": "hold",
                 "confidence": 0.5,
                 "reason": "deterministic advisory soak",
-                "symbol": "TEST",
-                "score": 0.5,
             },
             "sandbox": {
                 "mode": "container",
@@ -88,6 +87,7 @@ def test_execution_requires_deterministic_advisory_only_output() -> None:
     result = validate_execution(_execution_payload(), expected_output=expected)
 
     assert all(result["checks"].values())
+    assert result["normalized_output"] == expected
     assert result["output_hash"]
 
     with pytest.raises(RuntimeError, match="fallback_not_used"):
@@ -97,15 +97,39 @@ def test_execution_requires_deterministic_advisory_only_output() -> None:
         )
 
 
+def test_advisory_normalization_accepts_representation_only_differences() -> None:
+    normalized = normalize_advisory_output(
+        {
+            "signal": " HOLD ",
+            "confidence": "0.5",
+            "reason": " deterministic advisory soak ",
+            "runtime_note": "ignored non-decision metadata",
+        }
+    )
+
+    assert normalized == {
+        "signal": "hold",
+        "confidence": 0.5,
+        "reason": "deterministic advisory soak",
+    }
+
+
+def test_execution_rejects_semantically_different_signal() -> None:
+    payload = _execution_payload()
+    payload["data"]["output"]["signal"] = "buy"
+    expected = _execution_payload()["data"]["output"]
+
+    with pytest.raises(RuntimeError, match="deterministic_output"):
+        validate_execution(payload, expected_output=expected)
+
+
 def test_execution_rejects_order_identifiers_in_output() -> None:
     payload = _execution_payload()
     payload["data"]["output"]["order_id"] = "forbidden"
+    expected = _execution_payload()["data"]["output"]
 
     with pytest.raises(RuntimeError, match="no_forbidden_output_keys"):
-        validate_execution(
-            payload,
-            expected_output=payload["data"]["output"],
-        )
+        validate_execution(payload, expected_output=expected)
 
 
 def test_scheduled_soak_is_opt_in_and_contains_no_broker_credentials() -> None:
