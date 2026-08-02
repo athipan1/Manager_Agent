@@ -19,6 +19,12 @@ Each run:
 
 The workflow does not read Alpaca credentials and cannot submit orders.
 
+## Readiness versus execution evidence
+
+The worker readiness contract proves that the Docker daemon is reachable, the configured sandbox image exists, secure container execution is available, and the required shared work root is configured. Network isolation and read-only root filesystem flags are execution-result properties, so the soak verifies them on every real skill execution rather than expecting them from `/ready`.
+
+This separation prevents an optimistic readiness response from substituting for actual sandbox evidence.
+
 ## Manual validation
 
 Open GitHub Actions in `athipan1/Manager_Agent`, select `Curator Advisory Soak`, and choose `Run workflow`.
