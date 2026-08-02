@@ -1,0 +1,66 @@
+name: Start Curator 72h Soak Window
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/start-curator-72h-soak.yml"
+  schedule:
+    - cron: "25 * * * *"
+  workflow_dispatch:
+
+permissions:
+  actions: write
+  contents: read
+
+concurrency:
+  group: curator-72h-soak-dispatch
+  cancel-in-progress: false
+
+jobs:
+  dispatch-soak:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      SOAK_WINDOW_START: "2026-08-02T11:25:00Z"
+      SOAK_WINDOW_END: "2026-08-05T11:25:00Z"
+
+    steps:
+      - name: Check 72-hour soak window
+        id: window
+        shell: bash
+        run: |
+          python - <<'PY'
+          import os
+          from datetime import datetime, timezone
+
+          start = datetime.fromisoformat(os.environ["SOAK_WINDOW_START"].replace("Z", "+00:00"))
+          end = datetime.fromisoformat(os.environ["SOAK_WINDOW_END"].replace("Z", "+00:00"))
+          now = datetime.now(timezone.utc)
+          active = start <= now < end
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as handle:
+              handle.write(f"active={'true' if active else 'false'}\n")
+              handle.write(f"checked_at={now.isoformat()}\n")
+          print(
+              f"Curator soak window active={active}; "
+              f"start={start.isoformat()}; end={end.isoformat()}; now={now.isoformat()}"
+          )
+          PY
+
+      - name: Dispatch Curator advisory soak
+        if: steps.window.outputs.active == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh workflow run curator-advisory-soak.yml \
+            --repo "$GITHUB_REPOSITORY" \
+            --ref main \
+            -f cycles=12 \
+            -f symbol=TEST
+          echo "Dispatched advisory-only Curator soak at ${{ steps.window.outputs.checked_at }}"
+
+      - name: Report closed soak window
+        if: steps.window.outputs.active != 'true'
+        run: |
+          echo "Curator 72-hour soak window is not active. No workflow was dispatched."
