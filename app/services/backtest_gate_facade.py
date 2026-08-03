@@ -11,6 +11,7 @@ from __future__ import annotations
 import importlib.util
 import sys
 from pathlib import Path
+from types import ModuleType
 from typing import Any, Dict, Iterable, List, Optional, Union
 
 from .. import config
@@ -18,15 +19,17 @@ from .promotion_execution_gate import filter_candidates_with_promotion_gate
 
 
 _LEGACY_MODULE_NAME = "app.services._legacy_backtest_execution_gate"
-_legacy = sys.modules.get(_LEGACY_MODULE_NAME)
-if _legacy is None:
+_existing_legacy = sys.modules.get(_LEGACY_MODULE_NAME)
+if _existing_legacy is None:
     legacy_path = Path(__file__).with_name("backtest_execution_gate.py")
     spec = importlib.util.spec_from_file_location(_LEGACY_MODULE_NAME, legacy_path)
     if spec is None or spec.loader is None:
         raise ImportError("Unable to load legacy Backtest gate compatibility module")
-    _legacy = importlib.util.module_from_spec(spec)
+    _legacy: ModuleType = importlib.util.module_from_spec(spec)
     sys.modules[_LEGACY_MODULE_NAME] = _legacy
     spec.loader.exec_module(_legacy)
+else:
+    _legacy = _existing_legacy
 
 LEGACY_WALK_FORWARD_VALIDATION_PROFILE = (
     _legacy.LEGACY_WALK_FORWARD_VALIDATION_PROFILE
