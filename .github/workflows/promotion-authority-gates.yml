@@ -9,7 +9,7 @@ on:
       - "app/services/__init__.py"
       - "tests/test_backtest_execution_gate.py"
       - "tests/test_nested_backtest_execution_gate.py"
-      - "tests/test_promotion_authority_execution_gate.py"
+      - "tests/test_promotion_authority_*.py"
       - "requirements*.txt"
       - ".github/workflows/promotion-authority-gates.yml"
   push:
@@ -21,7 +21,7 @@ on:
       - "app/services/__init__.py"
       - "tests/test_backtest_execution_gate.py"
       - "tests/test_nested_backtest_execution_gate.py"
-      - "tests/test_promotion_authority_execution_gate.py"
+      - "tests/test_promotion_authority_*.py"
       - "requirements*.txt"
       - ".github/workflows/promotion-authority-gates.yml"
   workflow_dispatch:
@@ -77,6 +77,7 @@ jobs:
             tests/test_backtest_execution_gate.py \
             tests/test_nested_backtest_execution_gate.py \
             tests/test_promotion_authority_execution_gate.py \
+            tests/test_promotion_authority_branches.py \
             --cov=app.services.backtest_gate_facade \
             --cov=app.services.promotion_database_adapter \
             --cov=app.services.promotion_execution_gate \
@@ -91,7 +92,8 @@ jobs:
             app/services/backtest_gate_facade.py \
             app/services/promotion_database_adapter.py \
             app/services/promotion_execution_gate.py \
-            tests/test_promotion_authority_execution_gate.py
+            tests/test_promotion_authority_execution_gate.py \
+            tests/test_promotion_authority_branches.py
 
       - name: MyPy authority boundary
         run: |
