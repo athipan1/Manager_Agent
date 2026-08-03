@@ -1,9 +1,9 @@
 """Database_Agent promotion API adapter for Manager-owned authority.
 
 The shared DatabaseAgentClient keeps the normal X-API-KEY header. This adapter
-adds X-PROMOTION-APPROVAL-KEY only to the one privileged transition request,
-so the approval credential cannot leak into routine account, order, or context
-calls.
+adds X-PROMOTION-APPROVAL-KEY only to privileged promotion transitions and
+paper-observation writes, so the credential cannot leak into routine account,
+order, or context calls.
 """
 
 from __future__ import annotations
@@ -28,6 +28,16 @@ def _as_dict(value: Any) -> Dict[str, Any]:
         result = value.model_dump(mode="json")
         return result if isinstance(result, dict) else {}
     return {}
+
+
+def _approval_token() -> str:
+    token = os.getenv("BACKTEST_PROMOTION_APPROVAL_TOKEN", "").strip()
+    if not token:
+        raise PromotionAuthorityError(
+            "BACKTEST_PROMOTION_APPROVAL_TOKEN is required for privileged "
+            "promotion operations"
+        )
+    return token
 
 
 class PromotionDatabaseAdapter:
@@ -73,11 +83,7 @@ class PromotionDatabaseAdapter:
         *,
         correlation_id: str,
     ) -> Dict[str, Any]:
-        token = os.getenv("BACKTEST_PROMOTION_APPROVAL_TOKEN", "").strip()
-        if not token:
-            raise PromotionAuthorityError(
-                "BACKTEST_PROMOTION_APPROVAL_TOKEN is required for Manager approval"
-            )
+        token = _approval_token()
         promotion_id = str(promotion.get("promotion_id") or "")
         run_id = str(promotion.get("run_id") or "")
         state = str(promotion.get("state") or "")
@@ -132,3 +138,104 @@ class PromotionDatabaseAdapter:
                 "Database_Agent did not return APPROVED_FOR_PAPER"
             )
         return approved
+
+    async def observe_for_paper(
+        self,
+        *,
+        promotion_id: str,
+        expected_state: str,
+        expected_version: int,
+        observation_key: str,
+        observed_at: str,
+        paper_drawdown_pct: float,
+        reconciliation_ok: bool,
+        duplicate_order_count: int,
+        broker_order_count: int,
+        database_order_count: int,
+        filled_order_count: int,
+        strategy_drift: bool,
+        emergency_halt: bool,
+        correlation_id: str,
+        notes: Optional[list[str]] = None,
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        token = _approval_token()
+        if expected_state not in {"APPROVED_FOR_PAPER", "PAPER_OBSERVING"}:
+            raise PromotionAuthorityError(
+                "paper observation requires an approved or observing promotion"
+            )
+        if not promotion_id or expected_version < 1 or not observation_key:
+            raise PromotionAuthorityError("paper observation identity is incomplete")
+
+        encoded_promotion_id = quote(promotion_id, safe="")
+        payload = {
+            "expected_state": expected_state,
+            "expected_version": expected_version,
+            "observation_key": observation_key,
+            "observed_at": observed_at,
+            "paper_drawdown_pct": paper_drawdown_pct,
+            "reconciliation_ok": reconciliation_ok,
+            "duplicate_order_count": duplicate_order_count,
+            "broker_order_count": broker_order_count,
+            "database_order_count": database_order_count,
+            "filled_order_count": filled_order_count,
+            "strategy_drift": strategy_drift,
+            "emergency_halt": emergency_halt,
+            "notes": notes or [],
+            "correlation_id": correlation_id,
+            "metadata": {
+                "authority": "manager-agent",
+                "trading_mode": "PAPER",
+                "requires_risk_approval": True,
+                "execution_agent_only_broker_boundary": True,
+                **(metadata or {}),
+            },
+        }
+        response_data = await self._db_client._post(
+            f"/backtests/promotion-observations/{encoded_promotion_id}",
+            correlation_id,
+            json_data=payload,
+            extra_headers={"X-PROMOTION-APPROVAL-KEY": token},
+        )
+        standard = self._db_client.validate_standard_response(response_data)
+        observation = _as_dict(standard.data)
+        if observation.get("promotion_id") != promotion_id:
+            raise PromotionAuthorityError(
+                "Database_Agent returned the wrong observed promotion"
+            )
+        if observation.get("observation_key") != observation_key:
+            raise PromotionAuthorityError(
+                "Database_Agent returned the wrong observation identity"
+            )
+        if observation.get("to_state") not in {
+            "PAPER_OBSERVING",
+            "EXPIRED",
+            "REVOKED",
+        }:
+            raise PromotionAuthorityError(
+                "Database_Agent returned an invalid observation state"
+            )
+        if not isinstance(observation.get("to_version"), int):
+            raise PromotionAuthorityError(
+                "Database_Agent returned an invalid observation version"
+            )
+        return observation
+
+    async def list_observations(
+        self,
+        *,
+        promotion_id: str,
+        correlation_id: str,
+    ) -> list[Dict[str, Any]]:
+        encoded_promotion_id = quote(promotion_id, safe="")
+        response_data = await self._db_client._get(
+            f"/backtests/promotion-observations/{encoded_promotion_id}",
+            correlation_id,
+        )
+        standard = self._db_client.validate_standard_response(response_data)
+        data = standard.data
+        if not isinstance(data, list):
+            raise PromotionAuthorityError(
+                "Database_Agent returned an invalid observation ledger"
+            )
+        return [_as_dict(row) for row in data]
