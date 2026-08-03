@@ -70,8 +70,11 @@ def test_walk_forward_defaults_match_backtest_agent_contract(monkeypatch):
         "BACKTEST_WALK_FORWARD_TRAIN_BARS",
         "BACKTEST_WALK_FORWARD_TEST_BARS",
         "BACKTEST_WALK_FORWARD_STEP_BARS",
+        "BACKTEST_WALK_FORWARD_EMBARGO_BARS",
+        "BACKTEST_WALK_FORWARD_ALLOW_OVERLAP",
         "BACKTEST_WALK_FORWARD_MIN_WINDOWS",
         "BACKTEST_WALK_FORWARD_MIN_WINDOW_TRADES",
+        "BACKTEST_WALK_FORWARD_MIN_TRAIN_ELIGIBLE_RATE",
         "BACKTEST_WALK_FORWARD_MIN_PROFITABLE_RATE",
         "BACKTEST_WALK_FORWARD_MIN_MEDIAN_SHARPE",
         "BACKTEST_WALK_FORWARD_MIN_MEDIAN_PROFIT_FACTOR",
@@ -81,13 +84,16 @@ def test_walk_forward_defaults_match_backtest_agent_contract(monkeypatch):
         monkeypatch.delenv(name, raising=False)
 
     assert WALK_FORWARD_ENDPOINT == "/backtest/multi-strategy/walk-forward"
-    assert WALK_FORWARD_PROFILE == "rolling_walk_forward_v1"
+    assert WALK_FORWARD_PROFILE == "nested_walk_forward_v2"
     assert _walk_forward_criteria() == {
         "train_bars": 126,
         "test_bars": 126,
-        "step_bars": 63,
+        "step_bars": 126,
+        "embargo_bars": 0,
+        "allow_overlapping_test_windows": False,
         "min_windows": 4,
         "min_window_trades": 1,
+        "min_train_eligible_window_rate": 0.50,
         "min_profitable_window_rate": 0.60,
         "min_median_sharpe_ratio": 0.70,
         "min_median_profit_factor": 1.10,
@@ -143,11 +149,12 @@ def test_walk_forward_run_id_binds_validation_criteria():
         walk_forward_criteria=criteria,
         **common,
     )
-    stricter = _deterministic_walk_forward_run_id(
-        walk_forward_criteria={**criteria, "min_windows": 5},
+    changed = _deterministic_walk_forward_run_id(
+        walk_forward_criteria={**criteria, "step_bars": criteria["step_bars"] + 1},
         **common,
     )
 
     assert first == repeated
-    assert first != stricter
+    assert first != changed
     assert first.startswith("backtest-walk-forward-")
+    json.dumps({"run_id": first})
