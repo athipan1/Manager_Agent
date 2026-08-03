@@ -1,3 +1,5 @@
+from fastapi.routing import iter_route_contexts
+
 from app.app_factory import create_app
 
 
@@ -14,7 +16,11 @@ MIGRATED_PATHS = {
 
 
 def route_methods(app):
-    return {route.path: route.methods for route in app.routes if hasattr(route, "methods")}
+    return {
+        route.path: route.methods
+        for route in iter_route_contexts(app.routes)
+        if route.path is not None and route.methods is not None
+    }
 
 
 def test_create_app_registers_modular_routes_by_default():
@@ -35,7 +41,11 @@ def test_create_app_can_skip_scanner_routes():
 
 
 def test_create_app_does_not_duplicate_registered_paths():
-    paths = [route.path for route in create_app().routes if route.path in MIGRATED_PATHS]
+    paths = [
+        route.path
+        for route in iter_route_contexts(create_app().routes)
+        if route.path in MIGRATED_PATHS
+    ]
 
     for path in MIGRATED_PATHS:
         assert paths.count(path) == 1

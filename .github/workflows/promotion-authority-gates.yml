@@ -1,0 +1,121 @@
+name: Promotion Authority Gates
+
+on:
+  pull_request:
+    paths:
+      - "app/services/backtest_gate_facade.py"
+      - "app/services/promotion_database_adapter.py"
+      - "app/services/promotion_execution_gate.py"
+      - "app/services/__init__.py"
+      - "tests/test_backtest_execution_gate.py"
+      - "tests/test_nested_backtest_execution_gate.py"
+      - "tests/test_promotion_authority_*.py"
+      - "requirements*.txt"
+      - ".github/workflows/promotion-authority-gates.yml"
+  push:
+    branches: [main]
+    paths:
+      - "app/services/backtest_gate_facade.py"
+      - "app/services/promotion_database_adapter.py"
+      - "app/services/promotion_execution_gate.py"
+      - "app/services/__init__.py"
+      - "tests/test_backtest_execution_gate.py"
+      - "tests/test_nested_backtest_execution_gate.py"
+      - "tests/test_promotion_authority_*.py"
+      - "requirements*.txt"
+      - ".github/workflows/promotion-authority-gates.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: manager-promotion-authority-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PYTHONPATH: .
+  PYTHONDONTWRITEBYTECODE: "1"
+  PYTHONUNBUFFERED: "1"
+  TRADING_MODE: PAPER
+  DATABASE_AGENT_API_KEY: promotion-ci-service-key
+  BACKTEST_PROMOTION_APPROVAL_TOKEN: promotion-ci-approval-key
+
+jobs:
+  authority-contract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout immutable source
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@42375524e23c412d93fb67b49958b491fce71c38 # v5.4.0
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: |
+            requirements.prod.txt
+            requirements.dev.txt
+
+      - name: Install dependencies and quality tools
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+          python -m pip install --upgrade \
+            pytest==9.1.1 \
+            pytest-asyncio==1.4.0 \
+            pytest-cov==6.0.0 \
+            ruff==0.9.3 \
+            mypy==1.14.1 \
+            bandit==1.8.2 \
+            pip-audit==2.10.1
+
+      - name: Promotion authority tests and branch coverage
+        run: |
+          python -m pytest -q \
+            tests/test_backtest_execution_gate.py \
+            tests/test_nested_backtest_execution_gate.py \
+            tests/test_promotion_authority_execution_gate.py \
+            tests/test_promotion_authority_branches.py \
+            --cov=app.services.backtest_gate_facade \
+            --cov=app.services.promotion_database_adapter \
+            --cov=app.services.promotion_execution_gate \
+            --cov-branch \
+            --cov-report=term-missing \
+            --cov-report=xml:promotion-authority-coverage.xml \
+            --cov-fail-under=90
+
+      - name: Ruff authority boundary
+        run: |
+          python -m ruff check \
+            app/services/backtest_gate_facade.py \
+            app/services/promotion_database_adapter.py \
+            app/services/promotion_execution_gate.py \
+            tests/test_promotion_authority_execution_gate.py \
+            tests/test_promotion_authority_branches.py
+
+      - name: MyPy authority boundary
+        run: |
+          python -m mypy --follow-imports=silent \
+            app/services/backtest_gate_facade.py \
+            app/services/promotion_database_adapter.py \
+            app/services/promotion_execution_gate.py
+
+      - name: Bandit authority boundary
+        run: |
+          python -m bandit -q \
+            app/services/backtest_gate_facade.py \
+            app/services/promotion_database_adapter.py \
+            app/services/promotion_execution_gate.py
+
+      - name: Audit production dependencies
+        run: python -m pip_audit -r requirements.prod.txt --strict --desc
+
+      - name: Upload authority evidence
+        uses: actions/upload-artifact@4cec3d8aa04e39d1a68397de0c4cd6fb9dce8ec1 # v4.6.1
+        with:
+          name: manager-promotion-authority-${{ github.sha }}
+          path: promotion-authority-coverage.xml
+          if-no-files-found: error
+          retention-days: 30

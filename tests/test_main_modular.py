@@ -1,3 +1,5 @@
+from fastapi.routing import iter_route_contexts
+
 from app.main_modular import app
 
 
@@ -14,14 +16,18 @@ MIGRATED_PATHS = {
 
 
 def test_main_modular_exposes_migrated_routes():
-    paths = {route.path for route in app.routes}
+    paths = {route.path for route in iter_route_contexts(app.routes)}
 
     for path in MIGRATED_PATHS:
         assert path in paths
 
 
 def test_main_modular_does_not_duplicate_migrated_routes():
-    paths = [route.path for route in app.routes if route.path in MIGRATED_PATHS]
+    paths = [
+        route.path
+        for route in iter_route_contexts(app.routes)
+        if route.path in MIGRATED_PATHS
+    ]
 
     for path in MIGRATED_PATHS:
         assert paths.count(path) == 1
