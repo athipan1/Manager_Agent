@@ -9,6 +9,7 @@ metadata to authorize production execution.
 from __future__ import annotations
 
 import importlib.util
+import os
 import sys
 from pathlib import Path
 from types import ModuleType
@@ -16,6 +17,7 @@ from typing import Any, Dict, Iterable, List, Optional, Union
 
 from .. import config
 from .promotion_execution_gate import filter_candidates_with_promotion_gate
+from .promotion_paper_observer import observe_promotion_gate_result
 
 
 _LEGACY_MODULE_NAME = "app.services._legacy_backtest_execution_gate"
@@ -53,6 +55,30 @@ def _authority_required(value: Optional[bool]) -> bool:
     return bool(config.BACKTEST_EXECUTION_GATE_REQUIRED)
 
 
+def _env_bool(name: str, default: bool = False) -> bool:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "y", "on"}
+
+
+def _observation_required(
+    value: Optional[bool],
+    *,
+    authority_required: bool,
+) -> bool:
+    if value is not None:
+        return value
+    configured = os.getenv("BACKTEST_PROMOTION_OBSERVATION_REQUIRED")
+    if configured is not None:
+        return _env_bool("BACKTEST_PROMOTION_OBSERVATION_REQUIRED")
+    environment = os.getenv("APP_ENV", os.getenv("ENVIRONMENT", "development"))
+    return authority_required and environment.strip().lower() in {
+        "production",
+        "prod",
+    }
+
+
 async def filter_candidates_with_backtest_gate(
     *,
     db_client: Any,
@@ -68,10 +94,13 @@ async def filter_candidates_with_backtest_gate(
     strategy_ids: Optional[Iterable[str]] = None,
     walk_forward_required: Optional[bool] = None,
     promotion_authority_required: Optional[bool] = None,
+    paper_observation_required: Optional[bool] = None,
     account_id: Optional[Union[int, str]] = None,
     auto_approve: Optional[bool] = None,
+    execution_client: Any = None,
 ) -> Dict[str, Any]:
-    if not _authority_required(promotion_authority_required):
+    authority_required = _authority_required(promotion_authority_required)
+    if not authority_required:
         return await _legacy.filter_candidates_with_backtest_gate(
             db_client=db_client,
             selected_positions=selected_positions,
@@ -86,7 +115,8 @@ async def filter_candidates_with_backtest_gate(
             strategy_ids=strategy_ids,
             walk_forward_required=walk_forward_required,
         )
-    return await filter_candidates_with_promotion_gate(
+
+    gate_result = await filter_candidates_with_promotion_gate(
         db_client=db_client,
         selected_positions=selected_positions,
         position_analysis_payloads=position_analysis_payloads,
@@ -101,6 +131,36 @@ async def filter_candidates_with_backtest_gate(
         walk_forward_required=walk_forward_required,
         account_id=account_id,
         auto_approve=auto_approve,
+    )
+    observation_required = _observation_required(
+        paper_observation_required,
+        authority_required=authority_required,
+    )
+    if not required or not observation_required:
+        return {
+            **gate_result,
+            "paper_observation": {
+                "status": "disabled" if not observation_required else "not_required",
+                "required": observation_required,
+                "reason": (
+                    "paper_observation_disabled"
+                    if not observation_required
+                    else "backtest_gate_disabled"
+                ),
+            },
+        }
+
+    resolved_account_id = str(
+        gate_result.get("account_id")
+        or account_id
+        or config.DEFAULT_ACCOUNT_ID
+    )
+    return await observe_promotion_gate_result(
+        db_client=db_client,
+        gate_result=gate_result,
+        account_id=resolved_account_id,
+        correlation_id=correlation_id,
+        execution_client=execution_client,
     )
 
 
