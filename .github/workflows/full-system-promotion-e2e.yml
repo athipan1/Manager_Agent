@@ -1,0 +1,300 @@
+name: Full-System Promotion E2E
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "scripts/full_system_promotion_e2e.py"
+      - ".github/workflows/full-system-promotion-e2e.yml"
+      - "app/services/backtest_gate_facade.py"
+      - "app/services/promotion_database_adapter.py"
+      - "app/services/promotion_execution_gate.py"
+  pull_request:
+    branches: [main]
+    paths:
+      - "scripts/full_system_promotion_e2e.py"
+      - ".github/workflows/full-system-promotion-e2e.yml"
+      - "app/services/backtest_gate_facade.py"
+      - "app/services/promotion_database_adapter.py"
+      - "app/services/promotion_execution_gate.py"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: full-system-promotion-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  promotion-lifecycle-e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      DATABASE_AGENT_API_KEY: promotion-e2e-database-key
+      EXECUTION_AGENT_API_KEY: promotion-e2e-execution-key
+      BACKTEST_PROMOTION_APPROVAL_TOKEN: promotion-e2e-approval-key
+      COMPOSE_PROJECT_NAME: promotion-lifecycle-e2e
+      RUNTIME_SERVICES: db database-agent risk-agent execution-agent
+
+    steps:
+      - name: Checkout Manager_Agent immutable source
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          path: Manager_Agent
+
+      - name: Checkout Database_Agent
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          repository: athipan1/Database_Agent
+          path: Database_Agent
+
+      - name: Checkout Backtest_Agent
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          repository: athipan1/Backtest_Agent
+          path: Backtest_Agent
+
+      - name: Checkout Risk_Agent
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          repository: athipan1/Risk_Agent
+          path: Risk_Agent
+
+      - name: Checkout Execution_Agent
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          repository: athipan1/Execution_Agent
+          path: Execution_Agent
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@42375524e23c412d93fb67b49958b491fce71c38 # v5.4.0
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: |
+            Manager_Agent/requirements.txt
+            Backtest_Agent/requirements.txt
+
+      - name: Install Manager and Backtest client dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r Manager_Agent/requirements.txt
+          python -m pip install -r Backtest_Agent/requirements.txt
+
+      - name: Record immutable repository revisions
+        run: |
+          mkdir -p Manager_Agent/reports
+          {
+            echo "Manager_Agent=$(git -C Manager_Agent rev-parse HEAD)"
+            echo "Database_Agent=$(git -C Database_Agent rev-parse HEAD)"
+            echo "Backtest_Agent=$(git -C Backtest_Agent rev-parse HEAD)"
+            echo "Risk_Agent=$(git -C Risk_Agent rev-parse HEAD)"
+            echo "Execution_Agent=$(git -C Execution_Agent rev-parse HEAD)"
+          } | tee Manager_Agent/reports/full-system-promotion-revisions.txt
+
+      - name: Create isolated paper-only promotion stack
+        working-directory: Manager_Agent
+        run: |
+          cat > /tmp/full-system-promotion-e2e.yml <<'YAML'
+          services:
+            db:
+              image: postgres:13
+              environment:
+                POSTGRES_USER: user
+                POSTGRES_PASSWORD: password
+                POSTGRES_DB: trading_db
+              ports:
+                - "5432:5432"
+              healthcheck:
+                test: ["CMD-SHELL", "pg_isready -U user -d trading_db"]
+                interval: 5s
+                timeout: 5s
+                retries: 12
+                start_period: 10s
+
+            database-agent:
+              build:
+                context: ../Database_Agent
+                dockerfile: Dockerfile
+              image: painaidee/database-agent:promotion-e2e
+              environment:
+                DATABASE_AGENT_API_KEY: ${DATABASE_AGENT_API_KEY}
+                BACKTEST_PROMOTION_APPROVAL_TOKEN: ${BACKTEST_PROMOTION_APPROVAL_TOKEN}
+                BACKTEST_PROMOTION_APPROVAL_REQUIRED: "true"
+                BACKTEST_PROMOTION_AUTO_APPROVE_PAPER: "false"
+                BACKTEST_PROMOTION_EVIDENCE_MAX_AGE_HOURS: "168"
+                DATABASE_DEV_MODE: "true"
+                USE_SQLITE: ""
+                DATABASE_URL: postgresql://user:password@db:5432/trading_db
+                DATABASE_REQUIRE_SCHEMA_IDENTITY: "false"
+                DATABASE_CUTOVER_GUARD_ENABLED: "false"
+                TRADING_MODE: PAPER
+              depends_on:
+                db:
+                  condition: service_healthy
+
+            risk-agent:
+              build:
+                context: ../Risk_Agent
+                dockerfile: Dockerfile
+              image: painaidee/risk-agent:promotion-e2e
+              environment:
+                EMERGENCY_HALT: "false"
+                STOCK_ONLY_MODE: "true"
+                ALLOW_SHORT_SELLING: "false"
+                PYTHONPATH: /app
+
+            execution-agent:
+              build:
+                context: ../Execution_Agent
+                dockerfile: Dockerfile
+              image: painaidee/execution-agent:promotion-e2e
+              environment:
+                API_KEY: ${EXECUTION_AGENT_API_KEY}
+                EXECUTION_AGENT_API_KEY: ${EXECUTION_AGENT_API_KEY}
+                DATABASE_AGENT_API_KEY: ${DATABASE_AGENT_API_KEY}
+                DB_AGENT_URL: http://database-agent:8004
+                TRADING_MODE: PAPER
+                TRADING_ENABLED: "true"
+                ALLOW_LIVE_TRADING: "false"
+                BROKER_MODE: SIMULATOR
+                DRY_RUN: "false"
+                REQUIRE_BROKER_PREFLIGHT: "false"
+                FAIL_ON_STALE_OPEN_ORDERS: "false"
+                PYTHONPATH: /home/appuser:/home/appuser/src
+              depends_on:
+                database-agent:
+                  condition: service_healthy
+          YAML
+
+          docker compose \
+            -f docker-compose.yml \
+            -f /tmp/full-system-promotion-e2e.yml \
+            config > reports/full-system-promotion-compose-config.yml
+
+          python - <<'PY'
+          from pathlib import Path
+
+          text = Path("reports/full-system-promotion-compose-config.yml").read_text()
+          assert "TRADING_MODE: PAPER" in text
+          assert "ALLOW_LIVE_TRADING: \"false\"" in text or "ALLOW_LIVE_TRADING: 'false'" in text
+          assert "BROKER_MODE: SIMULATOR" in text
+          assert "BACKTEST_PROMOTION_AUTO_APPROVE_PAPER: \"false\"" in text or "BACKTEST_PROMOTION_AUTO_APPROVE_PAPER: 'false'" in text
+          PY
+
+      - name: Build and start promotion lifecycle stack
+        working-directory: Manager_Agent
+        run: |
+          set +e
+          docker compose \
+            -f docker-compose.yml \
+            -f /tmp/full-system-promotion-e2e.yml \
+            up --build -d $RUNTIME_SERVICES \
+            2>&1 | tee reports/full-system-promotion-compose-up.log
+          status=${PIPESTATUS[0]}
+          if [ "$status" != "0" ]; then
+            docker compose \
+              -f docker-compose.yml \
+              -f /tmp/full-system-promotion-e2e.yml \
+              ps --all || true
+            exit "$status"
+          fi
+
+      - name: Wait for promotion lifecycle services
+        working-directory: Manager_Agent
+        run: |
+          for i in {1..72}; do
+            exited=$(docker compose \
+              -f docker-compose.yml \
+              -f /tmp/full-system-promotion-e2e.yml \
+              ps --status exited -q $RUNTIME_SERVICES | wc -l | tr -d ' ')
+            if [ "$exited" != "0" ]; then
+              echo "A promotion lifecycle service exited before health checks completed."
+              exit 1
+            fi
+
+            postgres=$(docker compose \
+              -f docker-compose.yml \
+              -f /tmp/full-system-promotion-e2e.yml \
+              exec -T db pg_isready -U user -d trading_db >/dev/null && echo ok || echo wait)
+            database=$(curl -fsS http://localhost:8004/health >/dev/null && echo ok || echo wait)
+            risk=$(curl -fsS http://localhost:8007/health >/dev/null && echo ok || echo wait)
+            execution=$(curl -fsS http://localhost:8006/health >/dev/null && echo ok || echo wait)
+            echo "health: postgres=$postgres database=$database risk=$risk execution=$execution"
+            if [ "$postgres$database$risk$execution" = "okokokok" ]; then
+              exit 0
+            fi
+            sleep 5
+          done
+          exit 1
+
+      - name: Run full-system promotion lifecycle
+        working-directory: Manager_Agent
+        env:
+          PYTHONPATH: .
+          TRADING_MODE: PAPER
+          ALLOW_LIVE_TRADING: "false"
+          BROKER_MODE: SIMULATOR
+        run: |
+          python -m scripts.full_system_promotion_e2e \
+            --database-url http://localhost:8004 \
+            --database-api-key "$DATABASE_AGENT_API_KEY" \
+            --risk-url http://localhost:8007 \
+            --execution-url http://localhost:8006 \
+            --execution-api-key "$EXECUTION_AGENT_API_KEY" \
+            --approval-token "$BACKTEST_PROMOTION_APPROVAL_TOKEN" \
+            --backtest-repository "$GITHUB_WORKSPACE/Backtest_Agent" \
+            --output-json reports/full-system-promotion-e2e.json
+
+      - name: Validate E2E evidence contract
+        working-directory: Manager_Agent
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          report = json.loads(Path("reports/full-system-promotion-e2e.json").read_text())
+          assert report["status"] == "success"
+          assert report["promotion"]["state"] == "APPROVED_FOR_PAPER"
+          assert report["manager_decision"]["requires_risk_approval"] is True
+          assert report["manager_decision"]["broker_boundary"] == "execution-agent-only"
+          assert report["execution_first"]["order_id"] == report["execution_retry"]["order_id"]
+          assert report["order"]["risk_approval_id"] == report["risk_approval"]["approval_id"]
+          assert report["newer_failed_promotion"]["state"] == "FAILED"
+          assert report["newer_failed_block"]["summary"]["allowed_count"] == 0
+          PY
+
+      - name: Collect promotion lifecycle service evidence
+        if: always()
+        working-directory: Manager_Agent
+        run: |
+          docker compose \
+            -f docker-compose.yml \
+            -f /tmp/full-system-promotion-e2e.yml \
+            ps --all > reports/full-system-promotion-compose-ps.txt 2>&1 || true
+          for service in $RUNTIME_SERVICES; do
+            docker compose \
+              -f docker-compose.yml \
+              -f /tmp/full-system-promotion-e2e.yml \
+              logs --no-color --tail=400 "$service" \
+              > "reports/full-system-promotion-${service}.log" 2>&1 || true
+          done
+
+      - name: Upload promotion lifecycle evidence
+        if: always()
+        uses: actions/upload-artifact@4cec3d8aa04e39d1a68397de0c4cd6fb9dce8ec1 # v4.6.1
+        with:
+          name: full-system-promotion-e2e-${{ github.sha }}
+          path: Manager_Agent/reports/full-system-promotion-*
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Stop promotion lifecycle stack
+        if: always()
+        working-directory: Manager_Agent
+        run: |
+          docker compose \
+            -f docker-compose.yml \
+            -f /tmp/full-system-promotion-e2e.yml \
+            down --volumes --remove-orphans
