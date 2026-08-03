@@ -133,9 +133,11 @@ async def test_approval_adapter_rejects_malformed_authority(
 ):
     monkeypatch.setenv("BACKTEST_PROMOTION_APPROVAL_TOKEN", "secret")
     adapter = PromotionDatabaseAdapter(AdapterClient())
+    authority = exact_promotion(state="ROBUSTNESS_PASSED", version=4)
+    authority.update(updates)
     with pytest.raises(PromotionAuthorityError, match=message):
         await adapter.approve_for_paper(
-            exact_promotion(state="ROBUSTNESS_PASSED", version=4, **updates),
+            authority,
             correlation_id="corr-1",
         )
 
