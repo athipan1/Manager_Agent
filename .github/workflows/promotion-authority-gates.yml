@@ -12,6 +12,7 @@ on:
       - "tests/test_nested_backtest_execution_gate.py"
       - "tests/test_promotion_authority_*.py"
       - "tests/test_promotion_paper_observer.py"
+      - "tests/test_promotion_observation_branches.py"
       - "requirements*.txt"
       - ".github/workflows/promotion-authority-gates.yml"
   push:
@@ -26,6 +27,7 @@ on:
       - "tests/test_nested_backtest_execution_gate.py"
       - "tests/test_promotion_authority_*.py"
       - "tests/test_promotion_paper_observer.py"
+      - "tests/test_promotion_observation_branches.py"
       - "requirements*.txt"
       - ".github/workflows/promotion-authority-gates.yml"
   workflow_dispatch:
@@ -84,6 +86,7 @@ jobs:
             tests/test_promotion_authority_execution_gate.py \
             tests/test_promotion_authority_branches.py \
             tests/test_promotion_paper_observer.py \
+            tests/test_promotion_observation_branches.py \
             --cov=app.services.backtest_gate_facade \
             --cov=app.services.promotion_database_adapter \
             --cov=app.services.promotion_execution_gate \
@@ -102,7 +105,8 @@ jobs:
             app/services/promotion_paper_observer.py \
             tests/test_promotion_authority_execution_gate.py \
             tests/test_promotion_authority_branches.py \
-            tests/test_promotion_paper_observer.py
+            tests/test_promotion_paper_observer.py \
+            tests/test_promotion_observation_branches.py
 
       - name: MyPy authority and observation boundary
         run: |
