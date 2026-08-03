@@ -6,10 +6,12 @@ on:
       - "app/services/backtest_gate_facade.py"
       - "app/services/promotion_database_adapter.py"
       - "app/services/promotion_execution_gate.py"
+      - "app/services/promotion_paper_observer.py"
       - "app/services/__init__.py"
       - "tests/test_backtest_execution_gate.py"
       - "tests/test_nested_backtest_execution_gate.py"
       - "tests/test_promotion_authority_*.py"
+      - "tests/test_promotion_paper_observer.py"
       - "requirements*.txt"
       - ".github/workflows/promotion-authority-gates.yml"
   push:
@@ -18,10 +20,12 @@ on:
       - "app/services/backtest_gate_facade.py"
       - "app/services/promotion_database_adapter.py"
       - "app/services/promotion_execution_gate.py"
+      - "app/services/promotion_paper_observer.py"
       - "app/services/__init__.py"
       - "tests/test_backtest_execution_gate.py"
       - "tests/test_nested_backtest_execution_gate.py"
       - "tests/test_promotion_authority_*.py"
+      - "tests/test_promotion_paper_observer.py"
       - "requirements*.txt"
       - ".github/workflows/promotion-authority-gates.yml"
   workflow_dispatch:
@@ -38,6 +42,7 @@ env:
   PYTHONDONTWRITEBYTECODE: "1"
   PYTHONUNBUFFERED: "1"
   TRADING_MODE: PAPER
+  ALLOW_LIVE_TRADING: "false"
   DATABASE_AGENT_API_KEY: promotion-ci-service-key
   BACKTEST_PROMOTION_APPROVAL_TOKEN: promotion-ci-approval-key
 
@@ -71,43 +76,49 @@ jobs:
             bandit==1.8.2 \
             pip-audit==2.10.1
 
-      - name: Promotion authority tests and branch coverage
+      - name: Promotion authority and observation tests
         run: |
           python -m pytest -q \
             tests/test_backtest_execution_gate.py \
             tests/test_nested_backtest_execution_gate.py \
             tests/test_promotion_authority_execution_gate.py \
             tests/test_promotion_authority_branches.py \
+            tests/test_promotion_paper_observer.py \
             --cov=app.services.backtest_gate_facade \
             --cov=app.services.promotion_database_adapter \
             --cov=app.services.promotion_execution_gate \
+            --cov=app.services.promotion_paper_observer \
             --cov-branch \
             --cov-report=term-missing \
             --cov-report=xml:promotion-authority-coverage.xml \
             --cov-fail-under=90
 
-      - name: Ruff authority boundary
+      - name: Ruff authority and observation boundary
         run: |
           python -m ruff check \
             app/services/backtest_gate_facade.py \
             app/services/promotion_database_adapter.py \
             app/services/promotion_execution_gate.py \
+            app/services/promotion_paper_observer.py \
             tests/test_promotion_authority_execution_gate.py \
-            tests/test_promotion_authority_branches.py
+            tests/test_promotion_authority_branches.py \
+            tests/test_promotion_paper_observer.py
 
-      - name: MyPy authority boundary
+      - name: MyPy authority and observation boundary
         run: |
           python -m mypy --follow-imports=silent \
             app/services/backtest_gate_facade.py \
             app/services/promotion_database_adapter.py \
-            app/services/promotion_execution_gate.py
+            app/services/promotion_execution_gate.py \
+            app/services/promotion_paper_observer.py
 
-      - name: Bandit authority boundary
+      - name: Bandit authority and observation boundary
         run: |
           python -m bandit -q \
             app/services/backtest_gate_facade.py \
             app/services/promotion_database_adapter.py \
-            app/services/promotion_execution_gate.py
+            app/services/promotion_execution_gate.py \
+            app/services/promotion_paper_observer.py
 
       - name: Audit production dependencies
         run: python -m pip_audit -r requirements.prod.txt --strict --desc
