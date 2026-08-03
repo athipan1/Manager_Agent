@@ -16,10 +16,7 @@ from pydantic import BaseModel
 
 from .. import config
 from ..execution_client import ExecutionAgentClient
-from .promotion_database_adapter import (
-    PromotionAuthorityError,
-    PromotionDatabaseAdapter,
-)
+from .promotion_database_adapter import PromotionDatabaseAdapter
 
 
 _ACTIVE_ORDER_STATUSES = {
@@ -226,10 +223,11 @@ def _observation_key(
 
 def _reconciliation_payload(response: Any) -> Dict[str, Any]:
     standard = _as_dict(response)
-    data = standard.get("data") if isinstance(standard.get("data"), dict) else {}
+    raw_data = standard.get("data")
+    data: Dict[str, Any] = raw_data if isinstance(raw_data, dict) else {}
     if not data and hasattr(response, "data"):
-        data = _as_dict(response.data)
-    return data
+        data = _as_dict(getattr(response, "data"))
+    return dict(data)
 
 
 def _reconciliation_for_symbol(
@@ -316,10 +314,15 @@ async def observe_promotion_gate_result(
                 "required": True,
                 "reason": "no_promotion_authorized_candidates",
                 "decisions": [],
-                "summary": {"candidate_count": 0, "allowed_count": 0, "rejected_count": 0},
+                "summary": {
+                    "candidate_count": 0,
+                    "allowed_count": 0,
+                    "rejected_count": 0,
+                },
             },
         }
 
+    reconciliation: Dict[str, Any] = {}
     reconciliation_error: Optional[str] = None
     owns_client = execution_client is None
     client = execution_client
@@ -340,10 +343,9 @@ async def observe_promotion_gate_result(
         if owns_client and client is not None:
             await client.__aexit__(None, None, None)
 
-    broker_state = (
-        reconciliation.get("broker_state")
-        if isinstance(reconciliation.get("broker_state"), dict)
-        else {}
+    raw_broker_state = reconciliation.get("broker_state")
+    broker_state: Dict[str, Any] = (
+        raw_broker_state if isinstance(raw_broker_state, dict) else {}
     )
     broker_orders = _active_orders(_rows(broker_state.get("open_orders")))
     broker_positions = _rows(broker_state.get("positions"))
@@ -422,7 +424,7 @@ async def observe_promotion_gate_result(
                         **metrics,
                     },
                 )
-            except (PromotionAuthorityError, Exception) as exc:
+            except Exception as exc:
                 rejection_codes.append("paper_observation_write_failed")
                 observation = {"error": str(exc)}
 
