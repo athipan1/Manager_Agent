@@ -9,15 +9,13 @@ contact a trading broker.
 
 from __future__ import annotations
 
+import asyncio
 import os
 from datetime import datetime, timezone
 from typing import Any, Dict, Iterable, List, Optional, Union
 
 from .. import config
-from .promotion_database_adapter import (
-    PromotionAuthorityError,
-    PromotionDatabaseAdapter,
-)
+from .promotion_database_adapter import PromotionDatabaseAdapter
 
 
 APPROVED_STATES = {"APPROVED_FOR_PAPER", "PAPER_OBSERVING"}
@@ -220,7 +218,7 @@ async def filter_candidates_with_promotion_gate(
     account_id: Optional[Union[int, str]] = None,
     auto_approve: Optional[bool] = None,
 ) -> Dict[str, Any]:
-    del walk_forward_required  # Promotion evidence already attests nested validation.
+    del walk_forward_required
     resolved_account_id = _resolve_account_id(account_id, selected_positions)
     resolved_strategy_ids = _strategy_ids(strategy_id, strategy_ids)
     current = now or datetime.now(timezone.utc)
@@ -290,8 +288,6 @@ async def filter_candidates_with_promotion_gate(
                         correlation_id=correlation_id,
                     )
                 except Exception:
-                    # A concurrent Manager run may have won the CAS transition.
-                    # Re-read exact authority and accept only an approved state.
                     promotion = await adapter.get_latest_exact(
                         account_id=resolved_account_id,
                         symbol=symbol,
@@ -305,8 +301,6 @@ async def filter_candidates_with_promotion_gate(
             response = getattr(exc, "response", None)
             if getattr(response, "status_code", None) != 404:
                 lookup_errors[key] = str(exc)
-
-    import asyncio
 
     await asyncio.gather(
         *(
