@@ -239,7 +239,7 @@ async def filter_candidates_with_promotion_gate(
         )
     )
     if not required:
-        decisions = [
+        disabled_decisions = [
             {
                 "symbol": symbol,
                 "allowed": True,
@@ -257,11 +257,11 @@ async def filter_candidates_with_promotion_gate(
             "strategy_ids": resolved_strategy_ids,
             "selected_positions": selected_positions,
             "position_analysis_payloads": position_analysis_payloads,
-            "decisions": decisions,
+            "decisions": disabled_decisions,
             "rejected": [],
             "summary": {
-                "candidate_count": len(decisions),
-                "allowed_count": len(decisions),
+                "candidate_count": len(disabled_decisions),
+                "allowed_count": len(disabled_decisions),
                 "rejected_count": 0,
             },
         }
