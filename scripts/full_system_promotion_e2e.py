@@ -30,9 +30,8 @@ def unwrap(value: Any) -> Any:
 class AsyncDatabaseTransport:
     """Adapt the real Manager promotion gate to the E2E HTTP gateway."""
 
-    def __init__(self, gateway: HttpGateway, correlation_id: str):
+    def __init__(self, gateway: HttpGateway) -> None:
         self.gateway = gateway
-        self.correlation_id = correlation_id
 
     async def _get(self, path, correlation_id, **kwargs):
         params = kwargs.get("params") or {}
@@ -125,9 +124,17 @@ class PromotionLifecycleE2E:
         )
 
     @staticmethod
-    def metadata(strategy_id: str) -> Dict[str, Any]:
+    def metadata(strategy_id: str, fingerprint: str) -> Dict[str, Any]:
+        statistical_gates = {
+            "observation_count": True,
+            "trade_count": True,
+            "adjusted_p_value": True,
+            "probabilistic_sharpe_ratio": True,
+            "deflated_sharpe_probability": True,
+            "bootstrap_lower_bound": True,
+        }
         return {
-            "dataset_fingerprint": "a" * 64,
+            "dataset_fingerprint": fingerprint,
             "validation_profile": "nested_walk_forward_v2",
             "walk_forward_validation": {
                 "status": "completed",
@@ -168,20 +175,11 @@ class PromotionLifecycleE2E:
                 "probabilistic_sharpe_ratio": 0.98,
                 "deflated_sharpe_probability": 0.94,
                 "bootstrap_annualized_return_lower": 0.02,
-                "gates": {
-                    "observation_count": True,
-                    "trade_count": True,
-                    "adjusted_p_value": True,
-                    "probabilistic_sharpe_ratio": True,
-                    "deflated_sharpe_probability": True,
-                    "bootstrap_lower_bound": True,
-                },
+                "gates": statistical_gates,
             },
             "selection_gates": {
-                "statistical_adjusted_p_value": True,
-                "statistical_probabilistic_sharpe_ratio": True,
-                "statistical_deflated_sharpe_probability": True,
-                "statistical_bootstrap_lower_bound": True,
+                f"statistical_{name}": passed
+                for name, passed in statistical_gates.items()
             },
             "robustness_validation": {
                 "status": "completed",
@@ -203,10 +201,14 @@ class PromotionLifecycleE2E:
             "immutable_evidence_snapshot": True,
         }
 
-    def seed_run(self, *, run_id: str, strategy_id: str, fingerprint: str) -> Dict[str, Any]:
+    def seed_run(
+        self,
+        *,
+        run_id: str,
+        strategy_id: str,
+        fingerprint: str,
+    ) -> Dict[str, Any]:
         now = datetime.now(timezone.utc)
-        metadata = self.metadata(strategy_id)
-        metadata["dataset_fingerprint"] = fingerprint
         payload = {
             "run_id": run_id,
             "account_id": "1",
@@ -221,7 +223,7 @@ class PromotionLifecycleE2E:
             "parameters": {"strategy": "trend_following"},
             "metrics": {"total_trades": 40, "kill_switch_events": 0},
             "source_agent": "backtest-agent",
-            "metadata": metadata,
+            "metadata": self.metadata(strategy_id, fingerprint),
             "created_at": now.isoformat(),
             "updated_at": now.isoformat(),
             "trades": [],
@@ -238,7 +240,12 @@ class PromotionLifecycleE2E:
                 "created_at": now.isoformat(),
             },
         }
-        response = self.request("database", "POST", "/backtests/runs", payload=payload)
+        response = self.request(
+            "database",
+            "POST",
+            "/backtests/runs",
+            payload=payload,
+        )
         require(response.get("status") == "success", f"run seed failed: {response}")
         return unwrap(response) or {}
 
@@ -258,16 +265,16 @@ from app.promotion_lifecycle import create_and_advance_backtest_promotion
 client = DatabaseAgentClient()
 record = create_and_advance_backtest_promotion(
     client,
-    account_id='1',
-    run_id=os.environ['E2E_RUN_ID'],
-    skill_id='hourly-sma-crossover',
-    strategy_id=os.environ['E2E_STRATEGY_ID'],
-    symbol='AAPL',
-    timeframe='1d',
-    dataset_fingerprint=os.environ['E2E_FINGERPRINT'],
-    engine_version='backtest-agent-0.7.0',
-    validation_profile='nested_walk_forward_v2',
-    correlation_id=os.environ['E2E_CORRELATION_ID'],
+    account_id="1",
+    run_id=os.environ["E2E_RUN_ID"],
+    skill_id="hourly-sma-crossover",
+    strategy_id=os.environ["E2E_STRATEGY_ID"],
+    symbol="AAPL",
+    timeframe="1d",
+    dataset_fingerprint=os.environ["E2E_FINGERPRINT"],
+    engine_version="backtest-agent-0.7.0",
+    validation_profile="nested_walk_forward_v2",
+    correlation_id=os.environ["E2E_CORRELATION_ID"],
 )
 print(json.dumps(record, sort_keys=True))
 """
@@ -294,18 +301,19 @@ print(json.dumps(record, sort_keys=True))
         )
         require(
             completed.returncode == 0,
-            f"Backtest lifecycle subprocess failed: {completed.stdout}\n{completed.stderr}",
+            "Backtest lifecycle subprocess failed: "
+            f"{completed.stdout}\n{completed.stderr}",
         )
         lines = [line for line in completed.stdout.splitlines() if line.strip()]
         require(lines, "Backtest lifecycle subprocess returned no JSON")
         return json.loads(lines[-1])
 
     async def manager_authorize(self, *, strategy_id: str) -> Dict[str, Any]:
-        transport = AsyncDatabaseTransport(self.gateway, self.correlation_id)
+        transport = AsyncDatabaseTransport(self.gateway)
         previous = os.environ.get("BACKTEST_PROMOTION_APPROVAL_TOKEN")
         os.environ["BACKTEST_PROMOTION_APPROVAL_TOKEN"] = self.approval_token
         try:
-            result = await filter_candidates_with_backtest_gate(
+            return await filter_candidates_with_backtest_gate(
                 db_client=transport,
                 selected_positions=[
                     {"account_id": "1", "symbol": "AAPL", "quantity": 1}
@@ -327,7 +335,6 @@ print(json.dumps(record, sort_keys=True))
                 os.environ.pop("BACKTEST_PROMOTION_APPROVAL_TOKEN", None)
             else:
                 os.environ["BACKTEST_PROMOTION_APPROVAL_TOKEN"] = previous
-        return result
 
     def risk_approve(self, *, strategy_id: str) -> Dict[str, Any]:
         payload = {
@@ -357,12 +364,22 @@ print(json.dumps(record, sort_keys=True))
             "requested_position_pct": 0.01,
             "trading_mode": "PAPER",
         }
-        response = self.request("risk", "POST", "/risk/manager-gate", payload=payload)
+        response = self.request(
+            "risk",
+            "POST",
+            "/risk/manager-gate",
+            payload=payload,
+        )
         result = unwrap(response) or {}
         require(result.get("approved") is True, f"Risk rejected promotion: {response}")
         return result
 
-    def create_risk_approval(self, *, risk_result: Dict[str, Any], trade_id: str) -> str:
+    def create_risk_approval(
+        self,
+        *,
+        risk_result: Dict[str, Any],
+        trade_id: str,
+    ) -> str:
         approval_id = f"promotion-risk-{trade_id}"
         payload = {
             "approval_id": approval_id,
@@ -370,7 +387,9 @@ print(json.dumps(record, sort_keys=True))
             "symbol": "AAPL",
             "side": "buy",
             "approved_quantity": 1,
-            "expires_at": (datetime.now(timezone.utc) + timedelta(minutes=10)).isoformat(),
+            "expires_at": (
+                datetime.now(timezone.utc) + timedelta(minutes=10)
+            ).isoformat(),
             "metadata": {
                 "source": "risk_agent_manager_gate",
                 "risk_result": risk_result,
@@ -378,7 +397,12 @@ print(json.dumps(record, sort_keys=True))
                 "promotion_authority_verified": True,
             },
         }
-        response = self.request("database", "POST", "/risk-approvals", payload=payload)
+        response = self.request(
+            "database",
+            "POST",
+            "/risk-approvals",
+            payload=payload,
+        )
         approval = unwrap(response) or {}
         require(approval.get("status") == "approved", f"approval seed failed: {response}")
         return approval_id
@@ -395,9 +419,17 @@ print(json.dumps(record, sort_keys=True))
             "strategy_bucket": "unassigned",
             "risk_approval_id": approval_id,
             "final_quantity": 1,
+            "protective_exit": {
+                "type": "promotion_e2e_bracket",
+                "stop_loss": 95.0,
+                "take_profit": 110.0,
+                "risk_approval_id": approval_id,
+                "promotion_authority_verified": True,
+            },
             "metadata": {
                 "correlation_id": self.correlation_id,
                 "promotion_authority_verified": True,
+                "protective_exit_required": True,
             },
         }
         return self.request(
@@ -427,11 +459,61 @@ print(json.dumps(record, sort_keys=True))
         )
         return unwrap(response) or []
 
+    def _assert_execution_trace(
+        self,
+        *,
+        first_data: Dict[str, Any],
+        second_data: Dict[str, Any],
+        trade_id: str,
+        approval_id: str,
+    ) -> tuple[Dict[str, Any], Dict[str, Any]]:
+        require(
+            first_data.get("order_id") == second_data.get("order_id"),
+            "idempotent retry created a duplicate order: "
+            f"{first_data}, {second_data}",
+        )
+        encoded_trade_id = urllib.parse.quote(trade_id, safe="")
+        order = unwrap(
+            self.request(
+                "database",
+                "GET",
+                f"/orders/trade/{encoded_trade_id}",
+            )
+        ) or {}
+        require(order.get("risk_approval_id") == approval_id, str(order))
+        require(
+            bool(order.get("protective_exit")),
+            f"order lost protective exit: {order}",
+        )
+        require(
+            (order.get("metadata") or {}).get("correlation_id")
+            == self.correlation_id,
+            f"order lost correlation ID: {order}",
+        )
+        encoded_approval_id = urllib.parse.quote(approval_id, safe="")
+        stored_approval = unwrap(
+            self.request(
+                "database",
+                "GET",
+                f"/risk-approvals/{encoded_approval_id}",
+            )
+        ) or {}
+        require(
+            (stored_approval.get("metadata") or {}).get("correlation_id")
+            == self.correlation_id,
+            f"risk approval lost correlation ID: {stored_approval}",
+        )
+        return order, stored_approval
+
     def run(self) -> None:
         strategy_id = "trend-following-balanced-v1"
         fingerprint = "a" * 64
         run_id = "promotion-e2e-run-001"
-        self.seed_run(run_id=run_id, strategy_id=strategy_id, fingerprint=fingerprint)
+        self.seed_run(
+            run_id=run_id,
+            strategy_id=strategy_id,
+            fingerprint=fingerprint,
+        )
         robust = self.backtest_advance(
             run_id=run_id,
             strategy_id=strategy_id,
@@ -462,38 +544,17 @@ print(json.dumps(record, sort_keys=True))
             risk_result=risk_result,
             trade_id=trade_id,
         )
-        first = self.execute(trade_id=trade_id, approval_id=approval_id)
-        second = self.execute(trade_id=trade_id, approval_id=approval_id)
-        first_data = unwrap(first) or {}
-        second_data = unwrap(second) or {}
-        require(
-            first_data.get("order_id") == second_data.get("order_id"),
-            f"idempotent retry created a duplicate order: {first_data}, {second_data}",
-        )
-        order = unwrap(
-            self.request(
-                "database",
-                "GET",
-                f"/orders/trade/{urllib.parse.quote(trade_id, safe='')}",
-            )
+        first_data = unwrap(
+            self.execute(trade_id=trade_id, approval_id=approval_id)
         ) or {}
-        require(order.get("risk_approval_id") == approval_id, str(order))
-        require(
-            (order.get("metadata") or {}).get("correlation_id")
-            == self.correlation_id,
-            f"order lost correlation ID: {order}",
-        )
-        stored_approval = unwrap(
-            self.request(
-                "database",
-                "GET",
-                f"/risk-approvals/{urllib.parse.quote(approval_id, safe='')}",
-            )
+        second_data = unwrap(
+            self.execute(trade_id=trade_id, approval_id=approval_id)
         ) or {}
-        require(
-            (stored_approval.get("metadata") or {}).get("correlation_id")
-            == self.correlation_id,
-            f"risk approval lost correlation ID: {stored_approval}",
+        order, stored_approval = self._assert_execution_trace(
+            first_data=first_data,
+            second_data=second_data,
+            trade_id=trade_id,
+            approval_id=approval_id,
         )
 
         newer_run_id = "promotion-e2e-run-002"
@@ -519,19 +580,24 @@ print(json.dumps(record, sort_keys=True))
             "correlation_id": self.correlation_id,
             "metadata": {"source": "promotion-e2e"},
         }
+        encoded_newer_id = urllib.parse.quote(newer["promotion_id"], safe="")
         failed_response = self.request(
             "database",
             "POST",
-            f"/backtests/promotions/{urllib.parse.quote(newer['promotion_id'], safe='')}/transition",
+            f"/backtests/promotions/{encoded_newer_id}/transition",
             payload=fail_payload,
         )
-        require((unwrap(failed_response) or {}).get("state") == "FAILED", str(failed_response))
+        require(
+            (unwrap(failed_response) or {}).get("state") == "FAILED",
+            str(failed_response),
+        )
         blocked = asyncio.run(self.manager_authorize(strategy_id=strategy_id))
         require(blocked["summary"]["allowed_count"] == 0, str(blocked))
-        codes = set(blocked["decisions"][0]["rejection_codes"])
+        rejection_codes = set(blocked["decisions"][0]["rejection_codes"])
         require(
-            "backtest_promotion_terminal_failed" in codes,
-            f"newer failed evidence did not block older approval: {blocked}",
+            "backtest_promotion_terminal_failed" in rejection_codes,
+            "newer failed evidence did not block older approval: "
+            f"{blocked}",
         )
 
         replay = self.backtest_advance(
