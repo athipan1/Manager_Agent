@@ -230,6 +230,40 @@ def _reconciliation_payload(response: Any) -> Dict[str, Any]:
     return dict(data)
 
 
+def _validate_reconciliation_contract(
+    reconciliation: Dict[str, Any],
+) -> tuple[Dict[str, Any], Optional[datetime], Optional[str]]:
+    errors: List[str] = []
+    reconciled_at = _parse_timestamp(reconciliation.get("reconciled_at"))
+    if reconciled_at is None:
+        errors.append("reconciliation_timestamp_missing_or_invalid")
+
+    raw_broker_state = reconciliation.get("broker_state")
+    broker_state: Dict[str, Any] = (
+        dict(raw_broker_state) if isinstance(raw_broker_state, dict) else {}
+    )
+    if not broker_state:
+        errors.append("broker_state_missing_or_invalid")
+    else:
+        if _parse_timestamp(broker_state.get("captured_at")) is None:
+            errors.append("broker_state_timestamp_missing_or_invalid")
+        if not isinstance(broker_state.get("open_orders"), list):
+            errors.append("broker_open_orders_missing_or_invalid")
+        if not isinstance(broker_state.get("positions"), list):
+            errors.append("broker_positions_missing_or_invalid")
+
+    raw_database_sync = reconciliation.get("database_sync")
+    database_sync = (
+        raw_database_sync if isinstance(raw_database_sync, dict) else {}
+    )
+    if database_sync.get("status") != "success":
+        errors.append("broker_database_sync_not_successful")
+    if reconciliation.get("ok") is not True:
+        errors.append("broker_reconciliation_not_ok")
+
+    return broker_state, reconciled_at, ";".join(errors) or None
+
+
 def _reconciliation_for_symbol(
     *,
     symbol: str,
@@ -288,6 +322,14 @@ def _enrich_rows(
     return enriched
 
 
+def _merge_reconciliation_error(
+    current: Optional[str],
+    additional: Optional[str],
+) -> Optional[str]:
+    values = [value for value in (current, additional) if value]
+    return ";".join(values) or None
+
+
 async def observe_promotion_gate_result(
     *,
     db_client: Any,
@@ -343,13 +385,16 @@ async def observe_promotion_gate_result(
         if owns_client and client is not None:
             await client.__aexit__(None, None, None)
 
-    raw_broker_state = reconciliation.get("broker_state")
-    broker_state: Dict[str, Any] = (
-        raw_broker_state if isinstance(raw_broker_state, dict) else {}
+    broker_state, reconciled_at, contract_error = (
+        _validate_reconciliation_contract(reconciliation)
+    )
+    reconciliation_error = _merge_reconciliation_error(
+        reconciliation_error,
+        contract_error,
     )
     broker_orders = _active_orders(_rows(broker_state.get("open_orders")))
     broker_positions = _rows(broker_state.get("positions"))
-    reconciliation_ok = bool(reconciliation.get("ok", False)) and not reconciliation_error
+    reconciliation_ok = reconciliation_error is None
 
     try:
         database_orders = _active_orders(
@@ -358,9 +403,12 @@ async def observe_promotion_gate_result(
     except Exception as exc:
         database_orders = []
         reconciliation_ok = False
-        reconciliation_error = reconciliation_error or str(exc)
+        reconciliation_error = _merge_reconciliation_error(
+            reconciliation_error,
+            str(exc),
+        )
 
-    observed_at = _iso_timestamp(reconciliation.get("reconciled_at"))
+    observed_at = _iso_timestamp(reconciled_at)
     adapter = PromotionDatabaseAdapter(db_client)
     payloads = [dict(row) for row in gate_result.get("position_analysis_payloads") or []]
     observation_decisions: List[Dict[str, Any]] = []
@@ -389,7 +437,7 @@ async def observe_promotion_gate_result(
         rejection_codes: List[str] = []
         observation: Dict[str, Any] = {}
 
-        if not promotion_id or not isinstance(expected_version, int):
+        if not symbol or not promotion_id or not isinstance(expected_version, int):
             rejection_codes.append("paper_observation_promotion_identity_invalid")
         elif expected_state not in {"APPROVED_FOR_PAPER", "PAPER_OBSERVING"}:
             rejection_codes.append("paper_observation_state_invalid")
