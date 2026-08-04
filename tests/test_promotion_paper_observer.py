@@ -64,13 +64,28 @@ def gate_result(**updates):
     return value
 
 
+def reconciliation_data(
+    *,
+    open_orders=None,
+    positions=None,
+    ok=True,
+    database_sync_status="success",
+):
+    return {
+        "ok": ok,
+        "reconciled_at": OBSERVED_AT,
+        "broker_state": {
+            "captured_at": OBSERVED_AT,
+            "open_orders": list(open_orders or []),
+            "positions": list(positions or []),
+        },
+        "database_sync": {"status": database_sync_status},
+    }
+
+
 class FakeExecutionClient:
     def __init__(self, *, data=None, error=None):
-        self.data = data or {
-            "ok": True,
-            "reconciled_at": OBSERVED_AT,
-            "broker_state": {"open_orders": [], "positions": []},
-        }
+        self.data = data if data is not None else reconciliation_data()
         self.error = error
         self.calls = []
         self.entered = 0
@@ -90,9 +105,7 @@ class FakeExecutionClient:
         *,
         push_to_database=None,
     ):
-        self.calls.append(
-            (account_id, correlation_id, push_to_database)
-        )
+        self.calls.append((account_id, correlation_id, push_to_database))
         if self.error:
             raise self.error
         return SimpleNamespace(data=deepcopy(self.data))
@@ -211,9 +224,7 @@ async def test_healthy_observation_is_required_before_risk_and_enriches_payloads
     )
     assert execution.calls == [("1", "corr-healthy", True)]
     call = database.posts[0]
-    assert call["path"] == (
-        "/backtests/promotion-observations/promotion-1"
-    )
+    assert call["path"] == "/backtests/promotion-observations/promotion-1"
     assert call["extra_headers"] == {
         "X-PROMOTION-APPROVAL-KEY": "observation-secret"
     }
@@ -262,20 +273,15 @@ async def test_order_identity_mismatch_revokes_and_blocks_candidate():
         observation_state="REVOKED",
     )
     execution = FakeExecutionClient(
-        data={
-            "ok": True,
-            "reconciled_at": OBSERVED_AT,
-            "broker_state": {
-                "open_orders": [
-                    {
-                        "symbol": "AAPL",
-                        "status": "open",
-                        "order_id": "broker-order-1",
-                    }
-                ],
-                "positions": [],
-            },
-        }
+        data=reconciliation_data(
+            open_orders=[
+                {
+                    "symbol": "AAPL",
+                    "status": "open",
+                    "order_id": "broker-order-1",
+                }
+            ]
+        )
     )
 
     result = await observer.observe_promotion_gate_result(
@@ -321,20 +327,15 @@ async def test_emergency_halt_is_propagated_and_blocks_candidate(monkeypatch):
 async def test_paper_drawdown_is_calculated_and_terminal_result_blocks():
     database = FakeDatabaseClient(observation_state="REVOKED")
     execution = FakeExecutionClient(
-        data={
-            "ok": True,
-            "reconciled_at": OBSERVED_AT,
-            "broker_state": {
-                "open_orders": [],
-                "positions": [
-                    {
-                        "symbol": "AAPL",
-                        "unrealized_pl": "-20",
-                        "cost_basis": "100",
-                    }
-                ],
-            },
-        }
+        data=reconciliation_data(
+            positions=[
+                {
+                    "symbol": "AAPL",
+                    "unrealized_pl": "-20",
+                    "cost_basis": "100",
+                }
+            ]
+        )
     )
 
     result = await observer.observe_promotion_gate_result(
@@ -366,6 +367,87 @@ async def test_reconciliation_failure_is_written_as_fail_closed_observation():
     assert database.posts[0]["json"]["reconciliation_ok"] is False
     assert "broker unavailable" in (
         database.posts[0]["json"]["metadata"]["reconciliation_error"]
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("data", "error_code"),
+    [
+        (
+            {
+                "ok": True,
+                "broker_state": {
+                    "captured_at": OBSERVED_AT,
+                    "open_orders": [],
+                    "positions": [],
+                },
+                "database_sync": {"status": "success"},
+            },
+            "reconciliation_timestamp_missing_or_invalid",
+        ),
+        (
+            {
+                "ok": True,
+                "reconciled_at": OBSERVED_AT,
+                "database_sync": {"status": "success"},
+            },
+            "broker_state_missing_or_invalid",
+        ),
+        (
+            {
+                "ok": True,
+                "reconciled_at": OBSERVED_AT,
+                "broker_state": {
+                    "captured_at": OBSERVED_AT,
+                    "open_orders": [],
+                    "positions": [],
+                },
+                "database_sync": {"status": "skipped"},
+            },
+            "broker_database_sync_not_successful",
+        ),
+    ],
+)
+async def test_malformed_reconciliation_contract_is_written_fail_closed(
+    data,
+    error_code,
+):
+    database = FakeDatabaseClient(observation_state="REVOKED")
+    result = await observer.observe_promotion_gate_result(
+        db_client=database,
+        gate_result=gate_result(),
+        account_id="1",
+        correlation_id="corr-malformed",
+        execution_client=FakeExecutionClient(data=data),
+    )
+
+    assert result["summary"]["allowed_count"] == 0
+    assert database.posts[0]["json"]["reconciliation_ok"] is False
+    assert error_code in (
+        database.posts[0]["json"]["metadata"]["reconciliation_error"]
+    )
+
+
+@pytest.mark.asyncio
+async def test_missing_symbol_is_blocked_without_observation_write():
+    database = FakeDatabaseClient()
+    result = await observer.observe_promotion_gate_result(
+        db_client=database,
+        gate_result=gate_result(
+            decisions=[promotion_decision(symbol="")],
+            selected_positions=[],
+            position_analysis_payloads=[],
+        ),
+        account_id="1",
+        correlation_id="corr-no-symbol",
+        execution_client=FakeExecutionClient(),
+    )
+
+    assert result["summary"]["allowed_count"] == 0
+    assert database.posts == []
+    assert "paper_observation_promotion_identity_invalid" in (
+        result["decisions"][0]["rejection_codes"]
     )
 
 
