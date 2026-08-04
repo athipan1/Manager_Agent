@@ -1,145 +1,159 @@
 name: Hourly Auto Trading
+run-name: Hourly Alpaca Paper Portfolio · ${{ github.event_name }} · #${{ github.run_number }}
 
 on:
-  schedule:
-    - cron: "0 * * * 1-5"
+  workflow_call:
+    inputs:
+      dry_run:
+        description: "Safety default; false is required for Alpaca Paper execution"
+        required: true
+        type: boolean
+      broker_mode:
+        description: "Broker runtime selected by the trusted caller"
+        required: true
+        type: string
+      max_universe:
+        description: "Maximum Scanner universe"
+        required: false
+        default: "1000"
+        type: string
+      top_n:
+        description: "Candidate count passed to exact Backtest"
+        required: false
+        default: "10"
+        type: string
+      min_final_score:
+        description: "Minimum Manager opportunity score"
+        required: false
+        default: "0.55"
+        type: string
+      operator_confirmation:
+        description: "Explicit Paper execution confirmation from the caller"
+        required: false
+        default: ""
+        type: string
+      emergency_halt_drill:
+        description: "Trip, verify and clear the runtime Risk emergency halt before trading"
+        required: false
+        default: false
+        type: boolean
+      authorized_soak_schedule:
+        description: "Allow a scheduled soak caller while production scheduling stays disabled"
+        required: false
+        default: false
+        type: boolean
   workflow_dispatch:
     inputs:
       dry_run:
-        description: "Dry run mode"
+        description: "Safety default; false is required for Alpaca Paper execution"
         required: true
-        default: true
         type: boolean
+        default: true
       broker_mode:
-        description: "SIMULATOR (safe default) or ALPACA paper"
+        description: "Manual dry runs default to Simulator"
         required: true
-        default: SIMULATOR
         type: choice
         options:
           - SIMULATOR
           - ALPACA
+        default: SIMULATOR
       max_universe:
-        description: "Maximum scanner universe size before ranking"
-        required: true
+        description: "Maximum Scanner universe"
+        required: false
         default: "1000"
-        type: string
       top_n:
-        description: "Maximum symbols sent to exact Backtest"
-        required: true
+        description: "Candidate count passed to exact Backtest"
+        required: false
         default: "10"
-        type: string
       min_final_score:
-        description: "Minimum Scanner final score"
-        required: true
+        description: "Minimum Manager opportunity score"
+        required: false
         default: "0.55"
-        type: string
       operator_confirmation:
-        description: "Type EXECUTE_ALPACA_PAPER for a manual Alpaca Paper run"
+        description: "Enter EXECUTE_ALPACA_PAPER when broker_mode=ALPACA and dry_run=false"
         required: false
         default: ""
-        type: string
       emergency_halt_drill:
-        description: "Exercise Risk runtime halt before trading"
-        required: true
-        default: true
-        type: boolean
-  workflow_call:
-    inputs:
-      dry_run:
-        required: true
-        type: boolean
-      broker_mode:
-        required: true
-        type: string
-      max_universe:
-        required: true
-        type: string
-      top_n:
-        required: true
-        type: string
-      min_final_score:
-        required: true
-        type: string
-      operator_confirmation:
-        required: false
-        type: string
-        default: ""
-      emergency_halt_drill:
-        required: false
-        type: boolean
-        default: true
-      authorized_soak_schedule:
+        description: "Verify the Risk emergency halt before a Paper execution cycle"
         required: false
         type: boolean
         default: false
+  schedule:
+    - cron: "5 * * * *"
+
+concurrency:
+  group: hourly-alpaca-paper-portfolio
+  cancel-in-progress: false
 
 permissions:
   contents: read
   issues: read
 
-concurrency:
-  group: hourly-auto-trading
-  cancel-in-progress: false
-
 jobs:
-  hourly-trading:
+  hourly-portfolio-cycle:
+    if: >-
+      github.event_name != 'schedule' ||
+      vars.HOURLY_PAPER_SCHEDULE_ENABLED == 'true' ||
+      inputs.authorized_soak_schedule == true
     runs-on: ubuntu-latest
-    timeout-minutes: 35
-    environment: paper-trading
+    timeout-minutes: 55
     env:
       TRADING_ENABLED: "true"
       TRADING_MODE: PAPER
-      BROKER_MODE: ${{ github.event_name == 'schedule' && 'SIMULATOR' || inputs.broker_mode }}
-      DRY_RUN: ${{ github.event_name == 'schedule' && 'true' || inputs.dry_run }}
+      BROKER_MODE: ${{ github.event_name == 'schedule' && 'ALPACA' || inputs.broker_mode }}
+      DRY_RUN: ${{ github.event_name == 'schedule' && 'false' || inputs.dry_run }}
       ALLOW_LIVE_TRADING: "false"
-      EXECUTE_APPROVED_PAPER_BRACKET_UPGRADE: "false"
-      HOURLY_PAPER_SCHEDULE_ENABLED: ${{ vars.HOURLY_PAPER_SCHEDULE_ENABLED }}
       PAPER_SCHEDULE_AUTHORIZED: ${{ inputs.authorized_soak_schedule == true && 'true' || 'false' }}
       BACKTEST_PROMOTION_AUTO_APPROVE_PAPER: ${{ inputs.authorized_soak_schedule == true && 'true' || 'false' }}
       BACKTEST_PROMOTION_OBSERVATION_REQUIRED: ${{ inputs.authorized_soak_schedule == true && 'true' || 'false' }}
       BACKTEST_PROMOTION_APPROVAL_TOKEN: ${{ inputs.authorized_soak_schedule == true && secrets.BACKTEST_PROMOTION_APPROVAL_TOKEN || '' }}
-      MANAGER_AGENT_API_KEY: ${{ secrets.MANAGER_AGENT_API_KEY }}
-      RISK_AGENT_API_KEY: ${{ secrets.RISK_AGENT_API_KEY }}
-      EXECUTION_API_KEY: ${{ secrets.EXECUTION_API_KEY }}
-      PORTFOLIO_AGENT_API_KEY: ${{ secrets.PORTFOLIO_AGENT_API_KEY }}
-      PROFIT_AGENT_API_KEY: ${{ secrets.PROFIT_AGENT_API_KEY }}
-      DATABASE_AGENT_URL: ${{ secrets.DATABASE_AGENT_URL }}
-      DATABASE_AGENT_API_KEY: ${{ secrets.DATABASE_AGENT_API_KEY }}
-      TECHNICAL_AGENT_API_KEY: ${{ secrets.TECHNICAL_AGENT_API_KEY }}
-      FUNDAMENTAL_AGENT_API_KEY: ${{ secrets.FUNDAMENTAL_AGENT_API_KEY }}
-      SCANNER_AGENT_API_KEY: ${{ secrets.SCANNER_AGENT_API_KEY }}
-      MARKET_REGIME_AGENT_API_KEY: ${{ secrets.MARKET_REGIME_AGENT_API_KEY }}
-      ALPACA_API_KEY_ID: ${{ secrets.ALPACA_API_KEY_ID }}
-      ALPACA_SECRET_KEY: ${{ secrets.ALPACA_SECRET_KEY }}
-      ALPACA_API_URL: ${{ secrets.ALPACA_API_URL }}
-      RISK_ADMIN_TOKEN: ${{ secrets.RISK_ADMIN_TOKEN }}
-      DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
-      EMERGENCY_HALT_FLAG_PATH: /tmp/risk_emergency_halt
-      EMERGENCY_HALT: "false"
-      STOCK_ONLY_MODE: "true"
-      ALLOW_SHORT_SELLING: "false"
       BACKTEST_EXECUTION_GATE_REQUIRED: "true"
-      BROKER_RECONCILE_BEFORE_EXECUTION: "true"
-      BROKER_RECONCILE_BEFORE_CONTEXT: "true"
-      BROKER_RECONCILE_PUSH_TO_DATABASE: "true"
       BROKER_RECONCILE_REQUIRED: "true"
       BROKER_RECONCILE_CONTEXT_REQUIRED: "true"
-      PERFORMANCE_AGENT_ENABLED: "true"
-      PERFORMANCE_SESSION_RISK_ENABLED: "true"
       PERFORMANCE_SESSION_RISK_REQUIRED: "true"
       PROFIT_DECISION_EXECUTION_ENABLED: "false"
       PROFIT_AUTO_EXIT_ALL_ENABLED: "false"
-      PROFIT_MARKET_DATA_MAX_AGE_SECONDS: "120"
-      DATABASE_REQUIRE_SCHEMA_IDENTITY: "true"
+      PAPER_OPERATOR_CONFIRMATION: ${{ inputs.operator_confirmation || '' }}
+      ALPACA_API_KEY_ID: ${{ secrets.ALPACA_API_KEY_ID }}
+      ALPACA_SECRET_KEY: ${{ secrets.ALPACA_SECRET_KEY }}
+      ALPACA_API_URL: ${{ secrets.ALPACA_API_URL }}
+      EXECUTION_API_KEY: ${{ secrets.EXECUTION_API_KEY }}
+      DATABASE_AGENT_URL: ${{ secrets.DATABASE_AGENT_URL }}
+      DATABASE_AGENT_API_KEY: ${{ secrets.DATABASE_AGENT_API_KEY }}
+      RISK_ADMIN_TOKEN: ${{ secrets.RISK_ADMIN_TOKEN }}
+      PORTFOLIO_AGENT_API_KEY: ${{ secrets.PORTFOLIO_AGENT_API_KEY }}
+      PROFIT_AGENT_API_KEY: ${{ secrets.PROFIT_AGENT_API_KEY }}
+      DEFAULT_ACCOUNT_ID: "1"
       HOURLY_MAX_UNIVERSE: ${{ inputs.max_universe || '1000' }}
       HOURLY_TOP_N: ${{ inputs.top_n || '10' }}
       HOURLY_MIN_FINAL_SCORE: ${{ inputs.min_final_score || '0.55' }}
+      BACKTEST_ENABLED: "true"
+      BACKTEST_SKILL_ID: ${{ vars.BACKTEST_SKILL_ID || 'hourly-sma-crossover' }}
+      BACKTEST_STRATEGY_ID: ${{ vars.BACKTEST_STRATEGY_ID || 'hourly-sma-crossover' }}
+      BACKTEST_TIMEFRAME: ${{ vars.BACKTEST_TIMEFRAME || '1d' }}
+      BACKTEST_MINIMUM_BARS: ${{ vars.BACKTEST_MINIMUM_BARS || '252' }}
+      BACKTEST_BAR_LIMIT: ${{ vars.BACKTEST_BAR_LIMIT || '10000' }}
+      BACKTEST_INITIAL_EQUITY: ${{ vars.BACKTEST_INITIAL_EQUITY || '100000' }}
+      BACKTEST_STRATEGY: ${{ vars.BACKTEST_STRATEGY || 'sma_crossover' }}
+      BACKTEST_FAST_WINDOW: ${{ vars.BACKTEST_FAST_WINDOW || '2' }}
+      BACKTEST_SLOW_WINDOW: ${{ vars.BACKTEST_SLOW_WINDOW || '3' }}
+      BACKTEST_FEE_BPS: ${{ vars.BACKTEST_FEE_BPS || '10' }}
+      BACKTEST_SLIPPAGE_BPS: ${{ vars.BACKTEST_SLIPPAGE_BPS || '5' }}
+      ALPACA_DATA_API_URL: https://data.alpaca.markets
+      ALPACA_DATA_FEED: iex
+      PYTHONUNBUFFERED: "1"
 
     steps:
       - name: Checkout Manager_Agent
         uses: actions/checkout@v4
         with:
           path: Manager_Agent
+
+      - name: Check durable Alpaca Paper emergency halt
+        working-directory: Manager_Agent
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: python scripts/paper_trading_control.py assert-clear
 
       - name: Validate authorized promotion observation soak
         if: inputs.authorized_soak_schedule == true
@@ -152,83 +166,25 @@ jobs:
             exit 1
           fi
 
-      - name: Resolve execution mode and validate Paper secrets
+      - name: Validate Paper-only runtime and external dependencies
         id: preflight
         working-directory: Manager_Agent
-        env:
-          OPERATOR_CONFIRMATION: ${{ inputs.operator_confirmation || '' }}
-          HOURLY_PAPER_SCHEDULE_ENABLED: ${{ vars.HOURLY_PAPER_SCHEDULE_ENABLED }}
-          PAPER_SCHEDULE_AUTHORIZED: ${{ env.PAPER_SCHEDULE_AUTHORIZED }}
-        run: |
-          set -euo pipefail
-          python scripts/hourly_paper_preflight.py \
-            --github-event-name "${GITHUB_EVENT_NAME}" \
-            --github-ref "${GITHUB_REF}" \
-            --github-repository-owner "${GITHUB_REPOSITORY_OWNER}" \
-            --github-actor "${GITHUB_ACTOR}" \
-            --trading-mode "${TRADING_MODE}" \
-            --broker-mode "${BROKER_MODE}" \
-            --dry-run "${DRY_RUN}" \
-            --allow-live-trading "${ALLOW_LIVE_TRADING}" \
-            --execute-approved-paper-bracket-upgrade "${EXECUTE_APPROVED_PAPER_BRACKET_UPGRADE}" \
-            --operator-confirmation "${OPERATOR_CONFIRMATION}" \
-            --hourly-paper-schedule-enabled "${HOURLY_PAPER_SCHEDULE_ENABLED}" \
-            --paper-schedule-authorized "${PAPER_SCHEDULE_AUTHORIZED}" \
-            --database-agent-url "${DATABASE_AGENT_URL}" \
-            --database-agent-api-key "${DATABASE_AGENT_API_KEY}" \
-            --execution-api-key "${EXECUTION_API_KEY}" \
-            --portfolio-agent-api-key "${PORTFOLIO_AGENT_API_KEY}" \
-            --profit-agent-api-key "${PROFIT_AGENT_API_KEY}" \
-            --risk-admin-token "${RISK_ADMIN_TOKEN}" \
-            --alpaca-api-key-id "${ALPACA_API_KEY_ID}" \
-            --alpaca-secret-key "${ALPACA_SECRET_KEY}" \
-            --alpaca-api-url "${ALPACA_API_URL}" \
-            --max-universe "${HOURLY_MAX_UNIVERSE}" \
-            --top-n "${HOURLY_TOP_N}" \
-            --min-final-score "${HOURLY_MIN_FINAL_SCORE}" \
-            --github-output "${GITHUB_OUTPUT}"
+        run: python scripts/hourly_paper_preflight.py
 
-      - name: Validate required repository secrets
-        env:
-          PAPER_AUTOMATION: ${{ steps.preflight.outputs.paper_automation }}
-        run: |
-          set -euo pipefail
-          if [ -z "${MANAGER_AGENT_API_KEY}" ]; then
-            echo "Missing required GitHub secret: MANAGER_AGENT_API_KEY"
-            exit 1
-          fi
-          if [ -z "${RISK_AGENT_API_KEY}" ]; then
-            echo "Missing required GitHub secret: RISK_AGENT_API_KEY"
-            exit 1
-          fi
-          if [ "${PAPER_AUTOMATION}" = "true" ]; then
-            for name in \
-              EXECUTION_API_KEY \
-              PORTFOLIO_AGENT_API_KEY \
-              PROFIT_AGENT_API_KEY \
-              DATABASE_AGENT_URL \
-              DATABASE_AGENT_API_KEY \
-              RISK_ADMIN_TOKEN \
-              ALPACA_API_KEY_ID \
-              ALPACA_SECRET_KEY \
-              ALPACA_API_URL; do
-              if [ -z "${!name}" ]; then
-                echo "Missing required GitHub secret: ${name}"
-                exit 1
-              fi
-            done
-          fi
-
-      - name: Select isolated compose profile
+      - name: Configure isolated runtime stack
         working-directory: Manager_Agent
         run: |
           if [ "${{ steps.preflight.outputs.paper_automation }}" = "true" ]; then
             echo "COMPOSE_FILE=docker-compose.yml:docker-compose.risk.yml:docker-compose.alpha.yml:docker-compose.hourly-paper.yml" >> "$GITHUB_ENV"
             echo "RUNTIME_DATABASE_AGENT_URL=${DATABASE_AGENT_URL}" >> "$GITHUB_ENV"
+            echo "EXECUTE_PAPER_PROTECTION_RECONCILIATION=true" >> "$GITHUB_ENV"
           else
+            python scripts/configure_simulator_runtime.py
             echo "COMPOSE_FILE=docker-compose.yml:docker-compose.risk.yml:docker-compose.alpha.yml:docker-compose.hourly-simulator.yml" >> "$GITHUB_ENV"
-            echo "RUNTIME_DATABASE_AGENT_URL=http://database-agent:8004" >> "$GITHUB_ENV"
+            echo "RUNTIME_DATABASE_AGENT_URL=http://localhost:8004" >> "$GITHUB_ENV"
+            echo "EXECUTE_PAPER_PROTECTION_RECONCILIATION=false" >> "$GITHUB_ENV"
           fi
+          echo "PORTFOLIO_CYCLE_ID=${{ steps.preflight.outputs.portfolio_cycle_id }}" >> "$GITHUB_ENV"
 
       - name: Checkout Scanner_Agent
         uses: actions/checkout@v4
@@ -254,12 +210,12 @@ jobs:
           path: Fundamental_Agent
           fetch-depth: 1
 
-      - name: Checkout Risk_Agent
+      - name: Checkout Backtest_Agent
         uses: actions/checkout@v4
         with:
-          repository: athipan1/Risk_Agent
+          repository: athipan1/Backtest_Agent
           ref: main
-          path: Risk_Agent
+          path: Backtest_Agent
           fetch-depth: 1
 
       - name: Checkout Execution_Agent
@@ -270,12 +226,12 @@ jobs:
           path: Execution_Agent
           fetch-depth: 1
 
-      - name: Checkout Backtest_Agent
+      - name: Checkout Risk_Agent
         uses: actions/checkout@v4
         with:
-          repository: athipan1/Backtest_Agent
+          repository: athipan1/Risk_Agent
           ref: main
-          path: Backtest_Agent
+          path: Risk_Agent
           fetch-depth: 1
 
       - name: Checkout Portfolio_Agent
@@ -375,7 +331,7 @@ jobs:
           FUNDAMENTAL_AGENT_URL: http://localhost:8001
           MARKET_REGIME_AGENT_URL: http://localhost:8014
           PORTFOLIO_AGENT_URL: http://localhost:8012
-          PROFIT_AGENT_URL: http://profit-agent:8011
+          PROFIT_AGENT_URL: http://localhost:8011
           PERFORMANCE_AGENT_URL: http://localhost:8013
           EXECUTION_AGENT_URL: http://localhost:8006
           DATABASE_AGENT_URL: ${{ env.RUNTIME_DATABASE_AGENT_URL }}
