@@ -116,18 +116,25 @@ class FakeDatabaseClient:
         self,
         *,
         orders=None,
+        positions=None,
         observation_state="PAPER_OBSERVING",
         observation_error=None,
     ):
         self.orders = list(orders or [])
+        self.positions = list(positions or [])
         self.observation_state = observation_state
         self.observation_error = observation_error
         self.posts = []
-        self.get_order_calls = []
+        self.gets = []
+        self.high_level_context_reads = []
 
     async def get_orders(self, account_id, correlation_id):
-        self.get_order_calls.append((account_id, correlation_id))
-        return deepcopy(self.orders)
+        self.high_level_context_reads.append(("orders", account_id, correlation_id))
+        raise AssertionError("observer must not use broker-fallback get_orders")
+
+    async def get_positions(self, account_id, correlation_id):
+        self.high_level_context_reads.append(("positions", account_id, correlation_id))
+        raise AssertionError("observer must not use broker-fallback get_positions")
 
     async def _post(
         self,
@@ -183,7 +190,14 @@ class FakeDatabaseClient:
         return {"status": "success", "data": data}
 
     async def _get(self, path, correlation_id, **kwargs):
-        return {"status": "success", "data": []}
+        self.gets.append((path, correlation_id, deepcopy(kwargs)))
+        if path.endswith("/orders"):
+            data = deepcopy(self.orders)
+        elif path.endswith("/positions"):
+            data = deepcopy(self.positions)
+        else:
+            data = []
+        return {"status": "success", "data": data}
 
     def validate_standard_response(self, response):
         return SimpleNamespace(data=response.get("data"))
@@ -223,6 +237,11 @@ async def test_healthy_observation_is_required_before_risk_and_enriches_payloads
         "PAPER_OBSERVING"
     )
     assert execution.calls == [("1", "corr-healthy", True)]
+    assert database.high_level_context_reads == []
+    assert [call[0] for call in database.gets] == [
+        "/accounts/1/orders",
+        "/accounts/1/positions",
+    ]
     call = database.posts[0]
     assert call["path"] == "/backtests/promotion-observations/promotion-1"
     assert call["extra_headers"] == {
@@ -304,6 +323,63 @@ async def test_order_identity_mismatch_revokes_and_blocks_candidate():
 
 
 @pytest.mark.asyncio
+async def test_cross_symbol_order_mismatch_blocks_entire_account_cycle():
+    database = FakeDatabaseClient(
+        orders=[{"symbol": "MSFT", "status": "open", "order_id": "db-msft"}],
+        observation_state="REVOKED",
+    )
+    execution = FakeExecutionClient(
+        data=reconciliation_data(
+            open_orders=[
+                {"symbol": "MSFT", "status": "open", "order_id": "broker-msft"}
+            ]
+        )
+    )
+
+    result = await observer.observe_promotion_gate_result(
+        db_client=database,
+        gate_result=gate_result(),
+        account_id="1",
+        correlation_id="corr-account-mismatch",
+        execution_client=execution,
+    )
+
+    assert result["summary"]["allowed_count"] == 0
+    metadata = database.posts[0]["json"]["metadata"]
+    assert metadata["account_order_reconciliation"]["reconciliation_ok"] is False
+    assert database.posts[0]["json"]["broker_order_count"] == 0
+    assert database.posts[0]["json"]["database_order_count"] == 0
+
+
+@pytest.mark.asyncio
+async def test_position_quantity_mismatch_revokes_and_blocks_candidate():
+    database = FakeDatabaseClient(
+        positions=[{"symbol": "AAPL", "quantity": 9}],
+        observation_state="REVOKED",
+    )
+    execution = FakeExecutionClient(
+        data=reconciliation_data(
+            positions=[{"symbol": "AAPL", "qty": "10"}]
+        )
+    )
+
+    result = await observer.observe_promotion_gate_result(
+        db_client=database,
+        gate_result=gate_result(),
+        account_id="1",
+        correlation_id="corr-position-mismatch",
+        execution_client=execution,
+    )
+
+    assert result["summary"]["allowed_count"] == 0
+    metadata = database.posts[0]["json"]["metadata"]
+    assert metadata["account_position_reconciliation"][
+        "position_mismatch_count"
+    ] == 1
+    assert metadata["position_reconciliation_ok"] is False
+
+
+@pytest.mark.asyncio
 async def test_emergency_halt_is_propagated_and_blocks_candidate(monkeypatch):
     monkeypatch.setattr(config, "MANAGER_EMERGENCY_HALT", True)
     database = FakeDatabaseClient(observation_state="REVOKED")
@@ -325,17 +401,18 @@ async def test_emergency_halt_is_propagated_and_blocks_candidate(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_paper_drawdown_is_calculated_and_terminal_result_blocks():
-    database = FakeDatabaseClient(observation_state="REVOKED")
+    broker_position = {
+        "symbol": "AAPL",
+        "qty": "10",
+        "unrealized_pl": "-20",
+        "cost_basis": "100",
+    }
+    database = FakeDatabaseClient(
+        positions=[{"symbol": "AAPL", "quantity": 10}],
+        observation_state="REVOKED",
+    )
     execution = FakeExecutionClient(
-        data=reconciliation_data(
-            positions=[
-                {
-                    "symbol": "AAPL",
-                    "unrealized_pl": "-20",
-                    "cost_basis": "100",
-                }
-            ]
-        )
+        data=reconciliation_data(positions=[broker_position])
     )
 
     result = await observer.observe_promotion_gate_result(
@@ -347,6 +424,7 @@ async def test_paper_drawdown_is_calculated_and_terminal_result_blocks():
     )
 
     assert database.posts[0]["json"]["paper_drawdown_pct"] == pytest.approx(0.2)
+    assert database.posts[0]["json"]["reconciliation_ok"] is True
     assert result["summary"]["allowed_count"] == 0
 
 
