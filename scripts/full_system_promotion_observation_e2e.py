@@ -4,7 +4,6 @@ import argparse
 import asyncio
 import json
 import os
-import time
 import urllib.parse
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -79,14 +78,18 @@ class FaultExecutionTransport:
         push_to_database: Optional[bool] = None,
     ) -> SimpleNamespace:
         del account_id, correlation_id, push_to_database
+        captured_at = datetime.now(timezone.utc).isoformat()
         return SimpleNamespace(
             data={
                 "ok": self.ok,
-                "reconciled_at": datetime.now(timezone.utc).isoformat(),
+                "reconciled_at": captured_at,
                 "broker_state": {
+                    "source": "execution-agent-e2e-fault-transport",
+                    "captured_at": captured_at,
                     "open_orders": self.open_orders,
                     "positions": self.positions,
                 },
+                "database_sync": {"status": "success"},
             }
         )
 
@@ -207,7 +210,7 @@ class PromotionObservationE2E:
             strategy_id=strategy_id,
             fingerprint=fingerprint,
         )
-        expires_at = datetime.now(timezone.utc) + timedelta(seconds=3)
+        expires_at = datetime.now(timezone.utc) + timedelta(seconds=10)
         create_payload = {
             "account_id": "1",
             "run_id": run_id,
@@ -446,7 +449,7 @@ class PromotionObservationE2E:
             0.0,
             (expires_at - datetime.now(timezone.utc)).total_seconds() + 0.25,
         )
-        time.sleep(delay)
+        await asyncio.sleep(delay)
         gate_result = {
             "status": "required",
             "required": True,
