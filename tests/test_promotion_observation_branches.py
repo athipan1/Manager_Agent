@@ -124,13 +124,22 @@ def gate_result(**updates):
     return value
 
 
+def valid_reconciliation():
+    return {
+        "ok": True,
+        "reconciled_at": "2026-08-04T00:00:00Z",
+        "broker_state": {
+            "captured_at": "2026-08-04T00:00:00Z",
+            "open_orders": [],
+            "positions": [],
+        },
+        "database_sync": {"status": "success"},
+    }
+
+
 class Execution:
     def __init__(self, data=None):
-        self.data = data or {
-            "ok": True,
-            "reconciled_at": "2026-08-04T00:00:00Z",
-            "broker_state": {"open_orders": [], "positions": []},
-        }
+        self.data = data if data is not None else valid_reconciliation()
         self.entered = 0
         self.exited = 0
 
@@ -234,6 +243,25 @@ def test_timestamp_float_drawdown_and_strategy_helpers():
         decision(),
         [{"symbol": "AAPL", "strategy_id": "other"}],
     ) is True
+
+
+def test_reconciliation_contract_and_error_merge_helpers():
+    broker_state, reconciled_at, error = (
+        observer._validate_reconciliation_contract(valid_reconciliation())
+    )
+    assert error is None
+    assert reconciled_at == NOW
+    assert broker_state["open_orders"] == []
+
+    _, _, invalid_error = observer._validate_reconciliation_contract({})
+    assert "reconciliation_timestamp_missing_or_invalid" in invalid_error
+    assert "broker_state_missing_or_invalid" in invalid_error
+    assert "broker_database_sync_not_successful" in invalid_error
+    assert "broker_reconciliation_not_ok" in invalid_error
+    assert observer._merge_reconciliation_error(None, None) is None
+    assert observer._merge_reconciliation_error("first", "second") == (
+        "first;second"
+    )
 
 
 def test_reconciliation_helper_detects_exact_missing_and_duplicates():
