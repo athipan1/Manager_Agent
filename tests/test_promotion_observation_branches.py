@@ -33,8 +33,9 @@ class LegacyDuck:
 
 
 class AdapterClient:
-    def __init__(self, data=None):
+    def __init__(self, data=None, path_data=None):
         self.data = data
+        self.path_data = path_data or {}
         self.posts = []
         self.gets = []
 
@@ -51,7 +52,10 @@ class AdapterClient:
 
     async def _get(self, path, correlation_id, **kwargs):
         self.gets.append((path, correlation_id, kwargs))
-        return {"status": "success", "data": self.data}
+        return {
+            "status": "success",
+            "data": self.path_data.get(path, self.data),
+        }
 
     def validate_standard_response(self, response):
         return SimpleNamespace(data=response["data"])
@@ -155,15 +159,33 @@ class Execution:
 
 
 class Database(AdapterClient):
-    def __init__(self, data=None, orders=None, order_error=None):
+    def __init__(
+        self,
+        data=None,
+        orders=None,
+        positions=None,
+        order_error=None,
+        position_error=None,
+    ):
         super().__init__(data=data or observation())
-        self.orders = orders or []
+        self.orders = list(orders or [])
+        self.positions = list(positions or [])
         self.order_error = order_error
+        self.position_error = position_error
 
-    async def get_orders(self, *args, **kwargs):
-        if self.order_error:
-            raise self.order_error
-        return self.orders
+    async def _get(self, path, correlation_id, **kwargs):
+        if path.endswith("/orders"):
+            if self.order_error:
+                raise self.order_error
+            data = self.orders
+        elif path.endswith("/positions"):
+            if self.position_error:
+                raise self.position_error
+            data = self.positions
+        else:
+            data = self.data
+        self.gets.append((path, correlation_id, kwargs))
+        return {"status": "success", "data": data}
 
 
 @pytest.fixture(autouse=True)
@@ -209,7 +231,7 @@ def test_order_identity_duplicate_and_active_helpers():
     assert observer._duplicate_count(rows) == 1
 
 
-def test_timestamp_float_drawdown_and_strategy_helpers():
+def test_timestamp_numeric_drawdown_and_strategy_helpers():
     assert observer._parse_timestamp(None) is None
     assert observer._parse_timestamp("bad") is None
     assert observer._parse_timestamp("2026-08-04T00:00:00") is None
@@ -221,6 +243,10 @@ def test_timestamp_float_drawdown_and_strategy_helpers():
     assert observer._float(float("nan")) == 0.0
     assert observer._float(float("inf")) == 0.0
     assert observer._float("2.5") == 2.5
+    assert observer._decimal(None) is None
+    assert observer._decimal("bad") is None
+    assert observer._decimal("NaN") is None
+    assert observer._decimal("2.5") == observer.Decimal("2.5")
     assert observer._paper_drawdown_pct("MSFT", []) == 0.0
     assert observer._paper_drawdown_pct(
         "AAPL",
@@ -235,10 +261,7 @@ def test_timestamp_float_drawdown_and_strategy_helpers():
     ) == pytest.approx(0.1)
 
     assert observer._strategy_drift({}, []) is True
-    assert observer._strategy_drift(
-        decision(),
-        [{"symbol": "AAPL"}],
-    ) is False
+    assert observer._strategy_drift(decision(), [{"symbol": "AAPL"}]) is False
     assert observer._strategy_drift(
         decision(),
         [{"symbol": "AAPL", "strategy_id": "other"}],
@@ -264,7 +287,7 @@ def test_reconciliation_contract_and_error_merge_helpers():
     )
 
 
-def test_reconciliation_helper_detects_exact_missing_and_duplicates():
+def test_order_reconciliation_detects_exact_missing_duplicate_and_symbol_gaps():
     exact = observer._reconciliation_for_symbol(
         symbol="AAPL",
         reconciliation_ok=True,
@@ -294,6 +317,39 @@ def test_reconciliation_helper_detects_exact_missing_and_duplicates():
     assert duplicate["duplicate_order_count"] == 1
     assert duplicate["reconciliation_ok"] is False
 
+    missing_symbol = observer._order_reconciliation(
+        reconciliation_ok=True,
+        broker_orders=[{"order_id": "one"}],
+        database_orders=[{"order_id": "one"}],
+    )
+    assert missing_symbol["order_missing_symbol_count"] == 2
+    assert missing_symbol["reconciliation_ok"] is False
+
+
+def test_position_reconciliation_detects_invalid_and_mismatched_quantities():
+    exact = observer._position_reconciliation(
+        reconciliation_ok=True,
+        broker_positions=[{"symbol": "AAPL", "qty": "1.5"}],
+        database_positions=[{"symbol": "AAPL", "quantity": "1.5"}],
+    )
+    assert exact["reconciliation_ok"] is True
+
+    mismatch = observer._position_reconciliation(
+        reconciliation_ok=True,
+        broker_positions=[{"symbol": "AAPL", "qty": "2"}],
+        database_positions=[{"symbol": "AAPL", "quantity": "1"}],
+    )
+    assert mismatch["position_mismatched_symbols"] == ["AAPL"]
+    assert mismatch["reconciliation_ok"] is False
+
+    invalid = observer._position_reconciliation(
+        reconciliation_ok=True,
+        broker_positions=[{"symbol": "AAPL", "qty": "bad"}],
+        database_positions=[],
+    )
+    assert invalid["broker_invalid_position_count"] == 1
+    assert invalid["reconciliation_ok"] is False
+
 
 def test_observation_key_and_enrichment_are_deterministic():
     first = observer._observation_key(
@@ -317,6 +373,43 @@ def test_observation_key_and_enrichment_are_deterministic():
     )
     assert rows[0]["promotion_observation_id"] == "observation-1"
     assert "promotion_id" not in rows[1]
+
+
+@pytest.mark.asyncio
+async def test_raw_reconciliation_reads_bypass_context_fallbacks():
+    client = AdapterClient(
+        path_data={
+            "/accounts/1/orders": [{"order_id": "one"}],
+            "/accounts/1/positions": [{"symbol": "AAPL", "quantity": 1}],
+        }
+    )
+    adapter = PromotionDatabaseAdapter(client)
+    orders = await adapter.get_account_orders_for_reconciliation(
+        account_id="1",
+        correlation_id="corr-raw",
+    )
+    positions = await adapter.get_account_positions_for_reconciliation(
+        account_id="1",
+        correlation_id="corr-raw",
+    )
+    assert orders == [{"order_id": "one"}]
+    assert positions == [{"symbol": "AAPL", "quantity": 1}]
+    assert [row[0] for row in client.gets] == [
+        "/accounts/1/orders",
+        "/accounts/1/positions",
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("data", [{"bad": True}, [object()]])
+async def test_raw_reconciliation_reads_reject_malformed_lists(data):
+    client = AdapterClient(path_data={"/accounts/1/orders": data})
+    adapter = PromotionDatabaseAdapter(client)
+    with pytest.raises(PromotionAuthorityError, match="reconciliation"):
+        await adapter.get_account_orders_for_reconciliation(
+            account_id="1",
+            correlation_id="corr-bad-list",
+        )
 
 
 @pytest.mark.asyncio
