@@ -21,13 +21,34 @@ from scripts.full_system_promotion_e2e import (
 )
 
 
+_UNSET = object()
+
+
 class ObservationDatabaseTransport(AsyncDatabaseTransport):
-    async def get_orders(self, account_id: str, correlation_id: str) -> Any:
-        response = await self._get(
-            f"/accounts/{urllib.parse.quote(str(account_id), safe='')}/orders",
-            correlation_id,
-        )
-        return unwrap(response)
+    def __init__(self, gateway) -> None:
+        super().__init__(gateway)
+        self.orders_override: Any = _UNSET
+        self.positions_override: Any = _UNSET
+
+    def set_reconciliation_overrides(
+        self,
+        *,
+        orders: Any = _UNSET,
+        positions: Any = _UNSET,
+    ) -> None:
+        self.orders_override = orders
+        self.positions_override = positions
+
+    def clear_reconciliation_overrides(self) -> None:
+        self.orders_override = _UNSET
+        self.positions_override = _UNSET
+
+    async def _get(self, path, correlation_id, **kwargs):
+        if path.endswith("/orders") and self.orders_override is not _UNSET:
+            return {"status": "success", "data": self.orders_override}
+        if path.endswith("/positions") and self.positions_override is not _UNSET:
+            return {"status": "success", "data": self.positions_override}
+        return await super()._get(path, correlation_id, **kwargs)
 
 
 class RealExecutionTransport:
@@ -137,6 +158,8 @@ class PromotionObservationE2E:
         correlation_id: str,
         execution_client: Any,
         emergency_halt: bool = False,
+        database_orders: Any = _UNSET,
+        database_positions: Any = _UNSET,
     ) -> Dict[str, Any]:
         previous_token = os.environ.get("BACKTEST_PROMOTION_APPROVAL_TOKEN")
         previous_halt = manager_config.MANAGER_EMERGENCY_HALT
@@ -144,6 +167,10 @@ class PromotionObservationE2E:
             self.lifecycle.approval_token
         )
         manager_config.MANAGER_EMERGENCY_HALT = emergency_halt
+        self.database.set_reconciliation_overrides(
+            orders=database_orders,
+            positions=database_positions,
+        )
         try:
             return await filter_candidates_with_backtest_gate(
                 db_client=self.database,
@@ -175,6 +202,7 @@ class PromotionObservationE2E:
                 execution_client=execution_client,
             )
         finally:
+            self.database.clear_reconciliation_overrides()
             manager_config.MANAGER_EMERGENCY_HALT = previous_halt
             if previous_token is None:
                 os.environ.pop("BACKTEST_PROMOTION_APPROVAL_TOKEN", None)
@@ -379,6 +407,14 @@ class PromotionObservationE2E:
                     }
                 ]
             ),
+            database_orders=[
+                {
+                    "symbol": "AAPL",
+                    "status": "placed",
+                    "broker_order_id": "database-only-order",
+                }
+            ],
+            database_positions=[],
         )
         require(mismatch["summary"]["allowed_count"] == 0, str(mismatch))
         require(
@@ -404,6 +440,8 @@ class PromotionObservationE2E:
             correlation_id="promotion-observation-halt-cycle",
             execution_client=FaultExecutionTransport(),
             emergency_halt=True,
+            database_orders=[],
+            database_positions=[],
         )
         require(halted["summary"]["allowed_count"] == 0, str(halted))
         promotion = self.promotion(robust["promotion_id"])
@@ -425,11 +463,14 @@ class PromotionObservationE2E:
                 positions=[
                     {
                         "symbol": "AAPL",
+                        "qty": "10",
                         "unrealized_pl": "-20",
                         "cost_basis": "100",
                     }
                 ]
             ),
+            database_orders=[],
+            database_positions=[{"symbol": "AAPL", "quantity": 10}],
         )
         require(drawdown["summary"]["allowed_count"] == 0, str(drawdown))
         promotion = self.promotion(robust["promotion_id"])
@@ -488,6 +529,7 @@ class PromotionObservationE2E:
         os.environ["BACKTEST_PROMOTION_APPROVAL_TOKEN"] = (
             self.lifecycle.approval_token
         )
+        self.database.set_reconciliation_overrides(orders=[], positions=[])
         try:
             expired = await observe_promotion_gate_result(
                 db_client=self.database,
@@ -497,6 +539,7 @@ class PromotionObservationE2E:
                 execution_client=FaultExecutionTransport(),
             )
         finally:
+            self.database.clear_reconciliation_overrides()
             if previous_token is None:
                 os.environ.pop("BACKTEST_PROMOTION_APPROVAL_TOKEN", None)
             else:
