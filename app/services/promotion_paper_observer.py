@@ -26,9 +26,11 @@ _ACTIVE_ORDER_STATUSES = {
     "new",
     "open",
     "partially_filled",
+    "pending",
     "pending_cancel",
     "pending_new",
     "pending_replace",
+    "placed",
     "submitted",
 }
 _APPROVED_OBSERVATION_STATE = "PAPER_OBSERVING"
