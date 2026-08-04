@@ -3,7 +3,8 @@
 The shared DatabaseAgentClient keeps the normal X-API-KEY header. This adapter
 adds X-PROMOTION-APPROVAL-KEY only to privileged promotion transitions and
 paper-observation writes, so the credential cannot leak into routine account,
-order, or context calls.
+order, or context calls. Reconciliation reads use raw Database_Agent endpoints
+and never broker-cache fallback helpers.
 """
 
 from __future__ import annotations
@@ -28,6 +29,19 @@ def _as_dict(value: Any) -> Dict[str, Any]:
         result = value.model_dump(mode="json")
         return result if isinstance(result, dict) else {}
     return {}
+
+
+def _as_list_of_dicts(value: Any, *, contract_name: str) -> list[Dict[str, Any]]:
+    if not isinstance(value, list):
+        raise PromotionAuthorityError(
+            f"Database_Agent returned an invalid {contract_name} reconciliation list"
+        )
+    rows = [_as_dict(row) for row in value]
+    if any(not row for row in rows):
+        raise PromotionAuthorityError(
+            f"Database_Agent returned a malformed {contract_name} reconciliation row"
+        )
+    return rows
 
 
 def _approval_token() -> str:
@@ -76,6 +90,40 @@ class PromotionDatabaseAdapter:
                 "Database_Agent returned no exact promotion data"
             )
         return promotion
+
+    async def get_account_orders_for_reconciliation(
+        self,
+        *,
+        account_id: Union[int, str],
+        correlation_id: str,
+    ) -> list[Dict[str, Any]]:
+        encoded_account_id = quote(str(account_id), safe="")
+        response_data = await self._db_client._get(
+            f"/accounts/{encoded_account_id}/orders",
+            correlation_id,
+        )
+        standard = self._db_client.validate_standard_response(response_data)
+        return _as_list_of_dicts(
+            standard.data,
+            contract_name="order",
+        )
+
+    async def get_account_positions_for_reconciliation(
+        self,
+        *,
+        account_id: Union[int, str],
+        correlation_id: str,
+    ) -> list[Dict[str, Any]]:
+        encoded_account_id = quote(str(account_id), safe="")
+        response_data = await self._db_client._get(
+            f"/accounts/{encoded_account_id}/positions",
+            correlation_id,
+        )
+        standard = self._db_client.validate_standard_response(response_data)
+        return _as_list_of_dicts(
+            standard.data,
+            contract_name="position",
+        )
 
     async def approve_for_paper(
         self,
