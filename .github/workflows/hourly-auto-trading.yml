@@ -103,6 +103,10 @@ jobs:
       BROKER_MODE: ${{ github.event_name == 'schedule' && 'ALPACA' || inputs.broker_mode }}
       DRY_RUN: ${{ github.event_name == 'schedule' && 'false' || inputs.dry_run }}
       ALLOW_LIVE_TRADING: "false"
+      PAPER_SCHEDULE_AUTHORIZED: ${{ inputs.authorized_soak_schedule == true && 'true' || 'false' }}
+      BACKTEST_PROMOTION_AUTO_APPROVE_PAPER: ${{ inputs.authorized_soak_schedule == true && 'true' || 'false' }}
+      BACKTEST_PROMOTION_OBSERVATION_REQUIRED: ${{ inputs.authorized_soak_schedule == true && 'true' || 'false' }}
+      BACKTEST_PROMOTION_APPROVAL_TOKEN: ${{ inputs.authorized_soak_schedule == true && secrets.BACKTEST_PROMOTION_APPROVAL_TOKEN || '' }}
       BACKTEST_EXECUTION_GATE_REQUIRED: "true"
       BROKER_RECONCILE_REQUIRED: "true"
       BROKER_RECONCILE_CONTEXT_REQUIRED: "true"
@@ -150,6 +154,17 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: python scripts/paper_trading_control.py assert-clear
+
+      - name: Validate authorized promotion observation soak
+        if: inputs.authorized_soak_schedule == true
+        run: |
+          set -euo pipefail
+          test "${BACKTEST_PROMOTION_AUTO_APPROVE_PAPER}" = "true"
+          test "${BACKTEST_PROMOTION_OBSERVATION_REQUIRED}" = "true"
+          if [ -z "${BACKTEST_PROMOTION_APPROVAL_TOKEN}" ]; then
+            echo "BACKTEST_PROMOTION_APPROVAL_TOKEN is required for authorized observation soak."
+            exit 1
+          fi
 
       - name: Validate Paper-only runtime and external dependencies
         id: preflight
