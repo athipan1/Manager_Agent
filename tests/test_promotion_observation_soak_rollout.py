@@ -11,11 +11,12 @@ def _text(path: Path) -> str:
     return path.read_text(encoding="utf-8")
 
 
-def test_hourly_schedule_remains_simulator_dry_run_and_observation_off_by_default():
+def test_hourly_schedule_keeps_gated_alpaca_contract_and_observation_off_by_default():
     workflow = _text(HOURLY_WORKFLOW)
 
-    assert "github.event_name == 'schedule' && 'SIMULATOR'" in workflow
-    assert "github.event_name == 'schedule' && 'true' || inputs.dry_run" in workflow
+    assert "github.event_name == 'schedule' && 'ALPACA'" in workflow
+    assert "github.event_name == 'schedule' && 'false' || inputs.dry_run" in workflow
+    assert "vars.HOURLY_PAPER_SCHEDULE_ENABLED == 'true'" in workflow
     assert "authorized_soak_schedule:" in workflow
     assert "default: false" in workflow
     assert (
@@ -66,7 +67,7 @@ def test_paper_compose_passes_only_explicit_promotion_controls():
         in compose
     )
     assert 'ALLOW_LIVE_TRADING: "false"' in compose
-    assert 'TRADING_MODE: PAPER' in compose
+    assert "TRADING_MODE: PAPER" in compose
 
 
 def test_soak_caller_is_the_only_workflow_authorizing_the_soak_flag():
