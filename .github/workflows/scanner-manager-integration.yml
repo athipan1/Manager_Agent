@@ -1,0 +1,161 @@
+name: Scanner Manager Real-Market Integration
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "app/scanner_client.py"
+      - "docker-compose.hourly-paper.yml"
+      - "docker-compose.hourly-simulator.yml"
+      - "tests/test_scanner_real_market_contract.py"
+      - ".github/workflows/scanner-manager-integration.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  manager-to-scanner:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      APCA_API_KEY_ID: ${{ secrets.ALPACA_API_KEY_ID }}
+      APCA_API_SECRET_KEY: ${{ secrets.ALPACA_SECRET_KEY }}
+
+    steps:
+      - name: Checkout Manager_Agent
+        uses: actions/checkout@v4
+        with:
+          path: Manager_Agent
+
+      - name: Checkout Scanner_Agent main
+        uses: actions/checkout@v4
+        with:
+          repository: athipan1/Scanner_Agent
+          ref: main
+          path: Scanner_Agent
+          fetch-depth: 1
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Verify Alpaca Paper credentials
+        run: |
+          set -euo pipefail
+          if [ -z "${APCA_API_KEY_ID}" ] || [ -z "${APCA_API_SECRET_KEY}" ]; then
+            echo "ALPACA_API_KEY_ID and ALPACA_SECRET_KEY repository secrets are required."
+            exit 1
+          fi
+
+      - name: Install Manager client dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r Manager_Agent/requirements.prod.base.txt
+
+      - name: Build Scanner_Agent image
+        working-directory: Scanner_Agent
+        run: docker build -t scanner-manager-contract:latest .
+
+      - name: Start production-mode Scanner_Agent
+        run: |
+          docker run -d \
+            --name scanner-manager-contract \
+            -p 8003:8003 \
+            -e SCANNER_DEV_MODE=false \
+            -e TRADING_MODE=PAPER \
+            -e APCA_API_KEY_ID \
+            -e APCA_API_SECRET_KEY \
+            scanner-manager-contract:latest
+
+      - name: Wait for Scanner_Agent
+        run: |
+          set -euo pipefail
+          for attempt in $(seq 1 40); do
+            if curl -fsS http://localhost:8003/health >/dev/null; then
+              echo "Scanner_Agent is healthy."
+              exit 0
+            fi
+            sleep 3
+          done
+          docker logs scanner-manager-contract || true
+          exit 1
+
+      - name: Run Manager client against real Scanner
+        working-directory: Manager_Agent
+        env:
+          SCANNER_AGENT_URL: http://localhost:8003
+          SCANNER_REQUIRE_REAL_MARKET_DATA: "true"
+          SCANNER_SCREENER: america
+          SCANNER_EXCHANGE: NASDAQ
+          AGENT_CLIENT_TIMEOUT: "60"
+          AGENT_CLIENT_MAX_RETRIES: "1"
+          TRADING_MODE: PAPER
+          ALLOW_LIVE_TRADING: "false"
+        run: |
+          python - <<'PY'
+          import asyncio
+
+          from app.scanner_client import ScannerAgentClient
+
+          SYMBOLS = [
+              "AAPL", "MSFT", "NVDA", "GOOGL", "AMZN",
+              "META", "TSLA", "AMD", "AVGO", "NFLX",
+          ]
+
+          def to_dict(value):
+              if isinstance(value, dict):
+                  return value
+              if hasattr(value, "model_dump"):
+                  return value.model_dump(mode="json")
+              return {}
+
+          async def main():
+              async with ScannerAgentClient() as client:
+                  technical = await client.scan(
+                      SYMBOLS,
+                      "manager-scanner-technical-contract",
+                  )
+                  fundamental = await client.scan_fundamental(
+                      SYMBOLS,
+                      "manager-scanner-fundamental-contract",
+                  )
+
+              for name, response in (
+                  ("technical", technical),
+                  ("fundamental", fundamental),
+              ):
+                  data = to_dict(response.data)
+                  candidates = data.get("candidates") or []
+                  if not candidates:
+                      raise RuntimeError(f"{name} scan returned no candidates")
+                  print(
+                      f"{name}: status={response.status} "
+                      f"candidates={len(candidates)} "
+                      f"correlation_id={response.correlation_id}"
+                  )
+
+          asyncio.run(main())
+          PY
+
+      - name: Fail on hidden Scanner provider or dataframe errors
+        run: |
+          docker logs scanner-manager-contract > scanner-manager-contract.log 2>&1
+          if grep -Eiq \
+            "401 Authorization Required|unauthorized|Exchange or symbol not found|truth value of a Series is ambiguous|FutureWarning: Calling float on a single element Series" \
+            scanner-manager-contract.log; then
+            cat scanner-manager-contract.log
+            exit 1
+          fi
+
+      - name: Show Scanner logs
+        if: always()
+        run: docker logs scanner-manager-contract || true
+
+      - name: Stop Scanner_Agent
+        if: always()
+        run: docker rm -f scanner-manager-contract || true

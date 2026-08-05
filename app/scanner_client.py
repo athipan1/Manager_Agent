@@ -5,12 +5,16 @@ from typing import Any, Dict, List, Optional, Tuple
 from .config import SCANNER_AGENT_URL
 from .contracts import ScannerEndpoints, StandardAgentResponse
 from .logger import report_logger
-from .resilient_client import ResilientAgentClient
+from .resilient_client import AgentUnavailable, ResilientAgentClient
 
 
 SCANNER_PREFETCH_CACHE: Dict[str, Dict[str, Any]] = {}
 SCANNER_DISCOVERY_RESPONSE_CACHE: Dict[Tuple[int, int, str, int], Dict[str, Any]] = {}
 _DEFAULT_DISCOVERY_CACHE_TTL_SECONDS = 1800.0
+_DEFAULT_SCAN_SCREENER = "america"
+_DEFAULT_SCAN_EXCHANGE = "NASDAQ"
+_FALLBACK_SOURCES = frozenset({"dev_fallback", "yfinance_market_data"})
+_TRUE_VALUES = frozenset({"1", "true", "yes", "on"})
 
 
 def _to_dict(value: Any) -> Dict[str, Any]:
@@ -19,6 +23,87 @@ def _to_dict(value: Any) -> Dict[str, Any]:
     if hasattr(value, "model_dump"):
         return value.model_dump(mode="json")
     return {}
+
+
+def _scan_request_payload(symbols: Optional[List[str]]) -> Dict[str, Any]:
+    """Build an explicit US-market Scanner payload.
+
+    Scanner_Agent's compatibility defaults target Thailand/SET. Manager_Agent is
+    stock-US-first, so omitting these fields silently sends US tickers to the wrong
+    TradingView market. Environment overrides remain available for deliberate
+    non-US deployments.
+    """
+
+    screener = (
+        os.getenv("SCANNER_SCREENER", _DEFAULT_SCAN_SCREENER).strip().lower()
+        or _DEFAULT_SCAN_SCREENER
+    )
+    exchange = (
+        os.getenv("SCANNER_EXCHANGE", _DEFAULT_SCAN_EXCHANGE).strip().upper()
+        or _DEFAULT_SCAN_EXCHANGE
+    )
+    return {
+        "symbols": symbols,
+        "screener": screener,
+        "exchange": exchange,
+    }
+
+
+def _real_market_data_required() -> bool:
+    return (
+        os.getenv("SCANNER_REQUIRE_REAL_MARKET_DATA", "false").strip().lower()
+        in _TRUE_VALUES
+    )
+
+
+def _candidate_source(candidate: Any) -> str:
+    payload = _to_dict(candidate)
+    metadata = _to_dict(payload.get("metadata"))
+    return str(metadata.get("source") or payload.get("source") or "").strip()
+
+
+def _validate_scanner_market_data_contract(
+    response: StandardAgentResponse,
+    correlation_id: str,
+) -> None:
+    """Fail closed when an hourly runtime requires real Scanner market data."""
+
+    if not _real_market_data_required():
+        return
+
+    if response.status != "success" or response.error:
+        raise AgentUnavailable(
+            "Scanner real-market contract failed: "
+            f"status={response.status}, error={response.error or '-'}"
+        )
+
+    if response.correlation_id != correlation_id:
+        raise AgentUnavailable(
+            "Scanner real-market contract failed: correlation ID mismatch "
+            f"expected={correlation_id}, actual={response.correlation_id or '-'}"
+        )
+
+    data = _to_dict(response.data)
+    candidates = data.get("candidates") or []
+    fallback_candidates = []
+    for candidate in candidates:
+        payload = _to_dict(candidate)
+        source = _candidate_source(payload)
+        if source in _FALLBACK_SOURCES:
+            fallback_candidates.append(
+                {
+                    "symbol": str(
+                        payload.get("symbol") or payload.get("ticker") or "unknown"
+                    ).upper(),
+                    "source": source,
+                }
+            )
+
+    if fallback_candidates:
+        raise AgentUnavailable(
+            "Scanner real-market contract rejected fallback candidates: "
+            f"{fallback_candidates}"
+        )
 
 
 def get_scanner_prefetch(symbol: str) -> Optional[Dict[str, Any]]:
@@ -154,13 +239,14 @@ class ScannerAgentClient(ResilientAgentClient):
         correlation_id: str,
     ) -> StandardAgentResponse:
         """Calls the technical scan endpoint of the Scanner Agent."""
-        payload = {"symbols": symbols}
+        payload = _scan_request_payload(symbols)
         response_data = await self._post(
             ScannerEndpoints.SCAN,
             correlation_id,
             json_data=payload,
         )
         response = self.validate_standard_response(response_data)
+        _validate_scanner_market_data_contract(response, correlation_id)
         _cache_scanner_candidates(response)
         return response
 
@@ -170,13 +256,14 @@ class ScannerAgentClient(ResilientAgentClient):
         correlation_id: str,
     ) -> StandardAgentResponse:
         """Calls the fundamental scan endpoint of the Scanner Agent."""
-        payload = {"symbols": symbols}
+        payload = _scan_request_payload(symbols)
         response_data = await self._post(
             ScannerEndpoints.SCAN_FUNDAMENTAL,
             correlation_id,
             json_data=payload,
         )
         response = self.validate_standard_response(response_data)
+        _validate_scanner_market_data_contract(response, correlation_id)
         _cache_scanner_candidates(response)
         return response
 
@@ -207,6 +294,7 @@ class ScannerAgentClient(ResilientAgentClient):
             correlation_id,
         )
         if cached_response is not None:
+            _validate_scanner_market_data_contract(cached_response, correlation_id)
             _cache_scanner_candidates(cached_response)
             return cached_response
 
@@ -224,6 +312,7 @@ class ScannerAgentClient(ResilientAgentClient):
             timeout=900,
         )
         response = self.validate_standard_response(response_data)
+        _validate_scanner_market_data_contract(response, correlation_id)
         _cache_scanner_candidates(response)
         _store_discovery_response(cache_key, response)
         return response

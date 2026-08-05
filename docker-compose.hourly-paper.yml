@@ -10,6 +10,7 @@ services:
       DATABASE_AGENT_API_KEY: ${DATABASE_AGENT_API_KEY:?DATABASE_AGENT_API_KEY is required}
       EXECUTION_API_KEY: ${EXECUTION_API_KEY:?EXECUTION_API_KEY is required}
       PORTFOLIO_AGENT_API_KEY: ${PORTFOLIO_AGENT_API_KEY:?PORTFOLIO_AGENT_API_KEY is required}
+      SCANNER_REQUIRE_REAL_MARKET_DATA: "true"
       BACKTEST_AGENT_ENABLED: "true"
       BACKTEST_EXECUTION_GATE_REQUIRED: "true"
       BACKTEST_PROMOTION_AUTO_APPROVE_PAPER: ${BACKTEST_PROMOTION_AUTO_APPROVE_PAPER:-false}
@@ -59,6 +60,13 @@ services:
         condition: service_healthy
       execution-agent:
         condition: service_healthy
+
+  scanner-agent:
+    environment:
+      SCANNER_DEV_MODE: "false"
+      TRADING_MODE: PAPER
+      APCA_API_KEY_ID: ${ALPACA_API_KEY_ID:?ALPACA_API_KEY_ID is required}
+      APCA_API_SECRET_KEY: ${ALPACA_SECRET_KEY:?ALPACA_SECRET_KEY is required}
 
   execution-agent:
     environment:
