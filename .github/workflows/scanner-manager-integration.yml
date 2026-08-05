@@ -90,6 +90,8 @@ jobs:
         env:
           SCANNER_AGENT_URL: http://localhost:8003
           SCANNER_REQUIRE_REAL_MARKET_DATA: "true"
+          SCANNER_SCREENER: america
+          SCANNER_EXCHANGE: NASDAQ
           AGENT_CLIENT_TIMEOUT: "60"
           AGENT_CLIENT_MAX_RETRIES: "1"
           TRADING_MODE: PAPER
@@ -100,7 +102,17 @@ jobs:
 
           from app.scanner_client import ScannerAgentClient
 
-          SYMBOLS = ["AAPL", "MSFT", "NVDA", "GOOGL", "AMZN"]
+          SYMBOLS = [
+              "AAPL", "MSFT", "NVDA", "GOOGL", "AMZN",
+              "META", "TSLA", "AMD", "AVGO", "NFLX",
+          ]
+
+          def to_dict(value):
+              if isinstance(value, dict):
+                  return value
+              if hasattr(value, "model_dump"):
+                  return value.model_dump(mode="json")
+              return {}
 
           async def main():
               async with ScannerAgentClient() as client:
@@ -117,7 +129,7 @@ jobs:
                   ("technical", technical),
                   ("fundamental", fundamental),
               ):
-                  data = response.data if isinstance(response.data, dict) else {}
+                  data = to_dict(response.data)
                   candidates = data.get("candidates") or []
                   if not candidates:
                       raise RuntimeError(f"{name} scan returned no candidates")
@@ -134,7 +146,7 @@ jobs:
         run: |
           docker logs scanner-manager-contract > scanner-manager-contract.log 2>&1
           if grep -Eiq \
-            "401 Authorization Required|unauthorized|truth value of a Series is ambiguous|FutureWarning: Calling float on a single element Series" \
+            "401 Authorization Required|unauthorized|Exchange or symbol not found|truth value of a Series is ambiguous|FutureWarning: Calling float on a single element Series" \
             scanner-manager-contract.log; then
             cat scanner-manager-contract.log
             exit 1

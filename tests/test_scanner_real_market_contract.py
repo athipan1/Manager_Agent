@@ -5,7 +5,10 @@ import pytest
 
 from app.contracts import StandardAgentResponse
 from app.resilient_client import AgentUnavailable
-from app.scanner_client import _validate_scanner_market_data_contract
+from app.scanner_client import (
+    _scan_request_payload,
+    _validate_scanner_market_data_contract,
+)
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -37,6 +40,28 @@ def _response(
         },
         error=error,
     )
+
+
+def test_scan_payload_explicitly_targets_us_market(monkeypatch):
+    monkeypatch.delenv("SCANNER_SCREENER", raising=False)
+    monkeypatch.delenv("SCANNER_EXCHANGE", raising=False)
+
+    assert _scan_request_payload(["AAPL"]) == {
+        "symbols": ["AAPL"],
+        "screener": "america",
+        "exchange": "NASDAQ",
+    }
+
+
+def test_scan_payload_allows_deliberate_market_override(monkeypatch):
+    monkeypatch.setenv("SCANNER_SCREENER", "THAILAND")
+    monkeypatch.setenv("SCANNER_EXCHANGE", "set")
+
+    assert _scan_request_payload(["PTT"]) == {
+        "symbols": ["PTT"],
+        "screener": "thailand",
+        "exchange": "SET",
+    }
 
 
 def test_real_market_guard_is_opt_in(monkeypatch):

@@ -11,6 +11,8 @@ from .resilient_client import AgentUnavailable, ResilientAgentClient
 SCANNER_PREFETCH_CACHE: Dict[str, Dict[str, Any]] = {}
 SCANNER_DISCOVERY_RESPONSE_CACHE: Dict[Tuple[int, int, str, int], Dict[str, Any]] = {}
 _DEFAULT_DISCOVERY_CACHE_TTL_SECONDS = 1800.0
+_DEFAULT_SCAN_SCREENER = "america"
+_DEFAULT_SCAN_EXCHANGE = "NASDAQ"
 _FALLBACK_SOURCES = frozenset({"dev_fallback", "yfinance_market_data"})
 _TRUE_VALUES = frozenset({"1", "true", "yes", "on"})
 
@@ -21,6 +23,30 @@ def _to_dict(value: Any) -> Dict[str, Any]:
     if hasattr(value, "model_dump"):
         return value.model_dump(mode="json")
     return {}
+
+
+def _scan_request_payload(symbols: Optional[List[str]]) -> Dict[str, Any]:
+    """Build an explicit US-market Scanner payload.
+
+    Scanner_Agent's compatibility defaults target Thailand/SET. Manager_Agent is
+    stock-US-first, so omitting these fields silently sends US tickers to the wrong
+    TradingView market. Environment overrides remain available for deliberate
+    non-US deployments.
+    """
+
+    screener = (
+        os.getenv("SCANNER_SCREENER", _DEFAULT_SCAN_SCREENER).strip().lower()
+        or _DEFAULT_SCAN_SCREENER
+    )
+    exchange = (
+        os.getenv("SCANNER_EXCHANGE", _DEFAULT_SCAN_EXCHANGE).strip().upper()
+        or _DEFAULT_SCAN_EXCHANGE
+    )
+    return {
+        "symbols": symbols,
+        "screener": screener,
+        "exchange": exchange,
+    }
 
 
 def _real_market_data_required() -> bool:
@@ -213,7 +239,7 @@ class ScannerAgentClient(ResilientAgentClient):
         correlation_id: str,
     ) -> StandardAgentResponse:
         """Calls the technical scan endpoint of the Scanner Agent."""
-        payload = {"symbols": symbols}
+        payload = _scan_request_payload(symbols)
         response_data = await self._post(
             ScannerEndpoints.SCAN,
             correlation_id,
@@ -230,7 +256,7 @@ class ScannerAgentClient(ResilientAgentClient):
         correlation_id: str,
     ) -> StandardAgentResponse:
         """Calls the fundamental scan endpoint of the Scanner Agent."""
-        payload = {"symbols": symbols}
+        payload = _scan_request_payload(symbols)
         response_data = await self._post(
             ScannerEndpoints.SCAN_FUNDAMENTAL,
             correlation_id,
