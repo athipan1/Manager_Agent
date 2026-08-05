@@ -1,0 +1,24 @@
+name: Manual Hourly Simulator Once
+
+on:
+  push:
+    branches:
+      - ops/manual-hourly-simulator-20260805-2322
+
+permissions:
+  contents: read
+  issues: read
+
+jobs:
+  run-hourly-simulator:
+    uses: ./.github/workflows/hourly-auto-trading.yml
+    with:
+      dry_run: true
+      broker_mode: SIMULATOR
+      max_universe: "100"
+      top_n: "10"
+      min_final_score: "0.55"
+      operator_confirmation: ""
+      emergency_halt_drill: false
+      authorized_soak_schedule: false
+    secrets: inherit
