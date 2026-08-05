@@ -11,6 +11,14 @@ services:
       EXECUTION_API_KEY: ${EXECUTION_API_KEY:?EXECUTION_API_KEY is required}
       PORTFOLIO_AGENT_API_KEY: ${PORTFOLIO_AGENT_API_KEY:?PORTFOLIO_AGENT_API_KEY is required}
       PROFIT_AGENT_API_KEY: ${PROFIT_AGENT_API_KEY:?PROFIT_AGENT_API_KEY is required}
+      SCANNER_REQUIRE_REAL_MARKET_DATA: "true"
+
+  scanner-agent:
+    environment:
+      SCANNER_DEV_MODE: "false"
+      TRADING_MODE: PAPER
+      APCA_API_KEY_ID: ${ALPACA_API_KEY_ID:-}
+      APCA_API_SECRET_KEY: ${ALPACA_SECRET_KEY:-}
 
   database-agent:
     environment:
