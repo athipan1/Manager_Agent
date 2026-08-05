@@ -1,113 +1,80 @@
+#!/usr/bin/env python3
+"""Backtest publish verifier with nested walk-forward compatibility.
+
+The original verifier is retained in ``verify_backtest_publish_legacy``. This
+module adds the current nested walk-forward v2 envelope while preserving every
+legacy single, batch, multi-strategy, and rolling walk-forward contract.
+"""
+
 from __future__ import annotations
 
-import argparse
-import json
-import os
 import sys
 from pathlib import Path
 from typing import Any, Dict
 
 
-# GitHub Actions invokes this file directly with
-# `python scripts/verify_backtest_publish.py`. In that mode Python places the
-# scripts directory, not the repository root, at sys.path[0]. Add the root
-# explicitly so sibling modules can use the same `scripts.*` package imports
-# used by pytest and `python -m` execution.
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 if str(REPOSITORY_ROOT) not in sys.path:
     sys.path.insert(0, str(REPOSITORY_ROOT))
 
-
-WALK_FORWARD_MODE = "walk_forward_multi_strategy_selection"
-WALK_FORWARD_PROFILE = "rolling_walk_forward_v1"
+from scripts import verify_backtest_publish_legacy as _legacy
 
 
-def _bool_env(name: str, default: bool = False) -> bool:
-    value = os.getenv(name)
-    if value is None:
-        return default
-    return value.strip().lower() in {"1", "true", "yes", "y", "on"}
+NESTED_WALK_FORWARD_MODE = "nested_walk_forward_multi_strategy_selection"
+NESTED_WALK_FORWARD_PROFILE = "nested_walk_forward_v2"
+NESTED_SELECTION_METHOD = "nested_train_select_test_evaluate"
+
+WALK_FORWARD_MODE = _legacy.WALK_FORWARD_MODE
+WALK_FORWARD_PROFILE = _legacy.WALK_FORWARD_PROFILE
+unwrap_backtest_report = _legacy.unwrap_backtest_report
 
 
-def unwrap_backtest_report(report: Dict[str, Any]) -> Dict[str, Any]:
-    """Return BacktestRunAndPublishResult from a standard or legacy response."""
-    data = report.get("data")
-    return data if isinstance(data, dict) else report
+def _dict(value: Any) -> Dict[str, Any]:
+    return value if isinstance(value, dict) else {}
 
 
-def _eligible_walk_forward_evidence(item: Dict[str, Any]) -> bool:
-    selection = item.get("selection") if isinstance(item.get("selection"), dict) else {}
-    selected = (
-        selection.get("best_eligible")
-        if isinstance(selection.get("best_eligible"), dict)
-        else {}
-    )
-    evidence = (
-        selected.get("walk_forward")
-        if isinstance(selected.get("walk_forward"), dict)
-        else {}
-    )
-    gates = evidence.get("gates") if isinstance(evidence.get("gates"), dict) else {}
+def _nested_evidence_valid(item: Dict[str, Any]) -> bool:
+    strategy_id = item.get("selected_strategy_id")
+    selection = _dict(item.get("selection"))
+    best = _dict(selection.get("best_eligible"))
+    nested = _dict(selection.get("nested_walk_forward"))
+    runtime = _dict(item.get("walk_forward"))
+    payload_metadata = _dict(_dict(item.get("database_payload")).get("metadata"))
+    promotion_gates = _dict(runtime.get("promotion_gates"))
+    persisted_gates = _dict(payload_metadata.get("promotion_gates"))
+
     return bool(
-        selected
-        and selected.get("strategy_id") == item.get("selected_strategy_id")
-        and selected.get("eligible") is True
-        and evidence.get("passed") is True
-        and evidence.get("status") == "completed"
-        and gates
-        and all(value is True for value in gates.values())
+        strategy_id
+        and best.get("strategy_id") == strategy_id
+        and best.get("eligible") is True
+        and nested.get("status") == "completed"
+        and nested.get("passed") is True
+        and nested.get("selection_method") == NESTED_SELECTION_METHOD
+        and nested.get("latest_selected_strategy_id") == strategy_id
+        and nested.get("latest_selection_eligible") is True
+        and nested.get("overlapping_test_windows") is False
+        and runtime.get("validation_profile") == NESTED_WALK_FORWARD_PROFILE
+        and runtime.get("selection_method") == NESTED_SELECTION_METHOD
+        and runtime.get("walk_forward_required") is True
+        and runtime.get("walk_forward_passed") is True
+        and runtime.get("walk_forward_status") == "completed"
+        and promotion_gates
+        and all(value is True for value in promotion_gates.values())
+        and payload_metadata.get("validation_profile")
+        == NESTED_WALK_FORWARD_PROFILE
+        and payload_metadata.get("selection_method") == NESTED_SELECTION_METHOD
+        and payload_metadata.get("walk_forward_required") is True
+        and payload_metadata.get("walk_forward_passed") is True
+        and payload_metadata.get("walk_forward_status") == "completed"
+        and persisted_gates
+        and all(value is True for value in persisted_gates.values())
     )
 
 
-def _published_walk_forward_metadata(item: Dict[str, Any]) -> bool:
-    payload = (
-        item.get("database_payload")
-        if isinstance(item.get("database_payload"), dict)
-        else {}
-    )
-    metadata = (
-        payload.get("metadata")
-        if isinstance(payload.get("metadata"), dict)
-        else {}
-    )
-    validation = (
-        metadata.get("walk_forward_validation")
-        if isinstance(metadata.get("walk_forward_validation"), dict)
-        else {}
-    )
-    criteria = (
-        metadata.get("walk_forward_criteria")
-        if isinstance(metadata.get("walk_forward_criteria"), dict)
-        else {}
-    )
-    gates = (
-        validation.get("gates")
-        if isinstance(validation.get("gates"), dict)
-        else {}
-    )
-    try:
-        enough_windows = int(validation.get("evaluated_windows")) >= int(
-            criteria.get("min_windows")
-        )
-    except (TypeError, ValueError):
-        enough_windows = False
-    return bool(
-        metadata.get("validation_profile") == WALK_FORWARD_PROFILE
-        and metadata.get("walk_forward_required") is True
-        and metadata.get("walk_forward_passed") is True
-        and metadata.get("walk_forward_status") == "completed"
-        and validation.get("passed") is True
-        and validation.get("status") == "completed"
-        and gates
-        and all(value is True for value in gates.values())
-        and enough_windows
-    )
-
-
-def _verify_multi_strategy_publish(data: Dict[str, Any]) -> Dict[str, Any]:
+def _verify_nested_walk_forward_publish(data: Dict[str, Any]) -> Dict[str, Any]:
     items = data.get("items")
     if not isinstance(items, list) or not items:
-        raise ValueError("Multi-strategy Backtest batch contained no symbols")
+        raise ValueError("Nested walk-forward Backtest batch contained no symbols")
 
     operational_failures = [item for item in items if item.get("status") == "failed"]
     eligible = [
@@ -128,24 +95,17 @@ def _verify_multi_strategy_publish(data: Dict[str, Any]) -> Dict[str, Any]:
         if not item.get("selected_strategy_id")
         or item.get("published") is not True
         or item.get("publish_status") != "success"
-        or (item.get("database_response") or {}).get("status") != "success"
+        or _dict(item.get("database_response")).get("status") != "success"
     ]
-    walk_forward_failures = (
-        [
-            item
-            for item in eligible
-            if not _eligible_walk_forward_evidence(item)
-            or not _published_walk_forward_metadata(item)
-        ]
-        if data.get("mode") == WALK_FORWARD_MODE
-        else []
-    )
+    evidence_failures = [item for item in eligible if not _nested_evidence_valid(item)]
     invalid_no_trade = [
         item
         for item in ineligible
         if item.get("selected_strategy_id") is not None
         or item.get("published") is not False
         or item.get("publish_status") != "skipped"
+        or item.get("database_payload") is not None
+        or item.get("database_response") is not None
     ]
     expected_strategy_map = {
         str(item.get("symbol") or "").upper(): item.get("selected_strategy_id")
@@ -153,11 +113,14 @@ def _verify_multi_strategy_publish(data: Dict[str, Any]) -> Dict[str, Any]:
     }
     actual_strategy_map = {
         str(symbol).upper(): strategy_id
-        for symbol, strategy_id in (data.get("strategy_ids_by_symbol") or {}).items()
+        for symbol, strategy_id in _dict(data.get("strategy_ids_by_symbol")).items()
     }
-    mode_invalid = data.get("mode") == WALK_FORWARD_MODE and (
-        data.get("walk_forward_required") is not True
-        or data.get("validation_profile") != WALK_FORWARD_PROFILE
+    mode_invalid = not (
+        data.get("mode") == NESTED_WALK_FORWARD_MODE
+        and data.get("validation_profile") == NESTED_WALK_FORWARD_PROFILE
+        and data.get("selection_method") == NESTED_SELECTION_METHOD
+        and data.get("walk_forward_required") is True
+        and data.get("no_trade_is_success") is True
     )
 
     if (
@@ -168,17 +131,17 @@ def _verify_multi_strategy_publish(data: Dict[str, Any]) -> Dict[str, Any]:
         or data.get("published_count") != len(eligible)
         or operational_failures
         or publish_failures
-        or walk_forward_failures
+        or evidence_failures
         or invalid_no_trade
         or unknown
         or mode_invalid
         or actual_strategy_map != expected_strategy_map
     ):
         raise ValueError(
-            "Multi-strategy Backtest selection or publishing failed: "
+            "Nested walk-forward Backtest selection or publishing failed: "
             f"operational_failures={operational_failures} "
             f"publish_failures={publish_failures} "
-            f"walk_forward_failures={walk_forward_failures} "
+            f"evidence_failures={evidence_failures} "
             f"invalid_no_trade={invalid_no_trade} unknown={unknown} "
             f"mode_invalid={mode_invalid} "
             f"expected_strategy_map={expected_strategy_map} "
@@ -189,118 +152,17 @@ def _verify_multi_strategy_publish(data: Dict[str, Any]) -> Dict[str, Any]:
 
 def verify_backtest_publish(report: Dict[str, Any]) -> Dict[str, Any]:
     data = unwrap_backtest_report(report)
-    if data.get("mode") in {"multi_strategy_selection", WALK_FORWARD_MODE}:
-        return _verify_multi_strategy_publish(data)
-
-    items = data.get("items")
-    if isinstance(items, list):
-        if not items:
-            raise ValueError("Backtest batch contained no symbols")
-        failures = [
-            item
-            for item in items
-            if item.get("status") != "success"
-            or item.get("published") is not True
-            or item.get("publish_status") != "success"
-            or (item.get("database_response") or {}).get("status") != "success"
-        ]
-        if (
-            data.get("all_succeeded") is not True
-            or data.get("published") is not True
-            or data.get("publish_status") != "success"
-            or data.get("published_count") != len(items)
-            or failures
-        ):
-            raise ValueError(
-                "One or more batch Backtests were not stored in "
-                f"Database_Agent: failures={failures}"
-            )
-        return data
-
-    published = data.get("published")
-    publish_status = data.get("publish_status")
-    if published is not True or publish_status != "success":
-        raise ValueError(
-            "Backtest result was not stored in Database_Agent: "
-            f"published={published} publish_status={publish_status}"
-        )
-
-    database_response = data.get("database_response") or {}
-    if (
-        not isinstance(database_response, dict)
-        or database_response.get("status") != "success"
-    ):
-        raise ValueError(
-            f"Database_Agent rejected Backtest result: {database_response}"
-        )
-    return data
-
-
-def _run_strategy_selection_if_enabled(report_path: Path) -> None:
-    if not _bool_env("BACKTEST_MULTI_STRATEGY_ENABLED", True):
-        return
-
-    if _bool_env("BACKTEST_WALK_FORWARD_ENABLED", True):
-        from scripts.local_backtest_api import managed_backtest_agent
-        from scripts.run_walk_forward_multi_strategy import (
-            run_hourly_walk_forward_multi_strategy,
-        )
-
-        with managed_backtest_agent():
-            run_hourly_walk_forward_multi_strategy(report_path)
-        return
-
-    from scripts.run_multi_strategy_backtests import run_hourly_multi_strategy
-
-    run_hourly_multi_strategy(report_path)
+    if data.get("mode") == NESTED_WALK_FORWARD_MODE:
+        return _verify_nested_walk_forward_publish(data)
+    return _legacy.verify_backtest_publish(report)
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(
-        description="Verify Backtest_Agent database publishing"
-    )
-    parser.add_argument("report", type=Path)
-    args = parser.parse_args()
-    if not args.report.exists():
-        raise SystemExit(f"Backtest report was not created: {args.report}")
-
-    _run_strategy_selection_if_enabled(args.report)
-    report = json.loads(args.report.read_text(encoding="utf-8"))
-    try:
-        data = verify_backtest_publish(report)
-    except ValueError as exc:
-        raise SystemExit(str(exc)) from exc
-
-    if data.get("mode") == WALK_FORWARD_MODE:
-        print(
-            "Walk-forward multi-strategy Backtests completed: "
-            f"eligible_symbols={data.get('eligible_symbols')} "
-            f"ineligible_symbols={data.get('ineligible_symbols')} "
-            f"strategy_ids_by_symbol={data.get('strategy_ids_by_symbol')} "
-            f"published_count={data.get('published_count')}"
-        )
-    elif data.get("mode") == "multi_strategy_selection":
-        print(
-            "Multi-strategy Backtests completed: "
-            f"eligible_symbols={data.get('eligible_symbols')} "
-            f"ineligible_symbols={data.get('ineligible_symbols')} "
-            f"strategy_ids_by_symbol={data.get('strategy_ids_by_symbol')} "
-            f"published_count={data.get('published_count')}"
-        )
-    elif isinstance(data.get("items"), list):
-        print(
-            "Batch Backtests stored successfully: "
-            f"symbols={data.get('succeeded_symbols')} "
-            f"published_count={data.get('published_count')}"
-        )
-    else:
-        result = data.get("result") or {}
-        print(
-            "Backtest stored successfully: "
-            f"strategy={result.get('strategy')} "
-            f"symbols={result.get('symbols')} "
-            f"trade_count={(result.get('metrics') or {}).get('trade_count')}"
-        )
+    # Reuse argument parsing, strategy-selection execution, and operator output
+    # from the established verifier while substituting this compatibility-aware
+    # verification function.
+    _legacy.verify_backtest_publish = verify_backtest_publish
+    _legacy.main()
 
 
 if __name__ == "__main__":
