@@ -1,16 +1,16 @@
 {
   "schemaVersion": "dashboard-snapshot.v2",
-  "generatedAt": "2026-08-05T12:21:36.958509Z",
+  "generatedAt": "2026-08-05T14:33:08.820782Z",
   "workflow": {
-    "runId": 31004764893,
-    "runNumber": 83,
-    "runUrl": "https://github.com/athipan1/Manager_Agent/actions/runs/31004764893",
+    "runId": 31015744885,
+    "runNumber": 84,
+    "runUrl": "https://github.com/athipan1/Manager_Agent/actions/runs/31015744885",
     "eventName": "schedule",
     "status": "completed",
-    "conclusion": "success",
-    "startedAt": "2026-08-05T12:14:35Z",
-    "completedAt": "2026-08-05T12:22:05Z",
-    "durationSeconds": 450.0
+    "conclusion": "failure",
+    "startedAt": "2026-08-05T14:32:47Z",
+    "completedAt": "2026-08-05T14:33:24Z",
+    "durationSeconds": 37.0
   },
   "runtime": {
     "mode": "PAPER",
@@ -20,22 +20,11 @@
     "flow": "hourly_portfolio_cycle"
   },
   "cycle": {
-    "id": "hourly-paper-4fd6d3db930a-20260805T12",
-    "status": "completed",
-    "marketMode": "PORTFOLIO_REVIEW_ONLY",
-    "candidateCount": 10,
-    "selectedSymbols": [
-      "BANX",
-      "YB",
-      "BDTX",
-      "MAKO",
-      "RDCM",
-      "NAGE",
-      "IGIC",
-      "OLLI",
-      "IBAC",
-      "HERE"
-    ],
+    "id": null,
+    "status": "failure",
+    "marketMode": null,
+    "candidateCount": 0,
+    "selectedSymbols": [],
     "executionAttempted": false,
     "executionStatus": "not_attempted",
     "executionReason": "no_preselected_backtest_symbols",
@@ -44,42 +33,42 @@
   "phases": [
     {
       "name": "preflight",
-      "status": "success",
+      "status": "failure",
       "message": null
     },
     {
       "name": "portfolio_review",
-      "status": "success",
+      "status": "skipped",
       "message": null
     },
     {
       "name": "protection_reconciliation",
-      "status": "success",
+      "status": "skipped",
       "message": null
     },
     {
       "name": "scanner",
-      "status": "success",
-      "message": null
+      "status": "skipped",
+      "message": "No candidate passed the score threshold"
     },
     {
       "name": "backtest",
       "status": "skipped",
-      "message": null
+      "message": "No scanner symbols"
     },
     {
       "name": "risk",
       "status": "skipped",
-      "message": null
+      "message": "No candidate"
     },
     {
       "name": "execution",
-      "status": "skipped",
+      "status": "not_attempted",
       "message": "no_preselected_backtest_symbols"
     },
     {
       "name": "final_reconciliation",
-      "status": "success",
+      "status": "skipped",
       "message": null
     }
   ],
@@ -87,22 +76,33 @@
     "cash": null,
     "equity": null,
     "buyingPower": null,
-    "status": "ACTIVE",
-    "lastSyncedAt": "2026-08-05T12:21:41.329774Z",
+    "status": null,
+    "lastSyncedAt": "2026-08-05T14:33:08.820782Z",
     "valuesMasked": true
   },
   "summary": {
     "positionCount": 0,
     "openOrderCount": 0,
-    "candidateCount": 10,
+    "candidateCount": 0,
     "executionStatus": "not_attempted",
     "executionReason": "no_preselected_backtest_symbols"
   },
   "positions": [],
   "openOrders": [],
   "signals": [],
-  "warnings": [],
-  "error": null,
+  "warnings": [
+    "Missing phase report: hourly-preflight.json",
+    "Missing phase report: hourly-portfolio-cycle.json",
+    "Missing phase report: hourly-pre-backtest-discovery.json",
+    "Missing phase report: hourly-position-review.json",
+    "Missing phase report: hourly-manager-cycle.json",
+    "Missing phase report: hourly-dashboard-state.json",
+    "Frontend-safe broker snapshot was unavailable; portfolio rows may be incomplete."
+  ],
+  "error": {
+    "code": "HOURLY_CYCLE_FAILED",
+    "message": "Hourly cycle did not complete successfully."
+  },
   "lastSuccessfulRun": {
     "generatedAt": "2026-08-05T12:21:36.958509Z",
     "runId": 31004764893,
@@ -111,7 +111,7 @@
   },
   "freshness": {
     "expectedIntervalMinutes": 60,
-    "ageMinutes": 0.77,
+    "ageMinutes": 0.48,
     "isStale": false,
     "staleAfterMinutes": 120
   },
