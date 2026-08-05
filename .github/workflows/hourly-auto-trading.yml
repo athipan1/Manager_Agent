@@ -131,7 +131,7 @@ jobs:
       BACKTEST_SKILL_ID: ${{ vars.BACKTEST_SKILL_ID || 'hourly-sma-crossover' }}
       BACKTEST_STRATEGY_ID: ${{ vars.BACKTEST_STRATEGY_ID || 'hourly-sma-crossover' }}
       BACKTEST_TIMEFRAME: ${{ vars.BACKTEST_TIMEFRAME || '1d' }}
-      BACKTEST_MINIMUM_BARS: ${{ vars.BACKTEST_MINIMUM_BARS || '252' }}
+      BACKTEST_MINIMUM_BARS_REQUESTED: ${{ vars.BACKTEST_MINIMUM_BARS || '252' }}
       BACKTEST_BAR_LIMIT: ${{ vars.BACKTEST_BAR_LIMIT || '10000' }}
       BACKTEST_INITIAL_EQUITY: ${{ vars.BACKTEST_INITIAL_EQUITY || '100000' }}
       BACKTEST_STRATEGY: ${{ vars.BACKTEST_STRATEGY || 'sma_crossover' }}
@@ -165,6 +165,13 @@ jobs:
             echo "BACKTEST_PROMOTION_APPROVAL_TOKEN is required for authorized observation soak."
             exit 1
           fi
+
+      - name: Resolve Backtest runtime contract
+        working-directory: Manager_Agent
+        run: |
+          python scripts/resolve_backtest_runtime.py \
+            --github-env "$GITHUB_ENV" \
+            --output reports/backtest-runtime-contract.json
 
       - name: Validate Paper-only runtime and external dependencies
         id: preflight
