@@ -386,8 +386,19 @@ jobs:
         working-directory: Manager_Agent
         run: python scripts/record_no_candidate_cycle.py
 
+      - name: Resolve controlled no-trade gate
+        id: trade_gate
+        if: steps.scanner_preselection.outputs.backtest_symbols != ''
+        working-directory: Manager_Agent
+        run: >-
+          python scripts/resolve_hourly_trade_gate.py
+          --github-output "$GITHUB_OUTPUT"
+
       - name: Recheck durable emergency halt before broker mutation
-        if: steps.preflight.outputs.paper_automation == 'true'
+        if: >-
+          steps.preflight.outputs.paper_automation == 'true' &&
+          steps.scanner_preselection.outputs.backtest_symbols != '' &&
+          steps.trade_gate.outputs.should_trade == 'true'
         working-directory: Manager_Agent
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -395,7 +406,9 @@ jobs:
 
       - name: Run Manager candidate, Risk and guarded Execution cycle
         id: trade
-        if: steps.scanner_preselection.outputs.backtest_symbols != ''
+        if: >-
+          steps.scanner_preselection.outputs.backtest_symbols != '' &&
+          steps.trade_gate.outputs.should_trade == 'true'
         working-directory: Manager_Agent
         env:
           MANAGER_AGENT_URL: http://localhost:8000
@@ -405,6 +418,7 @@ jobs:
 
       - name: Verify fills, protection and post-execution reconciliation
         id: final_reconciliation
+        if: ${{ !cancelled() }}
         working-directory: Manager_Agent
         env:
           EXECUTION_AGENT_URL: http://localhost:8006
