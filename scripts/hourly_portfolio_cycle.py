@@ -7,6 +7,7 @@ import argparse
 import json
 import os
 import sys
+import traceback
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -25,6 +26,15 @@ RuntimeSafetyError = runtime.RuntimeSafetyError
 SAFE_SYNC_STATUSES = {"synced", "in_sync", "ok", "matched"}
 SAFE_PROTECTION_STATUSES = {"bracket_protected", "tp_sl_protected"}
 MANUAL_EXIT_ACTIONS = {"partial_exit", "exit_all"}
+SENSITIVE_ENV_FRAGMENTS = (
+    "API_KEY",
+    "TOKEN",
+    "SECRET",
+    "PASSWORD",
+    "CREDENTIAL",
+    "AUTH",
+)
+MAX_DIAGNOSTIC_TEXT_LENGTH = 16_000
 
 
 def unwrap(value: Any) -> Any:
@@ -699,6 +709,83 @@ def write_json(path: Path, payload: dict[str, Any]) -> None:
     )
 
 
+def diagnostic_report_path(args: argparse.Namespace) -> Path:
+    if args.phase == "prepare":
+        return args.review
+    if args.phase == "trade":
+        return args.manager
+    return args.output
+
+
+def redact_diagnostic_text(value: Any) -> str:
+    text = str(value)
+    for name, secret in os.environ.items():
+        upper_name = name.upper()
+        if not any(fragment in upper_name for fragment in SENSITIVE_ENV_FRAGMENTS):
+            continue
+        if len(secret) < 8:
+            continue
+        text = text.replace(secret, f"<redacted:{name}>")
+    if len(text) > MAX_DIAGNOSTIC_TEXT_LENGTH:
+        return f"{text[:MAX_DIAGNOSTIC_TEXT_LENGTH]}\n<truncated>"
+    return text
+
+
+def best_effort_preflight_context(path: Path) -> dict[str, Any]:
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    if not isinstance(payload, dict):
+        return {}
+    runtime_context = as_dict(payload.get("runtime"))
+    return {
+        "portfolio_cycle_id": payload.get("portfolio_cycle_id"),
+        "market_mode": payload.get("market_mode"),
+        "market_open": payload.get("market_open"),
+        "paper_automation": runtime_context.get("paper_automation"),
+    }
+
+
+def build_failure_report(
+    *,
+    args: argparse.Namespace,
+    exc: Exception,
+) -> dict[str, Any]:
+    formatted_traceback = "".join(
+        traceback.format_exception(type(exc), exc, exc.__traceback__)
+    )
+    return {
+        "schema_version": "hourly-portfolio-cycle.failure.v1",
+        "status": "failed_closed",
+        "stage": f"{args.phase}_failed_closed",
+        "phase": args.phase,
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "preflight": best_effort_preflight_context(args.preflight),
+        "diagnostics": {
+            "exception_type": type(exc).__name__,
+            "message": redact_diagnostic_text(exc),
+            "traceback": redact_diagnostic_text(formatted_traceback),
+            "report_path": str(diagnostic_report_path(args)),
+        },
+        "safety": {
+            "failed_closed": True,
+            "execution_continued": False,
+            "broker_mutation_authorized_after_failure": False,
+        },
+    }
+
+
+def persist_failure_report(
+    *,
+    args: argparse.Namespace,
+    exc: Exception,
+) -> Path:
+    path = diagnostic_report_path(args)
+    write_json(path, build_failure_report(args=args, exc=exc))
+    return path
+
+
 def main() -> int:
     args = parse_args()
     try:
@@ -740,8 +827,23 @@ def main() -> int:
             write_json(args.output, report)
         print(f"Hourly portfolio phase {args.phase} completed safely.")
         return 0
-    except (RuntimeSafetyError, OSError, ValueError, json.JSONDecodeError) as exc:
-        print(f"Hourly portfolio phase failed closed: {exc}", file=sys.stderr)
+    except Exception as exc:
+        failure_path: Path | None = None
+        persistence_error: Exception | None = None
+        try:
+            failure_path = persist_failure_report(args=args, exc=exc)
+        except Exception as report_exc:
+            persistence_error = report_exc
+        message = redact_diagnostic_text(exc)
+        print(f"Hourly portfolio phase failed closed: {message}", file=sys.stderr)
+        if failure_path is not None:
+            print(f"Failure evidence written to {failure_path}.", file=sys.stderr)
+        if persistence_error is not None:
+            print(
+                "Failure evidence persistence also failed: "
+                f"{redact_diagnostic_text(persistence_error)}",
+                file=sys.stderr,
+            )
         return 1
 
 
