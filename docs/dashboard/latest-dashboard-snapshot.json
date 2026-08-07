@@ -1,100 +1,58 @@
 {
   "schemaVersion": "dashboard-snapshot.v2",
-  "generatedAt": "2026-08-07T00:49:07.336686Z",
+  "generatedAt": "2026-08-07T04:01:29Z",
   "workflow": {
-    "runId": 31135668233,
-    "runNumber": 99,
-    "runUrl": "https://github.com/athipan1/Manager_Agent/actions/runs/31135668233",
+    "runId": 31146112153,
+    "runNumber": 684,
+    "runUrl": "https://github.com/athipan1/Manager_Agent/actions/runs/31146112153",
     "eventName": "schedule",
     "status": "completed",
-    "conclusion": "failure",
-    "startedAt": "2026-08-07T00:44:08Z",
-    "completedAt": "2026-08-07T00:49:34Z",
-    "durationSeconds": 326.0
+    "conclusion": "skipped",
+    "startedAt": "2026-08-07T04:01:19Z",
+    "completedAt": "2026-08-07T04:01:29Z",
+    "durationSeconds": 10.0
   },
   "runtime": {
-    "mode": "PAPER",
-    "brokerMode": "ALPACA",
-    "dryRun": false,
+    "mode": "SIMULATOR",
+    "brokerMode": "SIMULATOR",
+    "dryRun": true,
     "liveTradingEnabled": false,
     "flow": "hourly_portfolio_cycle"
   },
   "cycle": {
-    "id": "hourly-paper-4fd6d3db930a-20260807T00",
-    "status": "failure",
-    "marketMode": "PORTFOLIO_REVIEW_ONLY",
-    "candidateCount": 10,
+    "id": null,
+    "status": "skipped",
+    "marketMode": null,
+    "candidateCount": 0,
     "selectedSymbols": [],
     "executionAttempted": false,
     "executionStatus": "not_attempted",
-    "executionReason": "no_preselected_backtest_symbols",
+    "executionReason": "scheduled_paper_cycle_not_authorized",
     "partialFillDetected": false
   },
-  "phases": [
-    {
-      "name": "preflight",
-      "status": "success",
-      "message": null
-    },
-    {
-      "name": "portfolio_review",
-      "status": "success",
-      "message": null
-    },
-    {
-      "name": "protection_reconciliation",
-      "status": "success",
-      "message": null
-    },
-    {
-      "name": "scanner",
-      "status": "success",
-      "message": null
-    },
-    {
-      "name": "backtest",
-      "status": "skipped",
-      "message": null
-    },
-    {
-      "name": "risk",
-      "status": "not_attempted",
-      "message": "no_preselected_backtest_symbols"
-    },
-    {
-      "name": "execution",
-      "status": "not_attempted",
-      "message": "no_preselected_backtest_symbols"
-    },
-    {
-      "name": "final_reconciliation",
-      "status": "success",
-      "message": null
-    }
-  ],
+  "phases": [],
   "account": {
     "cash": null,
     "equity": null,
     "buyingPower": null,
-    "status": "ACTIVE",
-    "lastSyncedAt": "2026-08-07T00:49:11.684396Z",
+    "status": null,
+    "lastSyncedAt": "2026-08-07T04:01:29Z",
     "valuesMasked": true
   },
   "summary": {
     "positionCount": 0,
     "openOrderCount": 0,
-    "candidateCount": 10,
+    "candidateCount": 0,
     "executionStatus": "not_attempted",
-    "executionReason": "no_preselected_backtest_symbols"
+    "executionReason": "scheduled_paper_cycle_not_authorized"
   },
   "positions": [],
   "openOrders": [],
   "signals": [],
-  "warnings": [],
-  "error": {
-    "code": "HOURLY_WORKFLOW_FAILED",
-    "message": "Hourly Auto Trading did not complete successfully."
-  },
+  "warnings": [
+    "No new hourly operator artifact was available; workflow metadata is shown."
+  ],
+  "error": null,
   "lastSuccessfulRun": {
     "generatedAt": "2026-08-06T14:43:27.260689Z",
     "runId": 31111687007,
@@ -103,7 +61,7 @@
   },
   "freshness": {
     "expectedIntervalMinutes": 60,
-    "ageMinutes": 0.63,
+    "ageMinutes": 0.16,
     "isStale": false,
     "staleAfterMinutes": 120
   },
