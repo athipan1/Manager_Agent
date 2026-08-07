@@ -117,8 +117,10 @@ def test_builds_complete_paper_report_with_real_portfolio_rows():
     assert artifact["cycle"]["candidateCount"] == 0
     phase_map = {row["name"]: row["status"] for row in artifact["phases"]}
     assert phase_map["backtest"] == "skipped"
-    assert phase_map["risk"] == "skipped"
+    assert phase_map["risk"] == "not_attempted"
     assert phase_map["execution"] == "not_attempted"
+    assert artifact["cycle"]["status"] == "controlled_no_trade"
+    assert artifact["cycle"]["brokerOrdersSubmitted"] is False
     serialized = json.dumps(artifact)
     assert "private-position-id" not in serialized
     assert "private-order-id" not in serialized

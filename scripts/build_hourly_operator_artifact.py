@@ -41,6 +41,11 @@ PHASE_STATUSES = {
     "cancelled",
     "unknown",
 }
+CONTROLLED_NO_TRADE_REASONS = {
+    "market_closed",
+    "no_eligible_strategy",
+    "no_preselected_backtest_symbols",
+}
 
 
 def as_dict(value: Any) -> dict[str, Any]:
@@ -309,11 +314,13 @@ def build_hourly_operator_artifact(
     ranked = manager_data.get("ranked_candidates") or discovery_data.get(
         "ranked_candidates"
     ) or []
-    selected = selected_symbols(
-        manager_data.get("selected_positions")
-        or discovery_data.get("selected_positions")
-        or ranked
-    )
+    if "selected_positions" in manager_data:
+        selected_source = manager_data.get("selected_positions")
+    elif "selected_positions" in discovery_data:
+        selected_source = discovery_data.get("selected_positions")
+    else:
+        selected_source = ranked
+    selected = selected_symbols(selected_source)
     candidate_count = int_value(
         manager_data.get("scanner_count")
         or discovery_data.get("scanner_count")
@@ -336,10 +343,28 @@ def build_hourly_operator_artifact(
     execution_reason = execution.get("reason") or (
         "no_preselected_backtest_symbols" if not selected else None
     )
+    execution_attempted = bool_value(candidate.get("execute_requested"))
+    candidate_reason = str(
+        candidate.get("reason") or execution_reason or ""
+    ).strip()
+    controlled_no_trade = (
+        not execution_attempted
+        and execution_status == "not_attempted"
+        and candidate_reason in CONTROLLED_NO_TRADE_REASONS
+        and phase_status(outcomes.get("risk")) not in {"failure", "cancelled"}
+        and phase_status(outcomes.get("execution"))
+        not in {"failure", "cancelled"}
+    )
+    if controlled_no_trade:
+        execution_reason = candidate_reason
     backtest = outcomes.get("backtest")
     risk = outcomes.get("risk")
     execution_phase = outcomes.get("execution")
-    if not selected:
+    if controlled_no_trade:
+        risk, execution_phase = "not_attempted", "not_attempted"
+        if execution_reason == "no_preselected_backtest_symbols":
+            backtest = "skipped"
+    elif not selected:
         backtest, risk, execution_phase = "skipped", "skipped", "not_attempted"
     elif execution_status in {"rejected", "risk_rejected"}:
         risk, execution_phase = "failure", "not_attempted"
@@ -356,13 +381,39 @@ def build_hourly_operator_artifact(
         phase(
             "scanner",
             outcomes.get("scanner"),
-            "No candidate passed the score threshold" if not selected else None,
+            "No candidate passed the score threshold"
+            if candidate_count == 0
+            else None,
         ),
-        phase("backtest", backtest, "No scanner symbols" if not selected else None),
-        phase("risk", risk, "No candidate" if not selected else None),
+        phase(
+            "backtest",
+            backtest,
+            "No scanner symbols"
+            if candidate_count == 0
+            else (
+                "No eligible strategy"
+                if execution_reason == "no_eligible_strategy"
+                else None
+            ),
+        ),
+        phase(
+            "risk",
+            risk,
+            execution_reason
+            if controlled_no_trade
+            else ("No candidate" if not selected else None),
+        ),
         phase("execution", execution_phase, execution_reason),
         phase("final_reconciliation", outcomes.get("final_reconciliation")),
     ]
+    if controlled_no_trade:
+        final_status = phase_status(outcomes.get("final_reconciliation"))
+        if final_status == "success":
+            status = "controlled_no_trade"
+        elif final_status in {"failure", "cancelled"}:
+            status = final_status
+        else:
+            status = "partial"
     manager_signals = (
         manager_data.get("curator_signals")
         if isinstance(manager_data.get("curator_signals"), list)
@@ -382,7 +433,13 @@ def build_hourly_operator_artifact(
         or candidate.get("market_mode")
         or review.get("market_mode")
     )
-    execution_attempted = bool_value(candidate.get("execute_requested"))
+    broker_orders_submitted = False
+    if not controlled_no_trade:
+        broker_orders_submitted = bool(
+            as_list(execution.get("created"))
+            or execution_status
+            in {"submitted", "executed", "success", "filled", "partial_fill"}
+        )
     partial_fill = bool_value(cycle.get("partial_fill_detected"))
     return {
         "generated_at": generated_at,
@@ -411,6 +468,10 @@ def build_hourly_operator_artifact(
             "executionAttempted": execution_attempted,
             "executionStatus": execution_status,
             "executionReason": execution_reason,
+            "controlledNoTradeReason": (
+                execution_reason if controlled_no_trade else None
+            ),
+            "brokerOrdersSubmitted": broker_orders_submitted,
             "partialFillDetected": partial_fill,
         },
         "phases": phases,
@@ -424,6 +485,7 @@ def build_hourly_operator_artifact(
                 "execution": {
                     "status": execution_status,
                     "reason": execution_reason,
+                    "brokerOrdersSubmitted": broker_orders_submitted,
                 },
                 "scanner_count": candidate_count,
                 "top_10_symbols": selected[:10],
@@ -431,6 +493,7 @@ def build_hourly_operator_artifact(
             },
         },
         "partial_fill_detected": partial_fill,
+        "broker_orders_submitted": broker_orders_submitted,
         "cycle_status": status,
         "warnings": report_warnings,
         "error": None
