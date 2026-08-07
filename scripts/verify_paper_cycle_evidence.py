@@ -14,6 +14,11 @@ from typing import Any, Mapping
 SAFE_SYNC_STATUSES = {"synced", "in_sync", "ok", "matched"}
 FAILED_ORDER_STATUSES = {"failed", "rejected", "error", "canceled", "cancelled"}
 SAFE_PROTECTION_STATUSES = {"bracket_protected", "tp_sl_protected"}
+CONTROLLED_NO_TRADE_REASONS = {
+    "market_closed",
+    "no_eligible_strategy",
+    "no_preselected_backtest_symbols",
+}
 
 
 class EvidenceError(RuntimeError):
@@ -83,6 +88,32 @@ def protection_gaps(value: Any) -> list[str]:
     return gaps
 
 
+def cycle_completed_safely(
+    cycle: Mapping[str, Any], operator: Mapping[str, Any]
+) -> bool:
+    if str(cycle.get("status") or "").lower() != "completed":
+        return False
+
+    operator_status = str(operator.get("cycle_status") or "").lower()
+    if operator_status == "completed":
+        return True
+    if operator_status != "controlled_no_trade":
+        return False
+
+    candidate = as_dict(cycle.get("candidate_cycle"))
+    manager_response = as_dict(candidate.get("manager_response"))
+    manager_data = as_dict(manager_response.get("data"))
+    execution = as_dict(manager_data.get("execution"))
+    reason = str(candidate.get("reason") or execution.get("reason") or "").lower()
+    execution_status = str(execution.get("status") or "").lower()
+
+    return (
+        candidate.get("execute_requested") is False
+        and execution_status == "not_attempted"
+        and reason in CONTROLLED_NO_TRADE_REASONS
+    )
+
+
 def add_check(
     checks: list[dict[str, Any]],
     name: str,
@@ -123,9 +154,11 @@ def verify_artifact(
     add_check(
         checks,
         "cycle_completed",
-        cycle.get("status") == "completed"
-        and operator.get("cycle_status") == "completed",
-        "The multi-phase Manager cycle and operator artifact must both complete.",
+        cycle_completed_safely(cycle, operator),
+        (
+            "The Manager cycle must complete; the operator artifact may report "
+            "completed or a validated controlled_no_trade terminal state."
+        ),
     )
     add_check(
         checks,
