@@ -88,6 +88,70 @@ def test_clean_paper_cycle_evidence_passes(tmp_path):
     assert evidence["submitted_order_count"] == 1
 
 
+def test_controlled_no_trade_is_a_safe_terminal_cycle(tmp_path):
+    build_artifacts(tmp_path)
+    cycle_path = tmp_path / "hourly-portfolio-cycle.json"
+    cycle = json.loads(cycle_path.read_text(encoding="utf-8"))
+    cycle["candidate_cycle"] = {
+        "execute_requested": False,
+        "reason": "no_preselected_backtest_symbols",
+        "manager_response": {
+            "status": "success",
+            "data": {
+                "execution": {
+                    "status": "not_attempted",
+                    "reason": "no_preselected_backtest_symbols",
+                }
+            },
+        },
+    }
+    write_json(cycle_path, cycle)
+    write_json(
+        tmp_path / "hourly-auto-trading-report.json",
+        {"cycle_status": "controlled_no_trade"},
+    )
+
+    evidence = verify_artifact(
+        artifact_dir=tmp_path,
+        require_emergency_drill=True,
+    )
+
+    assert evidence["result"] == "success"
+    assert evidence["failed_check_count"] == 0
+
+
+def test_unvalidated_controlled_no_trade_fails_evidence(tmp_path):
+    build_artifacts(tmp_path)
+    cycle_path = tmp_path / "hourly-portfolio-cycle.json"
+    cycle = json.loads(cycle_path.read_text(encoding="utf-8"))
+    cycle["candidate_cycle"] = {
+        "execute_requested": False,
+        "reason": "unexpected_reason",
+        "manager_response": {
+            "status": "success",
+            "data": {
+                "execution": {
+                    "status": "not_attempted",
+                    "reason": "unexpected_reason",
+                }
+            },
+        },
+    }
+    write_json(cycle_path, cycle)
+    write_json(
+        tmp_path / "hourly-auto-trading-report.json",
+        {"cycle_status": "controlled_no_trade"},
+    )
+
+    evidence = verify_artifact(
+        artifact_dir=tmp_path,
+        require_emergency_drill=True,
+    )
+
+    assert evidence["result"] == "failure"
+    assert "cycle_completed" in evidence["failed_checks"]
+
+
 def test_partial_fill_is_a_promotion_warning(tmp_path):
     build_artifacts(tmp_path, partial_fill=True)
 
