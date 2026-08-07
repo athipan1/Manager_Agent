@@ -1,57 +1,96 @@
 {
   "schemaVersion": "dashboard-snapshot.v2",
-  "generatedAt": "2026-08-07T17:56:58Z",
+  "generatedAt": "2026-08-07T18:05:38.636512Z",
   "workflow": {
-    "runId": 31204655602,
-    "runNumber": 694,
-    "runUrl": "https://github.com/athipan1/Manager_Agent/actions/runs/31204655602",
+    "runId": 31204931616,
+    "runNumber": 112,
+    "runUrl": "https://github.com/athipan1/Manager_Agent/actions/runs/31204931616",
     "eventName": "schedule",
     "status": "completed",
-    "conclusion": "skipped",
-    "startedAt": "2026-08-07T17:56:46Z",
-    "completedAt": "2026-08-07T17:56:58Z",
-    "durationSeconds": 12.0
+    "conclusion": "success",
+    "startedAt": "2026-08-07T18:00:19Z",
+    "completedAt": "2026-08-07T18:06:08Z",
+    "durationSeconds": 349.0
   },
   "runtime": {
-    "mode": "SIMULATOR",
-    "brokerMode": "SIMULATOR",
-    "dryRun": true,
+    "mode": "PAPER",
+    "brokerMode": "ALPACA",
+    "dryRun": false,
     "liveTradingEnabled": false,
     "flow": "hourly_portfolio_cycle"
   },
   "cycle": {
-    "id": null,
-    "status": "skipped",
-    "marketMode": null,
-    "candidateCount": 0,
+    "id": "hourly-paper-4fd6d3db930a-20260807T18",
+    "status": "controlled_no_trade",
+    "marketMode": "REVIEW_AND_TRADE",
+    "candidateCount": 10,
     "selectedSymbols": [],
     "executionAttempted": false,
     "executionStatus": "not_attempted",
-    "executionReason": "scheduled_paper_cycle_not_authorized",
+    "executionReason": "no_preselected_backtest_symbols",
     "partialFillDetected": false
   },
-  "phases": [],
+  "phases": [
+    {
+      "name": "preflight",
+      "status": "success",
+      "message": null
+    },
+    {
+      "name": "portfolio_review",
+      "status": "success",
+      "message": null
+    },
+    {
+      "name": "protection_reconciliation",
+      "status": "success",
+      "message": null
+    },
+    {
+      "name": "scanner",
+      "status": "success",
+      "message": null
+    },
+    {
+      "name": "backtest",
+      "status": "skipped",
+      "message": null
+    },
+    {
+      "name": "risk",
+      "status": "not_attempted",
+      "message": "no_preselected_backtest_symbols"
+    },
+    {
+      "name": "execution",
+      "status": "not_attempted",
+      "message": "no_preselected_backtest_symbols"
+    },
+    {
+      "name": "final_reconciliation",
+      "status": "success",
+      "message": null
+    }
+  ],
   "account": {
     "cash": null,
     "equity": null,
     "buyingPower": null,
-    "status": null,
-    "lastSyncedAt": "2026-08-07T17:56:58Z",
+    "status": "ACTIVE",
+    "lastSyncedAt": "2026-08-07T18:05:43.977993Z",
     "valuesMasked": true
   },
   "summary": {
     "positionCount": 0,
     "openOrderCount": 0,
-    "candidateCount": 0,
+    "candidateCount": 10,
     "executionStatus": "not_attempted",
-    "executionReason": "scheduled_paper_cycle_not_authorized"
+    "executionReason": "no_preselected_backtest_symbols"
   },
   "positions": [],
   "openOrders": [],
   "signals": [],
-  "warnings": [
-    "No new hourly operator artifact was available; workflow metadata is shown."
-  ],
+  "warnings": [],
   "error": null,
   "lastSuccessfulRun": {
     "generatedAt": "2026-08-06T14:43:27.260689Z",
@@ -61,7 +100,7 @@
   },
   "freshness": {
     "expectedIntervalMinutes": 60,
-    "ageMinutes": 0.26,
+    "ageMinutes": 0.72,
     "isStale": false,
     "staleAfterMinutes": 120
   },
