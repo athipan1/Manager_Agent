@@ -329,6 +329,20 @@ jobs:
           EMERGENCY_HALT_DRILL_REPORT: reports/emergency-halt-drill.json
         run: python scripts/emergency_halt_drill.py
 
+      - name: Reconfirm required services before portfolio reconciliation
+        working-directory: Manager_Agent
+        env:
+          MANAGER_AGENT_URL: http://localhost:8000
+          TECHNICAL_AGENT_URL: http://localhost:8002
+          FUNDAMENTAL_AGENT_URL: http://localhost:8001
+          MARKET_REGIME_AGENT_URL: http://localhost:8014
+          PORTFOLIO_AGENT_URL: http://localhost:8012
+          PROFIT_AGENT_URL: http://localhost:8011
+          PERFORMANCE_AGENT_URL: http://localhost:8013
+          EXECUTION_AGENT_URL: http://localhost:8006
+          DATABASE_AGENT_URL: ${{ env.RUNTIME_DATABASE_AGENT_URL }}
+        run: python scripts/hourly_portfolio_cycle.py wait
+
       - name: Review existing positions, orders, regime, exposure and protection
         id: portfolio_review
         working-directory: Manager_Agent
