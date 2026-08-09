@@ -170,6 +170,7 @@ def _sanitize_candidate(raw: Mapping[str, Any], refs: Mapping[str, Mapping[str, 
     existing_refs = _dict(raw.get("refs"))
     decision_id = _safe_text(row_refs.get("decisionId") or existing_refs.get("decisionId"), limit=96)
     position_id = _safe_text(row_refs.get("positionId") or existing_refs.get("positionId"), limit=96)
+    stage_reached = _safe_code(raw.get("stageReached"))
     return {
         "symbol": symbol,
         "rank": int(_number(raw.get("rank"), 1, 10_000) or 0) or None,
@@ -177,7 +178,7 @@ def _sanitize_candidate(raw: Mapping[str, Any], refs: Mapping[str, Mapping[str, 
         "finalScore": _number(raw.get("finalScore"), 0, 1),
         "strategyBucket": _safe_code(raw.get("strategyBucket")) or "unassigned",
         "status": _safe_code(raw.get("status")) or "unknown",
-        "stageReached": _safe_code(raw.get("stageReached")) if _safe_code(raw.get("stageReached")) in STAGE_ORDER else None,
+        "stageReached": stage_reached if stage_reached in STAGE_ORDER else None,
         "reasonCodes": _reason_codes(raw.get("reasonCodes")),
         "refs": {"decisionId": decision_id, "positionId": position_id},
     }
@@ -210,6 +211,8 @@ def _sanitize_cycle(raw: Mapping[str, Any], refs: Mapping[str, Mapping[str, Any]
         if stage:
             stages_by_id[stage["id"]] = stage
     stages = [stages_by_id[stage_id] for stage_id in STAGE_ORDER if stage_id in stages_by_id]
+    if len(stages) != len(STAGE_ORDER):
+        return None
     candidates: list[dict[str, Any]] = []
     for raw_candidate in _list(row.get("candidates"))[:MAX_CANDIDATES]:
         candidate = _sanitize_candidate(_dict(raw_candidate), refs or {})
