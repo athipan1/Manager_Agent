@@ -26,6 +26,8 @@ def test_publish_workflow_contract():
     assert "normalize_hourly_operator_report.py" in workflow
     assert "enrich_dashboard_snapshot.py" in workflow
     assert '"scripts/enrich_dashboard_snapshot.py"' in workflow
+    assert "enrich_trading_observability.py" in workflow
+    assert '"scripts/enrich_trading_observability.py"' in workflow
     assert "workflow-metadata.json" in workflow
     assert "dashboard-data" in workflow
     assert "[skip ci]" in workflow
@@ -60,6 +62,18 @@ def test_public_dashboard_requires_phase_12_projection_keys():
     assert "'risk' in payload" in validation
     assert "isinstance(payload.get('backtest'), dict)" in validation
     assert "set(payload['backtest']) == {'latestRun', 'history'}" in validation
+
+
+def test_public_dashboard_requires_phase_16_observability_contract():
+    workflow = (
+        ROOT / ".github/workflows/publish-dashboard-snapshot.yml"
+    ).read_text(encoding="utf-8")
+    validation = workflow.split("- name: Validate public snapshot contract", 1)[1]
+    assert "observability.get('schemaVersion') == 'trading-observability.v1'" in validation
+    assert "current.get('flowKind') == 'decision_path'" in validation
+    assert "'scanner', 'backtest', 'market_regime', 'portfolio', 'profit', 'risk', 'execution'" in validation
+    assert "len(current.get('candidates', [])) <= 10" in validation
+    assert "last_meaningful is None or isinstance(last_meaningful, dict)" in validation
 
 
 def test_publish_workflow_keeps_triggering_run_authoritative():
@@ -108,11 +122,12 @@ def test_publish_workflow_normalizes_exports_then_enriches():
     ).read_text(encoding="utf-8")
     normalize = workflow.index("normalize_hourly_operator_report.py")
     export = workflow.index("export_dashboard_snapshot.py")
-    enrich = workflow.index("enrich_dashboard_snapshot.py", export)
+    telemetry = workflow.index("enrich_dashboard_snapshot.py", export)
+    observability = workflow.index("enrich_trading_observability.py", telemetry)
     copy = workflow.index(
         "cp reports/latest-dashboard-snapshot.json ../dashboard-data/docs/dashboard/latest-dashboard-snapshot.json"
     )
-    assert normalize < export < enrich < copy
+    assert normalize < export < telemetry < observability < copy
     assert "--artifact-dir reports/hourly-artifact" in workflow
     assert "--previous ../dashboard-data/docs/dashboard/latest-dashboard-snapshot.json" in workflow
     assert "payload['runtime']['mode'] in {'PAPER', 'SIMULATOR'}" in workflow
