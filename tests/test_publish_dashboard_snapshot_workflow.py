@@ -24,6 +24,8 @@ def test_publish_workflow_contract():
     assert "workflowName" in workflow
     assert "build_dashboard_fallback_report.py" in workflow
     assert "normalize_hourly_operator_report.py" in workflow
+    assert "enrich_dashboard_snapshot.py" in workflow
+    assert '"scripts/enrich_dashboard_snapshot.py"' in workflow
     assert "workflow-metadata.json" in workflow
     assert "dashboard-data" in workflow
     assert "[skip ci]" in workflow
@@ -47,6 +49,17 @@ def test_public_dashboard_privacy_is_fail_closed():
     assert "payload['account']['buyingPower'] is None" in validation
     assert "item.get('valuesMasked') is True for item in payload['positions']" in validation
     assert "item.get('valuesMasked') is True for item in payload['openOrders']" in validation
+
+
+def test_public_dashboard_requires_phase_12_projection_keys():
+    workflow = (
+        ROOT / ".github/workflows/publish-dashboard-snapshot.yml"
+    ).read_text(encoding="utf-8")
+    validation = workflow.split("- name: Validate public snapshot contract", 1)[1]
+    assert "isinstance(payload.get('agents'), list)" in validation
+    assert "'risk' in payload" in validation
+    assert "isinstance(payload.get('backtest'), dict)" in validation
+    assert "set(payload['backtest']) == {'latestRun', 'history'}" in validation
 
 
 def test_publish_workflow_keeps_triggering_run_authoritative():
@@ -89,13 +102,19 @@ def test_artifactless_triggering_run_uses_current_metadata_not_old_cycle():
     assert "preserves lastSuccessfulRun" in workflow
 
 
-def test_publish_workflow_normalizes_paper_mode_and_rejects_unknown():
+def test_publish_workflow_normalizes_exports_then_enriches():
     workflow = (
         ROOT / ".github/workflows/publish-dashboard-snapshot.yml"
     ).read_text(encoding="utf-8")
     normalize = workflow.index("normalize_hourly_operator_report.py")
     export = workflow.index("export_dashboard_snapshot.py")
-    assert normalize < export
+    enrich = workflow.index("enrich_dashboard_snapshot.py", export)
+    copy = workflow.index(
+        "cp reports/latest-dashboard-snapshot.json ../dashboard-data/docs/dashboard/latest-dashboard-snapshot.json"
+    )
+    assert normalize < export < enrich < copy
+    assert "--artifact-dir reports/hourly-artifact" in workflow
+    assert "--previous ../dashboard-data/docs/dashboard/latest-dashboard-snapshot.json" in workflow
     assert "payload['runtime']['mode'] in {'PAPER', 'SIMULATOR'}" in workflow
     assert "ALPACA_PAPER" not in workflow
 
