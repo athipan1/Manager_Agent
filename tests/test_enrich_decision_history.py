@@ -98,6 +98,23 @@ def test_seeds_from_previous_phase16_observability_when_history_is_absent():
     assert [item["cycleId"] for item in cycles] == ["cycle-current", "cycle-previous"]
 
 
+def test_drops_incomplete_inherited_cycles_instead_of_publishing_malformed_history():
+    current = cycle("cycle-current")
+    malformed = cycle("cycle-malformed", observed_at="2026-08-09T13:00:00Z")
+    malformed["stages"] = malformed["stages"][:-1]
+    previous = {
+        "decisionHistory": {
+            "schemaVersion": "decision-history.v1",
+            "cycles": [malformed],
+        }
+    }
+
+    cycles = enrich_snapshot(snapshot(current), previous)["decisionHistory"]["cycles"]
+
+    assert [item["cycleId"] for item in cycles] == ["cycle-current"]
+    assert all(len(item["stages"]) == len(STAGE_ORDER) for item in cycles)
+
+
 def test_adds_safe_candidate_refs_and_never_copies_raw_diagnostics(tmp_path: Path):
     current = cycle("cycle-ref", symbol="AAPL", status="blocked", stage_reached="risk")
     discovery = {
