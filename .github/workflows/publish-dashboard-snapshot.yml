@@ -22,6 +22,7 @@ on:
       - "scripts/capture_hourly_dashboard_state.py"
       - "scripts/normalize_hourly_operator_report.py"
       - "scripts/export_dashboard_snapshot.py"
+      - "scripts/enrich_dashboard_snapshot.py"
 
 permissions:
   actions: read
@@ -150,7 +151,7 @@ jobs:
             --workflow-metadata reports/workflow-metadata.json \
             --output reports/hourly-artifact/hourly-auto-trading-report.json
 
-      - name: Normalize and export frontend-safe snapshot v2
+      - name: Normalize, export, and enrich frontend-safe snapshot v2
         working-directory: source
         run: |
           set -euo pipefail
@@ -170,6 +171,10 @@ jobs:
             --privacy-mode "$PUBLIC_DASHBOARD_SNAPSHOT_PRIVACY_MODE" \
             --expected-interval-minutes 60 \
             --stale-after-minutes 120
+          python scripts/enrich_dashboard_snapshot.py \
+            --snapshot reports/latest-dashboard-snapshot.json \
+            --artifact-dir reports/hourly-artifact \
+            --previous ../dashboard-data/docs/dashboard/latest-dashboard-snapshot.json
           mkdir -p ../dashboard-data/docs/dashboard
           cp reports/latest-dashboard-snapshot.json ../dashboard-data/docs/dashboard/latest-dashboard-snapshot.json
 
@@ -187,6 +192,10 @@ jobs:
           assert payload['runtime']['liveTradingEnabled'] is False
           assert payload['runtime']['mode'] in {'PAPER', 'SIMULATOR'}
           assert 'error' in payload and 'freshness' in payload and 'lastSuccessfulRun' in payload
+          assert isinstance(payload.get('agents'), list)
+          assert 'risk' in payload
+          assert isinstance(payload.get('backtest'), dict)
+          assert set(payload['backtest']) == {'latestRun', 'history'}
           assert payload['privacy'] == {'mode': 'masked', 'valuesMasked': True}
           assert payload['account']['valuesMasked'] is True
           assert payload['account']['cash'] is None
