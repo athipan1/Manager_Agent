@@ -1,22 +1,25 @@
 #!/usr/bin/env python3
-"""Build and verify a safe artifact for an intentionally disabled hourly Paper schedule.
+"""Build and verify a safe artifact for an intentional Paper control cycle.
 
 This path must stay lightweight: it never contacts agents, databases, Risk,
-Execution, Alpaca, or Docker. Its only job is to make an intentional control
-state distinguishable from a missing hourly artifact.
+Execution, Alpaca, or Docker. Its only job is to distinguish an intentional
+control state from a missing hourly artifact.
 """
 from __future__ import annotations
 
 import argparse
 import json
 import os
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 SCHEMA_VERSION = "hourly-control-cycle.v1"
-REASON_CODE = "hourly_schedule_disabled"
-MARKET_MODE = "SCHEDULE_DISABLED"
+DEFAULT_REASON_CODE = "hourly_schedule_disabled"
+DEFAULT_MARKET_MODE = "SCHEDULE_DISABLED"
+SAFE_CODE = re.compile(r"^[a-z][a-z0-9_]{2,63}$")
+SAFE_MARKET_MODE = re.compile(r"^[A-Z][A-Z0-9_]{2,63}$")
 
 
 def _integer(value: str | None) -> int | None:
@@ -45,23 +48,38 @@ def _workflow() -> dict[str, Any]:
     }
 
 
-def build_control_artifact(*, observed_at: str | None = None) -> tuple[dict[str, Any], dict[str, Any]]:
+def _validate_control_codes(reason_code: str, market_mode: str) -> None:
+    if not SAFE_CODE.fullmatch(reason_code):
+        raise ValueError("reason_code must be a bounded snake_case code")
+    if not SAFE_MARKET_MODE.fullmatch(market_mode):
+        raise ValueError("market_mode must be a bounded uppercase code")
+
+
+def build_control_artifact(
+    *,
+    observed_at: str | None = None,
+    reason_code: str = DEFAULT_REASON_CODE,
+    market_mode: str = DEFAULT_MARKET_MODE,
+    warning: str | None = None,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    _validate_control_codes(reason_code, market_mode)
     observed_at = observed_at or datetime.now(timezone.utc).isoformat()
     workflow = _workflow()
     run_id = workflow.get("runId")
     run_number = workflow.get("runNumber")
     suffix = str(run_id or run_number or int(datetime.now(timezone.utc).timestamp()))
     cycle_id = f"hourly-control-{suffix}"
+    safe_warning = (warning or "Intentional Paper control cycle; no agent or broker mutation was attempted.")[:280]
 
     phases = [
-        {"name": "preflight", "status": "success", "message": REASON_CODE},
-        {"name": "portfolio_review", "status": "skipped", "message": REASON_CODE},
-        {"name": "protection_reconciliation", "status": "skipped", "message": REASON_CODE},
-        {"name": "scanner", "status": "skipped", "message": REASON_CODE},
-        {"name": "backtest", "status": "skipped", "message": REASON_CODE},
-        {"name": "risk", "status": "not_attempted", "message": REASON_CODE},
-        {"name": "execution", "status": "not_attempted", "message": REASON_CODE},
-        {"name": "final_reconciliation", "status": "success", "message": REASON_CODE},
+        {"name": "preflight", "status": "success", "message": reason_code},
+        {"name": "portfolio_review", "status": "skipped", "message": reason_code},
+        {"name": "protection_reconciliation", "status": "skipped", "message": reason_code},
+        {"name": "scanner", "status": "skipped", "message": reason_code},
+        {"name": "backtest", "status": "skipped", "message": reason_code},
+        {"name": "risk", "status": "not_attempted", "message": reason_code},
+        {"name": "execution", "status": "not_attempted", "message": reason_code},
+        {"name": "final_reconciliation", "status": "success", "message": reason_code},
     ]
 
     report = {
@@ -79,19 +97,19 @@ def build_control_artifact(*, observed_at: str | None = None) -> tuple[dict[str,
         "flow": "hourly_portfolio_cycle",
         "request": {
             "portfolio_cycle_id": cycle_id,
-            "market_mode": MARKET_MODE,
+            "market_mode": market_mode,
             "execute_requested": False,
         },
         "cycle": {
             "id": cycle_id,
             "status": "controlled_no_trade",
-            "marketMode": MARKET_MODE,
+            "marketMode": market_mode,
             "candidateCount": 0,
             "selectedSymbols": [],
             "executionAttempted": False,
             "executionStatus": "not_attempted",
-            "executionReason": REASON_CODE,
-            "controlledNoTradeReason": REASON_CODE,
+            "executionReason": reason_code,
+            "controlledNoTradeReason": reason_code,
             "brokerOrdersSubmitted": False,
             "partialFillDetected": False,
         },
@@ -111,7 +129,7 @@ def build_control_artifact(*, observed_at: str | None = None) -> tuple[dict[str,
             "data": {
                 "execution": {
                     "status": "not_attempted",
-                    "reason": REASON_CODE,
+                    "reason": reason_code,
                     "brokerOrdersSubmitted": False,
                 },
                 "scanner_count": 0,
@@ -122,16 +140,14 @@ def build_control_artifact(*, observed_at: str | None = None) -> tuple[dict[str,
         "partial_fill_detected": False,
         "broker_orders_submitted": False,
         "cycle_status": "controlled_no_trade",
-        "warnings": [
-            "Hourly Paper schedule is intentionally disabled; no agent or broker mutation was attempted."
-        ],
+        "warnings": [safe_warning],
         "error": None,
     }
 
     marker = {
         "schemaVersion": SCHEMA_VERSION,
         "cycleClass": "control",
-        "reasonCode": REASON_CODE,
+        "reasonCode": reason_code,
         "cycleId": cycle_id,
         "correlationId": cycle_id,
         "workflowRunId": run_id,
@@ -143,8 +159,8 @@ def build_control_artifact(*, observed_at: str | None = None) -> tuple[dict[str,
         "generated_at": observed_at,
         "portfolio_cycle_id": cycle_id,
         "correlation_id": cycle_id,
-        "market_mode": MARKET_MODE,
-        "reason_code": REASON_CODE,
+        "market_mode": market_mode,
+        "reason_code": reason_code,
         "control_cycle": True,
         "runtime": {
             "trading_mode": "PAPER",
@@ -176,9 +192,12 @@ def verify_control_artifact(reports_dir: Path) -> None:
     marker = _load(reports_dir / "hourly-control-cycle.json")
     preflight = _load(reports_dir / "hourly-preflight.json")
     cycle = report.get("cycle") or {}
+    reason_code = marker.get("reasonCode")
+    if not isinstance(reason_code, str) or not SAFE_CODE.fullmatch(reason_code):
+        raise ValueError("control marker reason is invalid")
     if cycle.get("status") != "controlled_no_trade":
         raise ValueError("control cycle must be controlled_no_trade")
-    if cycle.get("executionReason") != REASON_CODE:
+    if cycle.get("executionReason") != reason_code:
         raise ValueError("control cycle reason is invalid")
     if cycle.get("executionAttempted") is not False:
         raise ValueError("control cycle must not attempt execution")
@@ -188,7 +207,7 @@ def verify_control_artifact(reports_dir: Path) -> None:
         raise ValueError("control marker schema is invalid")
     if marker.get("cycleClass") != "control" or marker.get("artifactBacked") is not True:
         raise ValueError("control marker classification is invalid")
-    if preflight.get("control_cycle") is not True:
+    if preflight.get("control_cycle") is not True or preflight.get("reason_code") != reason_code:
         raise ValueError("control preflight marker is missing")
     if preflight.get("portfolio_cycle_id") != cycle.get("id"):
         raise ValueError("control artifact cycle IDs do not match")
@@ -198,20 +217,27 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--reports-dir", type=Path, default=Path("reports"))
     parser.add_argument("--verify-only", action="store_true")
+    parser.add_argument("--reason-code", default=DEFAULT_REASON_CODE)
+    parser.add_argument("--market-mode", default=DEFAULT_MARKET_MODE)
+    parser.add_argument("--warning")
     args = parser.parse_args()
     if args.verify_only:
         verify_control_artifact(args.reports_dir)
         print("Verified hourly control artifact contract")
         return 0
 
-    report, supporting = build_control_artifact()
+    report, supporting = build_control_artifact(
+        reason_code=args.reason_code,
+        market_mode=args.market_mode,
+        warning=args.warning,
+    )
     _write(args.reports_dir / "hourly-auto-trading-report.json", report)
     _write(args.reports_dir / "hourly-control-cycle.json", supporting["marker"])
     _write(args.reports_dir / "hourly-preflight.json", supporting["preflight"])
     verify_control_artifact(args.reports_dir)
     print(
         "Built hourly control artifact: "
-        f"cycle={report['cycle']['id']} reason={REASON_CODE}"
+        f"cycle={report['cycle']['id']} reason={report['cycle']['executionReason']}"
     )
     return 0
 
