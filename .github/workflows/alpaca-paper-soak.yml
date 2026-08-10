@@ -100,6 +100,38 @@ jobs:
             --body "Alpaca Paper soak command: **${result}** · ${detail} · ${GITHUB_RUN_URL}"
           gh issue close "${COMMAND_ISSUE_NUMBER}" --reason completed
 
+  inactive-control-artifact:
+    if: >-
+      always() &&
+      needs.control.result == 'success' &&
+      needs.control.outputs.should_run != 'true'
+    needs: control
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout Manager_Agent
+        uses: actions/checkout@v4
+
+      - name: Build inactive-soak control artifact
+        run: >-
+          python scripts/build_hourly_control_artifact.py
+          --reason-code scheduled_paper_cycle_not_authorized
+          --market-mode SOAK_INACTIVE
+          --warning "Alpaca Paper soak is inactive; no trading agents or broker mutation were attempted."
+
+      - name: Verify inactive-soak artifact contract
+        run: python scripts/build_hourly_control_artifact.py --verify-only
+
+      - name: Upload authoritative inactive-soak artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: hourly-auto-trading-report
+          path: reports/
+          if-no-files-found: error
+          retention-days: 30
+
   paper-cycle:
     if: needs.control.outputs.should_run == 'true'
     needs: control
