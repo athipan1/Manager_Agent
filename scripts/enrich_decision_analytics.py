@@ -25,6 +25,10 @@ STAGE_ORDER = (
     "risk",
     "execution",
 )
+CONTROL_REASON_CODES = {
+    "hourly_schedule_disabled",
+    "scheduled_paper_cycle_not_authorized",
+}
 SEVERITY_ORDER = {"critical": 0, "warning": 1, "info": 2}
 SAFE_CODE_PATTERN = re.compile(r"[^a-zA-Z0-9_.:-]+")
 SECRET_PATTERN = re.compile(
@@ -109,8 +113,16 @@ def _valid_cycle(cycle: Mapping[str, Any]) -> bool:
     return [stage.get("id") for stage in _list(row.get("stages"))] == list(STAGE_ORDER)
 
 
+def _is_control_cycle(cycle: Mapping[str, Any]) -> bool:
+    return _safe_code(cycle.get("reasonCode")) in CONTROL_REASON_CODES
+
+
 def _meaningful_cycles(cycles: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    return [cycle for cycle in cycles if cycle.get("source") == "hourly_artifact"]
+    return [
+        cycle
+        for cycle in cycles
+        if cycle.get("source") == "hourly_artifact" and not _is_control_cycle(cycle)
+    ]
 
 
 def _candidate_stage_index(candidate: Mapping[str, Any]) -> int | None:
@@ -247,7 +259,7 @@ def _trend(meaningful: list[dict[str, Any]]) -> dict[str, Any]:
 def _consecutive_metadata_only(cycles: list[dict[str, Any]]) -> int:
     count = 0
     for cycle in cycles:
-        if cycle.get("source") != "workflow_metadata":
+        if cycle.get("source") != "workflow_metadata" or _is_control_cycle(cycle):
             break
         count += 1
     return count
@@ -393,6 +405,15 @@ def build_analytics(snapshot: Mapping[str, Any]) -> dict[str, Any]:
         raise ValueError("Phase 18 decision analytics requires seven-stage decision cycles")
 
     meaningful = _meaningful_cycles(raw_cycles)
+    control_cycles = [cycle for cycle in raw_cycles if _is_control_cycle(cycle)]
+    metadata_only_cycles = [
+        cycle
+        for cycle in raw_cycles
+        if cycle.get("source") == "workflow_metadata" and not _is_control_cycle(cycle)
+    ]
+    artifact_backed_cycles = [
+        cycle for cycle in raw_cycles if cycle.get("source") == "hourly_artifact"
+    ]
     windows = [_aggregate_window(meaningful, size) for size in WINDOW_SIZES]
     window6 = windows[0]
     alerts = _build_alerts(snapshot, raw_cycles, meaningful, window6)
@@ -416,8 +437,14 @@ def build_analytics(snapshot: Mapping[str, Any]) -> dict[str, Any]:
         "dataQuality": {
             "historyCycles": len(raw_cycles),
             "meaningfulCycles": len(meaningful),
-            "metadataOnlyCycles": sum(cycle.get("source") == "workflow_metadata" for cycle in raw_cycles),
+            "controlCycles": len(control_cycles),
+            "metadataOnlyCycles": len(metadata_only_cycles),
+            "artifactBackedCycles": len(artifact_backed_cycles),
+            "artifactCoverageRate": _ratio(len(artifact_backed_cycles), len(raw_cycles)),
             "latestCycleSource": _safe_code(raw_cycles[0].get("source")) or "unknown",
+            "latestCycleClass": "control" if _is_control_cycle(raw_cycles[0]) else (
+                "metadata_gap" if raw_cycles[0].get("source") == "workflow_metadata" else "decision"
+            ),
             "latestReasonCode": _safe_code(raw_cycles[0].get("reasonCode")),
             "latestMeaningfulObservedAt": latest_meaningful.get("observedAt") if latest_meaningful else None,
             "sufficientFor6CycleWindow": len(meaningful) >= 6,
@@ -456,6 +483,8 @@ def main() -> int:
         "Enriched decision analytics: "
         f"status={analytics['overallStatus']} "
         f"meaningful={analytics['dataQuality']['meaningfulCycles']} "
+        f"control={analytics['dataQuality']['controlCycles']} "
+        f"metadata_gaps={analytics['dataQuality']['metadataOnlyCycles']} "
         f"alerts={len(analytics['alerts'])}"
     )
     return 0

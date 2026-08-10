@@ -175,8 +175,12 @@ def test_excludes_metadata_cycles_from_trading_metrics_and_alerts_data_quality()
     assert analytics["dataQuality"] == {
         "historyCycles": 4,
         "meaningfulCycles": 1,
+        "controlCycles": 0,
         "metadataOnlyCycles": 3,
+        "artifactBackedCycles": 1,
+        "artifactCoverageRate": 0.25,
         "latestCycleSource": "workflow_metadata",
+        "latestCycleClass": "metadata_gap",
         "latestReasonCode": "hourly_artifact_unavailable",
         "latestMeaningfulObservedAt": "2026-08-09T14:00:00Z",
         "sufficientFor6CycleWindow": False,

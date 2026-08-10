@@ -90,6 +90,34 @@ permissions:
   issues: read
 
 jobs:
+  scheduled-control-cycle:
+    if: >-
+      github.event_name == 'schedule' &&
+      vars.HOURLY_PAPER_SCHEDULE_ENABLED != 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout Manager_Agent
+        uses: actions/checkout@v4
+        with:
+          path: Manager_Agent
+
+      - name: Build intentional schedule-disabled artifact
+        working-directory: Manager_Agent
+        run: python scripts/build_hourly_control_artifact.py
+
+      - name: Verify control-cycle artifact contract
+        working-directory: Manager_Agent
+        run: python scripts/build_hourly_control_artifact.py --verify-only
+
+      - name: Upload hourly control audit
+        uses: actions/upload-artifact@v4
+        with:
+          name: hourly-auto-trading-report
+          path: Manager_Agent/reports/
+          if-no-files-found: error
+          retention-days: 30
+
   hourly-portfolio-cycle:
     if: >-
       github.event_name != 'schedule' ||
