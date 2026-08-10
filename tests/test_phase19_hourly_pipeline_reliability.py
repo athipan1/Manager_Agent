@@ -110,6 +110,24 @@ def test_disabled_schedule_artifact_is_safe_and_broker_inert(monkeypatch) -> Non
     assert supporting["preflight"]["portfolio_cycle_id"] == report["cycle"]["id"]
 
 
+def test_control_artifact_supports_inactive_soak_reason(monkeypatch) -> None:
+    monkeypatch.setenv("GITHUB_RUN_ID", "31360000002")
+    monkeypatch.setenv("GITHUB_WORKFLOW", "Alpaca Paper Soak")
+    report, supporting = build_control_artifact(
+        observed_at="2026-08-10T05:17:00+00:00",
+        reason_code="scheduled_paper_cycle_not_authorized",
+        market_mode="SOAK_INACTIVE",
+        warning="Alpaca Paper soak is inactive.",
+    )
+
+    assert report["cycle"]["marketMode"] == "SOAK_INACTIVE"
+    assert report["cycle"]["executionReason"] == "scheduled_paper_cycle_not_authorized"
+    assert report["cycle"]["executionAttempted"] is False
+    assert report["cycle"]["brokerOrdersSubmitted"] is False
+    assert supporting["marker"]["cycleClass"] == "control"
+    assert supporting["marker"]["reasonCode"] == "scheduled_paper_cycle_not_authorized"
+
+
 def test_control_cycles_do_not_distort_decision_metrics_or_metadata_gap_count() -> None:
     decision_candidate = {
         "symbol": "AAPL",
@@ -195,5 +213,16 @@ def test_hourly_workflow_contains_lightweight_disabled_schedule_artifact_job() -
     assert "scheduled-control-cycle:" in workflow
     assert "vars.HOURLY_PAPER_SCHEDULE_ENABLED != 'true'" in workflow
     assert "python scripts/build_hourly_control_artifact.py" in workflow
+    assert "name: hourly-auto-trading-report" in workflow
+    assert "if-no-files-found: error" in workflow
+
+
+def test_inactive_soak_publishes_authoritative_control_artifact() -> None:
+    workflow = Path(".github/workflows/alpaca-paper-soak.yml").read_text(encoding="utf-8")
+
+    assert "inactive-control-artifact:" in workflow
+    assert "needs.control.outputs.should_run != 'true'" in workflow
+    assert "--market-mode SOAK_INACTIVE" in workflow
+    assert "--reason-code scheduled_paper_cycle_not_authorized" in workflow
     assert "name: hourly-auto-trading-report" in workflow
     assert "if-no-files-found: error" in workflow
