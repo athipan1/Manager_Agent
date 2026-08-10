@@ -90,6 +90,51 @@ permissions:
   issues: read
 
 jobs:
+  scheduled-control-cycle:
+    if: >-
+      github.event_name == 'schedule' &&
+      vars.HOURLY_PAPER_SCHEDULE_ENABLED != 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout Manager_Agent
+        uses: actions/checkout@v4
+        with:
+          path: Manager_Agent
+
+      - name: Build intentional schedule-disabled artifact
+        working-directory: Manager_Agent
+        run: python scripts/build_hourly_control_artifact.py
+
+      - name: Verify control-cycle artifact contract
+        working-directory: Manager_Agent
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          report = json.loads(Path('reports/hourly-auto-trading-report.json').read_text())
+          marker = json.loads(Path('reports/hourly-control-cycle.json').read_text())
+          preflight = json.loads(Path('reports/hourly-preflight.json').read_text())
+          assert report['cycle']['status'] == 'controlled_no_trade'
+          assert report['cycle']['executionReason'] == 'hourly_schedule_disabled'
+          assert report['cycle']['executionAttempted'] is False
+          assert report['cycle']['brokerOrdersSubmitted'] is False
+          assert marker['schemaVersion'] == 'hourly-control-cycle.v1'
+          assert marker['cycleClass'] == 'control'
+          assert marker['artifactBacked'] is True
+          assert preflight['control_cycle'] is True
+          assert preflight['portfolio_cycle_id'] == report['cycle']['id']
+          PY
+
+      - name: Upload hourly control audit
+        uses: actions/upload-artifact@v4
+        with:
+          name: hourly-auto-trading-report
+          path: Manager_Agent/reports/
+          if-no-files-found: error
+          retention-days: 30
+
   hourly-portfolio-cycle:
     if: >-
       github.event_name != 'schedule' ||
