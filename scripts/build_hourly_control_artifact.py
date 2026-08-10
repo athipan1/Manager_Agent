@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build a safe artifact for an intentionally disabled hourly Paper schedule.
+"""Build and verify a safe artifact for an intentionally disabled hourly Paper schedule.
 
 This path must stay lightweight: it never contacts agents, databases, Risk,
 Execution, Alpaca, or Docker. Its only job is to make an intentional control
@@ -164,14 +164,51 @@ def _write(path: Path, payload: dict[str, Any]) -> None:
     )
 
 
+def _load(path: Path) -> dict[str, Any]:
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(payload, dict):
+        raise ValueError(f"{path} must contain a JSON object")
+    return payload
+
+
+def verify_control_artifact(reports_dir: Path) -> None:
+    report = _load(reports_dir / "hourly-auto-trading-report.json")
+    marker = _load(reports_dir / "hourly-control-cycle.json")
+    preflight = _load(reports_dir / "hourly-preflight.json")
+    cycle = report.get("cycle") or {}
+    if cycle.get("status") != "controlled_no_trade":
+        raise ValueError("control cycle must be controlled_no_trade")
+    if cycle.get("executionReason") != REASON_CODE:
+        raise ValueError("control cycle reason is invalid")
+    if cycle.get("executionAttempted") is not False:
+        raise ValueError("control cycle must not attempt execution")
+    if cycle.get("brokerOrdersSubmitted") is not False:
+        raise ValueError("control cycle must not submit broker orders")
+    if marker.get("schemaVersion") != SCHEMA_VERSION:
+        raise ValueError("control marker schema is invalid")
+    if marker.get("cycleClass") != "control" or marker.get("artifactBacked") is not True:
+        raise ValueError("control marker classification is invalid")
+    if preflight.get("control_cycle") is not True:
+        raise ValueError("control preflight marker is missing")
+    if preflight.get("portfolio_cycle_id") != cycle.get("id"):
+        raise ValueError("control artifact cycle IDs do not match")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--reports-dir", type=Path, default=Path("reports"))
+    parser.add_argument("--verify-only", action="store_true")
     args = parser.parse_args()
+    if args.verify_only:
+        verify_control_artifact(args.reports_dir)
+        print("Verified hourly control artifact contract")
+        return 0
+
     report, supporting = build_control_artifact()
     _write(args.reports_dir / "hourly-auto-trading-report.json", report)
     _write(args.reports_dir / "hourly-control-cycle.json", supporting["marker"])
     _write(args.reports_dir / "hourly-preflight.json", supporting["preflight"])
+    verify_control_artifact(args.reports_dir)
     print(
         "Built hourly control artifact: "
         f"cycle={report['cycle']['id']} reason={REASON_CODE}"
