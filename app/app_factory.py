@@ -3,6 +3,7 @@ from __future__ import annotations
 from fastapi import FastAPI
 
 from .dashboard_security import configure_dashboard_cors
+from .routes.owner_dashboard import router as owner_dashboard_router
 from .routes.web_control import router as web_control_router
 from .routes.web_finance import router as web_finance_router
 from .routes.wiring import (
@@ -54,5 +55,6 @@ def create_app(
     if include_web_control:
         app.include_router(web_control_router)
         app.include_router(web_finance_router)
+        app.include_router(owner_dashboard_router)
 
     return app
