@@ -1,38 +1,80 @@
-from unittest.mock import AsyncMock, patch
+from pathlib import Path
 
 from fastapi.testclient import TestClient
 
 from app.main import app
 
 
-OWNER_PAYLOAD = {
-    "generated_at": "2026-08-12T07:00:00+00:00",
-    "data_source": "broker_fallback",
-    "balance": {
-        "cash": "12500.25",
-        "equity": "15120.75",
-        "buying_power": "25000.50",
+FULL_OWNER_SNAPSHOT = {
+    "schemaVersion": "dashboard-snapshot.v2",
+    "generatedAt": "2026-08-12T17:00:00Z",
+    "workflow": {
+        "runId": 31621024738,
+        "runNumber": 776,
+        "conclusion": "success",
+    },
+    "runtime": {
+        "mode": "PAPER",
+        "brokerMode": "ALPACA",
+        "flow": "hourly_portfolio_cycle",
+    },
+    "account": {
+        "cash": 12500.25,
+        "equity": 15120.75,
+        "buyingPower": 25000.50,
         "status": "ACTIVE",
+        "lastSyncedAt": "2026-08-12T17:00:00Z",
+        "valuesMasked": False,
+    },
+    "summary": {
+        "positionCount": 1,
+        "openOrderCount": 0,
+        "executionStatus": "not_attempted",
+        "executionReason": "no_trade",
     },
     "positions": [
         {
             "symbol": "AAPL",
-            "qty": "2",
-            "avg_entry_price": "200.00",
-            "current_price": "205.00",
-            "market_value": "410.00",
-            "unrealized_pl": "10.00",
+            "quantity": 2,
+            "averageCost": 200.0,
+            "currentPrice": 205.0,
+            "marketValue": 410.0,
+            "unrealizedPnL": 10.0,
+            "bucket": "core",
+            "protection": {
+                "status": "protected",
+                "hasStopLoss": True,
+                "hasTakeProfit": False,
+                "hasBracket": False,
+            },
+            "valuesMasked": False,
         }
     ],
-    "open_orders": [],
-    "curator_signals": [],
-    "problems": [],
-    "summary": {"problem_count": 0},
+    "openOrders": [],
+    "signals": [],
+    "privacy": {"mode": "full", "valuesMasked": False},
+    "error": None,
 }
 
 
-def test_owner_snapshot_requires_operator_token(monkeypatch):
+def _configure(monkeypatch, tmp_path: Path) -> Path:
+    path = tmp_path / "owner-snapshot.json"
     monkeypatch.setenv("WEB_CONTROL_OPERATOR_TOKEN", "owner-secret")
+    monkeypatch.setenv("OWNER_SNAPSHOT_PUBLISH_TOKEN", "publisher-secret")
+    monkeypatch.setenv("OWNER_SNAPSHOT_STORE_PATH", str(path))
+    return path
+
+
+def _publish(client: TestClient, payload=None):
+    return client.post(
+        "/web-control/owner-snapshot/publish",
+        headers={"X-Owner-Snapshot-Token": "publisher-secret"},
+        json=payload or FULL_OWNER_SNAPSHOT,
+    )
+
+
+def test_owner_snapshot_requires_operator_token(monkeypatch, tmp_path):
+    _configure(monkeypatch, tmp_path)
     client = TestClient(app)
 
     response = client.get("/web-control/owner-snapshot")
@@ -40,18 +82,33 @@ def test_owner_snapshot_requires_operator_token(monkeypatch):
     assert response.status_code == 401
 
 
-def test_owner_snapshot_returns_full_values_without_cache(monkeypatch):
-    monkeypatch.setenv("WEB_CONTROL_OPERATOR_TOKEN", "owner-secret")
+def test_owner_snapshot_requires_publisher_token(monkeypatch, tmp_path):
+    _configure(monkeypatch, tmp_path)
     client = TestClient(app)
 
-    with patch(
-        "app.routes.owner_dashboard._dashboard_payload",
-        new=AsyncMock(return_value=OWNER_PAYLOAD),
-    ):
-        response = client.get(
-            "/web-control/owner-snapshot?account_id=1",
-            headers={"X-Operator-Token": "owner-secret"},
-        )
+    response = client.post(
+        "/web-control/owner-snapshot/publish",
+        json=FULL_OWNER_SNAPSHOT,
+    )
+
+    assert response.status_code == 401
+
+
+def test_publish_then_read_owner_snapshot_from_github_actions(monkeypatch, tmp_path):
+    store_path = _configure(monkeypatch, tmp_path)
+    client = TestClient(app)
+
+    published = _publish(client)
+    assert published.status_code == 200
+    assert published.json()["status"] == "stored"
+    assert published.json()["source"] == "github-actions"
+    assert published.json()["workflowRunId"] == 31621024738
+    assert store_path.exists()
+
+    response = client.get(
+        "/web-control/owner-snapshot",
+        headers={"X-Operator-Token": "owner-secret"},
+    )
 
     assert response.status_code == 200
     body = response.json()
@@ -60,25 +117,67 @@ def test_owner_snapshot_returns_full_values_without_cache(monkeypatch):
     assert body["account"]["equity"] == 15120.75
     assert body["account"]["buyingPower"] == 25000.5
     assert body["positions"][0]["marketValue"] == 410.0
+    assert body["summary"]["dataSource"] == "github-actions-owner-snapshot"
     assert response.headers["cache-control"] == "no-store, max-age=0"
     assert response.headers["x-privacy-mode"] == "owner-authenticated"
-    assert response.headers["x-request-id"]
+    assert response.headers["x-owner-snapshot-source"] == "github-actions"
+    assert response.headers["x-owner-snapshot-run-id"] == "31621024738"
 
 
-def test_owner_snapshot_hides_upstream_failure_details(monkeypatch):
-    monkeypatch.setenv("WEB_CONTROL_OPERATOR_TOKEN", "owner-secret")
+def test_owner_snapshot_does_not_fallback_to_live_dependencies(monkeypatch, tmp_path):
+    _configure(monkeypatch, tmp_path)
     client = TestClient(app)
 
-    with patch(
-        "app.routes.owner_dashboard._dashboard_payload",
-        new=AsyncMock(side_effect=RuntimeError("https://secret.internal?api_key=should-not-leak")),
-    ):
-        response = client.get(
-            "/web-control/owner-snapshot",
-            headers={"X-Operator-Token": "owner-secret"},
-        )
+    response = client.get(
+        "/web-control/owner-snapshot",
+        headers={"X-Operator-Token": "owner-secret"},
+    )
 
-    assert response.status_code == 502
-    assert response.json()["detail"] == "Owner dashboard snapshot is temporarily unavailable."
-    assert "secret.internal" not in response.text
-    assert "api_key" not in response.text
+    assert response.status_code == 503
+    assert response.json()["detail"] == "No GitHub Actions owner snapshot has been published yet."
+
+
+def test_publish_rejects_masked_or_empty_account_values(monkeypatch, tmp_path):
+    _configure(monkeypatch, tmp_path)
+    client = TestClient(app)
+    masked = {
+        **FULL_OWNER_SNAPSHOT,
+        "account": {
+            **FULL_OWNER_SNAPSHOT["account"],
+            "cash": None,
+            "equity": None,
+            "buyingPower": None,
+            "valuesMasked": True,
+        },
+        "privacy": {"mode": "masked", "valuesMasked": True},
+    }
+
+    response = _publish(client, masked)
+
+    assert response.status_code == 422
+
+
+def test_publish_rejects_secret_fields(monkeypatch, tmp_path):
+    _configure(monkeypatch, tmp_path)
+    client = TestClient(app)
+    payload = {**FULL_OWNER_SNAPSHOT, "api_key": "must-not-be-stored"}
+
+    response = _publish(client, payload)
+
+    assert response.status_code == 422
+    assert "must-not-be-stored" not in response.text
+
+
+def test_publish_rejects_older_workflow_run(monkeypatch, tmp_path):
+    _configure(monkeypatch, tmp_path)
+    client = TestClient(app)
+    assert _publish(client).status_code == 200
+    older = {
+        **FULL_OWNER_SNAPSHOT,
+        "workflow": {**FULL_OWNER_SNAPSHOT["workflow"], "runId": 31621024737},
+        "generatedAt": "2026-08-12T16:00:00Z",
+    }
+
+    response = _publish(client, older)
+
+    assert response.status_code == 409

@@ -1,0 +1,161 @@
+name: Publish Secure Owner Snapshot
+
+on:
+  workflow_run:
+    workflows:
+      - Hourly Auto Trading
+      - Alpaca Paper Soak
+      - Manual Alpaca Paper Trading
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: "Artifact-producing Manager workflow run ID"
+        required: true
+        type: string
+
+permissions:
+  actions: read
+  contents: read
+
+concurrency:
+  group: publish-secure-owner-snapshot
+  cancel-in-progress: false
+
+jobs:
+  publish-owner-snapshot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      OWNER_SNAPSHOT_PUBLISH_URL: ${{ vars.OWNER_SNAPSHOT_PUBLISH_URL || 'https://manageragent-production.up.railway.app' }}
+      OWNER_SNAPSHOT_PUBLISH_TOKEN: ${{ secrets.OWNER_SNAPSHOT_PUBLISH_TOKEN }}
+    steps:
+      - name: Checkout Manager source
+        uses: actions/checkout@v6
+        with:
+          ref: main
+
+      - name: Resolve source run and artifact
+        id: source
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT_RUN_ID: ${{ github.event.workflow_run.id || '' }}
+          REQUESTED_RUN_ID: ${{ inputs.run_id || '' }}
+        run: |
+          set -euo pipefail
+          run_id="${EVENT_RUN_ID:-${REQUESTED_RUN_ID:-}}"
+          if [ -z "$run_id" ]; then
+            echo "A source workflow run ID is required."
+            exit 1
+          fi
+
+          artifact_count=$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}/artifacts" \
+            --jq '[.artifacts[] | select(.name == "hourly-auto-trading-report" and (.expired | not))] | length')
+          if [ "$artifact_count" -eq 0 ]; then
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+            echo "run_id=$run_id" >> "$GITHUB_OUTPUT"
+            echo "Source run has no current hourly report artifact; secure owner values will not be replaced."
+            exit 0
+          fi
+
+          echo "publish=true" >> "$GITHUB_OUTPUT"
+          echo "run_id=$run_id" >> "$GITHUB_OUTPUT"
+
+      - name: Download private hourly report
+        if: steps.source.outputs.publish == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ steps.source.outputs.run_id }}
+        run: |
+          set -euo pipefail
+          mkdir -p reports/hourly-artifact
+          gh run download "$RUN_ID" \
+            --name hourly-auto-trading-report \
+            --dir reports/hourly-artifact
+
+      - name: Build full owner snapshot in ephemeral runner storage
+        if: steps.source.outputs.publish == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ steps.source.outputs.run_id }}
+        run: |
+          set -euo pipefail
+          input_path=$(find reports/hourly-artifact -type f -name hourly-auto-trading-report.json -print -quit 2>/dev/null || true)
+          if [ -z "$input_path" ]; then
+            echo "Hourly report artifact did not contain hourly-auto-trading-report.json."
+            exit 1
+          fi
+
+          gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${RUN_ID}" \
+            --jq '{runId: .id, runNumber: .run_number, runUrl: .html_url, workflowName: .name, eventName: .event, status: .status, conclusion: (.conclusion // "unknown"), startedAt: .run_started_at, completedAt: .updated_at}' \
+            > reports/workflow-metadata.json
+
+          python scripts/normalize_hourly_operator_report.py \
+            --input "$input_path" \
+            --output reports/normalized-hourly-auto-trading-report.json
+
+          python scripts/export_dashboard_snapshot.py \
+            --input reports/normalized-hourly-auto-trading-report.json \
+            --workflow-metadata reports/workflow-metadata.json \
+            --output reports/latest-owner-dashboard-snapshot.json \
+            --privacy-mode full \
+            --expected-interval-minutes 60 \
+            --stale-after-minutes 120
+
+      - name: Validate value-bearing owner snapshot
+        if: steps.source.outputs.publish == 'true'
+        id: owner
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          path = Path('reports/latest-owner-dashboard-snapshot.json')
+          payload = json.loads(path.read_text(encoding='utf-8'))
+          assert payload['schemaVersion'] == 'dashboard-snapshot.v2'
+          assert payload['privacy'] == {'mode': 'full', 'valuesMasked': False}
+          assert payload['account']['valuesMasked'] is False
+
+          account = payload['account']
+          has_values = any(account.get(key) is not None for key in ('cash', 'equity', 'buyingPower'))
+          with open(os.environ['GITHUB_OUTPUT'], 'a', encoding='utf-8') as output:
+              output.write(f"has_values={'true' if has_values else 'false'}\n")
+
+          if not has_values:
+              print('Source run contains no account values; keeping the previous secure owner snapshot.')
+          PY
+
+      - name: Require secure publisher configuration
+        if: steps.source.outputs.publish == 'true' && steps.owner.outputs.has_values == 'true'
+        run: |
+          set -euo pipefail
+          if [ -z "${OWNER_SNAPSHOT_PUBLISH_TOKEN:-}" ]; then
+            echo "OWNER_SNAPSHOT_PUBLISH_TOKEN GitHub Actions secret is required."
+            exit 1
+          fi
+          if [ -z "${OWNER_SNAPSHOT_PUBLISH_URL:-}" ]; then
+            echo "OWNER_SNAPSHOT_PUBLISH_URL is required."
+            exit 1
+          fi
+
+      - name: Publish owner snapshot to Manager_Agent
+        if: steps.source.outputs.publish == 'true' && steps.owner.outputs.has_values == 'true'
+        run: |
+          set -euo pipefail
+          curl --silent --show-error --fail-with-body \
+            --request POST \
+            --header "Content-Type: application/json" \
+            --header "X-Owner-Snapshot-Token: ${OWNER_SNAPSHOT_PUBLISH_TOKEN}" \
+            --data-binary @reports/latest-owner-dashboard-snapshot.json \
+            "${OWNER_SNAPSHOT_PUBLISH_URL%/}/web-control/owner-snapshot/publish"
+          echo
+          echo "Secure owner snapshot published from GitHub Actions."
+
+      - name: Remove full-value snapshot from runner workspace
+        if: always()
+        run: |
+          rm -f reports/latest-owner-dashboard-snapshot.json
+          rm -f reports/normalized-hourly-auto-trading-report.json
+          rm -rf reports/hourly-artifact
