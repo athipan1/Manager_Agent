@@ -96,6 +96,76 @@ remain advisory-display compatible during migration, but Manager logs a
 deprecation warning and will not auto-execute a response without deterministic
 lifecycle identity.
 
+### 6. Phase 24: GitHub Actions → Secure Owner Snapshot
+
+หน้า `Trading_Frontend` ไม่จำเป็นต้องเรียก Alpaca, Execution_Agent หรือ Database_Agent แบบสดเพื่อแสดงยอดบัญชีของเจ้าของ ระบบใช้ผลที่สร้างจาก GitHub Actions ล่าสุดแทน
+
+```text
+Hourly / Manual GitHub Action
+        │
+        ├─ รัน Manager + Execution + Risk + Agents ภายใน runner ตาม workflow
+        │
+        ├─ สร้าง hourly-auto-trading-report artifact
+        │
+        ├─ Public Dashboard Snapshot
+        │      └─ privacy=masked → dashboard-data → Trading_Frontend
+        │
+        └─ Secure Owner Snapshot
+               ├─ สร้าง dashboard-snapshot.v2 แบบ privacy=full ใน runner ชั่วคราว
+               ├─ ไม่ upload artifact และไม่ commit ข้อมูลเต็มลง GitHub
+               └─ POST ผ่าน HTTPS → Railway Manager_Agent
+                         ↓
+                  secure local snapshot store
+                         ↓
+Trading_Frontend Owner Secure View
+        └─ GET /web-control/owner-snapshot + X-Operator-Token
+```
+
+หลักการสำคัญ:
+
+- `Execution_Agent` ไม่จำเป็นต้อง deploy ค้างบน Railway เพื่อให้หน้าเว็บแสดงยอด ถ้า Execution ทำงานอยู่ภายใน GitHub Actions อยู่แล้ว
+- public snapshot ยังคง `masked` เสมอ เงินสด, equity, buying power และตัวเลข position ไม่ถูก commit แบบเปิดเผย
+- full owner snapshot ถูกสร้างเฉพาะใน ephemeral GitHub runner แล้วส่งตรงไป Manager_Agent ผ่าน HTTPS
+- ถ้า run ล่าสุดเป็น control-only, skipped หรือไม่มี account values ระบบจะ **ไม่เขียนทับ** owner snapshot ที่มีค่าจริงล่าสุด
+- Owner Secure View เป็น read-only และ `GET /web-control/owner-snapshot` ไม่ติดต่อ broker หรือ trading agents ตอนผู้ใช้เปิดหน้าเว็บ
+- publisher token และ operator token แยกจากกัน เพื่อให้ credential สำหรับส่ง snapshot ไม่สามารถใช้เปิดดูข้อมูลเจ้าของได้โดยอัตโนมัติ
+- Manager ปฏิเสธ snapshot ที่ masked, ไม่มี account values, มีชื่อ field ที่เข้าข่าย secret หรือมาจาก workflow run ที่เก่ากว่า snapshot ปัจจุบัน
+
+Environment บน Railway Manager_Agent:
+
+```env
+WEB_CONTROL_OPERATOR_TOKEN=<owner-read-token>
+OWNER_SNAPSHOT_PUBLISH_TOKEN=<github-actions-publisher-token>
+OWNER_SNAPSHOT_STORE_PATH=./config_data/latest-owner-dashboard-snapshot.json
+```
+
+GitHub Actions ต้องมี Repository Secret ชื่อ:
+
+```text
+OWNER_SNAPSHOT_PUBLISH_TOKEN
+```
+
+ค่าต้องตรงกับ `OWNER_SNAPSHOT_PUBLISH_TOKEN` บน Railway และต้องไม่ใช้ token เดียวกับ `WEB_CONTROL_OPERATOR_TOKEN`
+
+กำหนด Repository Variable `OWNER_SNAPSHOT_PUBLISH_URL` ได้ถ้าต้องการเปลี่ยนปลายทาง เช่น:
+
+```text
+https://manageragent-production.up.railway.app
+```
+
+ถ้าไม่กำหนด workflow จะใช้ Railway production URL ข้างต้นเป็นค่าเริ่มต้น
+
+Endpoints ของ Phase 24:
+
+| Endpoint | Method | Auth | หน้าที่ |
+| :--- | :--- | :--- | :--- |
+| `/web-control/owner-snapshot/publish` | `POST` | `X-Owner-Snapshot-Token` | รับ full snapshot จาก GitHub Actions และเก็บ snapshot ล่าสุด |
+| `/web-control/owner-snapshot` | `GET` | `X-Operator-Token` | ส่ง owner snapshot ล่าสุดให้ Frontend แบบ `no-store` |
+
+ไฟล์ `.github/workflows/publish-owner-snapshot.yml` รับ artifact จาก `Hourly Auto Trading`, `Alpaca Paper Soak` หรือ `Manual Alpaca Paper Trading` และ publish เฉพาะเมื่อ artifact มี account values จริง ส่วน `.github/workflows/publish-dashboard-snapshot.yml` ยังคงรับผิดชอบ public masked snapshot แยกกัน
+
+> หมายเหตุเรื่อง persistence: default store อยู่ใน filesystem ของ Manager container. หาก Railway service ถูก redeploy ก่อน GitHub Action ถัดไป snapshot อาจยังไม่มีชั่วคราว ควร mount persistent volume แล้วตั้ง `OWNER_SNAPSHOT_STORE_PATH=/data/latest-owner-dashboard-snapshot.json` สำหรับ production ที่ต้องการให้ snapshot อยู่รอดข้าม deployment.
+
 ---
 
 ## 📡 รายการ Endpoints
@@ -109,6 +179,8 @@ lifecycle identity.
 | `/scan-and-analyze` | `POST` | ค้นหาสินทรัพย์ที่น่าสนใจและวิเคราะห์/เทรดทันที |
 | `/alpha/health` | `GET` | ตรวจ health ของ Alpha-layer agents |
 | `/alpha/advisory` | `POST` | รวม advisory จาก Market Regime, Portfolio, Profit และ Performance Agent |
+| `/web-control/owner-snapshot` | `GET` | อ่าน secure owner snapshot ล่าสุดจาก GitHub Actions |
+| `/web-control/owner-snapshot/publish` | `POST` | รับ secure owner snapshot จาก GitHub Actions |
 
 ### Alpha Advisory payload
 
