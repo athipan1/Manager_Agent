@@ -217,6 +217,15 @@ def test_hourly_workflow_contains_lightweight_disabled_schedule_artifact_job() -
     assert "if-no-files-found: error" in workflow
 
 
+def test_hourly_workflow_uses_node24_action_releases() -> None:
+    workflow = Path(".github/workflows/hourly-auto-trading.yml").read_text(encoding="utf-8")
+
+    assert "actions/checkout@v6" in workflow
+    assert "actions/upload-artifact@v7" in workflow
+    assert "actions/checkout@v4" not in workflow
+    assert "actions/upload-artifact@v4" not in workflow
+
+
 def test_inactive_soak_publishes_authoritative_control_artifact() -> None:
     workflow = Path(".github/workflows/alpaca-paper-soak.yml").read_text(encoding="utf-8")
 
