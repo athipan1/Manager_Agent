@@ -98,7 +98,7 @@ jobs:
     timeout-minutes: 5
     steps:
       - name: Checkout Manager_Agent
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           path: Manager_Agent
 
@@ -111,7 +111,7 @@ jobs:
         run: python scripts/build_hourly_control_artifact.py --verify-only
 
       - name: Upload hourly control audit
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: hourly-auto-trading-report
           path: Manager_Agent/reports/
@@ -173,7 +173,7 @@ jobs:
 
     steps:
       - name: Checkout Manager_Agent
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           path: Manager_Agent
 
@@ -222,7 +222,7 @@ jobs:
           echo "PORTFOLIO_CYCLE_ID=${{ steps.preflight.outputs.portfolio_cycle_id }}" >> "$GITHUB_ENV"
 
       - name: Checkout Scanner_Agent
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           repository: athipan1/Scanner_Agent
           ref: main
@@ -230,7 +230,7 @@ jobs:
           fetch-depth: 1
 
       - name: Checkout Technical_Agent
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           repository: athipan1/Technical_Agent
           ref: main
@@ -238,7 +238,7 @@ jobs:
           fetch-depth: 1
 
       - name: Checkout Fundamental_Agent
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           repository: athipan1/Fundamental_Agent
           ref: main
@@ -246,7 +246,7 @@ jobs:
           fetch-depth: 1
 
       - name: Checkout Backtest_Agent
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           repository: athipan1/Backtest_Agent
           ref: main
@@ -254,7 +254,7 @@ jobs:
           fetch-depth: 1
 
       - name: Checkout Execution_Agent
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           repository: athipan1/Execution_Agent
           ref: main
@@ -262,7 +262,7 @@ jobs:
           fetch-depth: 1
 
       - name: Checkout Risk_Agent
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           repository: athipan1/Risk_Agent
           ref: main
@@ -270,7 +270,7 @@ jobs:
           fetch-depth: 1
 
       - name: Checkout Portfolio_Agent
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           repository: athipan1/Portfolio_Agent
           ref: main
@@ -278,7 +278,7 @@ jobs:
           fetch-depth: 1
 
       - name: Checkout Profit_Agent
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           repository: athipan1/Profit_Agent
           ref: main
@@ -286,7 +286,7 @@ jobs:
           fetch-depth: 1
 
       - name: Checkout Performance_Agent
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           repository: athipan1/Performance_Agent
           ref: main
@@ -294,7 +294,7 @@ jobs:
           fetch-depth: 1
 
       - name: Checkout Market_Regime_Agent
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           repository: athipan1/Market_Regime_Agent
           ref: main
@@ -303,7 +303,7 @@ jobs:
 
       - name: Checkout local-only dependencies for Simulator dry run
         if: steps.preflight.outputs.paper_automation != 'true'
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           repository: athipan1/Database_Agent
           ref: main
@@ -312,7 +312,7 @@ jobs:
 
       - name: Checkout Learning_Agent for Simulator dry run
         if: steps.preflight.outputs.paper_automation != 'true'
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           repository: athipan1/Learning_Agent
           ref: main
@@ -488,7 +488,7 @@ jobs:
 
       - name: Upload hourly portfolio audit
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: hourly-auto-trading-report
           path: Manager_Agent/reports/
