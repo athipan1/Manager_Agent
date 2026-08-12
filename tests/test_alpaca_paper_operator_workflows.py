@@ -48,6 +48,16 @@ def test_soak_workflow_runs_hourly_with_durable_state_and_failure_halt():
     assert "authorized_soak_schedule: true" in workflow
 
 
+def test_soak_workflow_uses_node24_action_releases():
+    workflow = text("alpaca-paper-soak.yml")
+    assert "actions/checkout@v6" in workflow
+    assert "actions/upload-artifact@v7" in workflow
+    assert "actions/download-artifact@v8" in workflow
+    assert "actions/checkout@v4" not in workflow
+    assert "actions/upload-artifact@v4" not in workflow
+    assert "actions/download-artifact@v4" not in workflow
+
+
 def test_soak_issue_command_is_owner_only_and_starts_exactly_24_hours():
     workflow = text("alpaca-paper-soak.yml")
     assert "issues:" in workflow
