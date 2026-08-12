@@ -57,7 +57,7 @@ jobs:
       status: ${{ steps.control.outputs.status }}
     steps:
       - name: Checkout Manager_Agent
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Resolve durable soak state
         id: control
@@ -112,7 +112,7 @@ jobs:
       contents: read
     steps:
       - name: Checkout Manager_Agent
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Build inactive-soak control artifact
         run: >-
@@ -125,7 +125,7 @@ jobs:
         run: python scripts/build_hourly_control_artifact.py --verify-only
 
       - name: Upload authoritative inactive-soak artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: hourly-auto-trading-report
           path: reports/
@@ -162,12 +162,12 @@ jobs:
       issues: write
     steps:
       - name: Checkout Manager_Agent
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Download Paper cycle artifact
         id: download
         continue-on-error: true
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: hourly-auto-trading-report
           path: evidence/raw
@@ -201,7 +201,7 @@ jobs:
 
       - name: Upload soak evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: alpaca-paper-soak-evidence
           path: evidence/
