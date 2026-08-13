@@ -96,39 +96,56 @@ remain advisory-display compatible during migration, but Manager logs a
 deprecation warning and will not auto-execute a response without deterministic
 lifecycle identity.
 
-### 6. Phase 24: GitHub Actions → Secure Owner Snapshot
+### 6. Phase 24 / 24.1: GitHub Actions → Secure Owner Snapshot
 
-หน้า `Trading_Frontend` ไม่จำเป็นต้องเรียก Alpaca, Execution_Agent หรือ Database_Agent แบบสดเพื่อแสดงยอดบัญชีของเจ้าของ ระบบใช้ผลที่สร้างจาก GitHub Actions ล่าสุดแทน
+หน้า `Trading_Frontend` ไม่เรียก Alpaca, Execution_Agent หรือ Database_Agent แบบสดเพื่อแสดงยอดบัญชีเจ้าของ Railway Manager_Agent ทำหน้าที่เป็น read-only snapshot service และข้อมูลบัญชีมาจาก GitHub Actions ที่ตรวจ broker/reconciliation สำเร็จแล้ว
+
+Phase 24.1 กำหนดให้ `Broker Sync Check` เป็น **แหล่งข้อมูลที่ต้องการก่อน (preferred source)** สำหรับ Cash, Equity, Buying Power, Positions และ Open Orders เพราะ workflow นี้อ่าน Alpaca Paper โดยตรงและยืนยันว่า Database_Agent ตรงกับ broker snapshot ล่าสุด ส่วน `Hourly Auto Trading`, `Alpaca Paper Soak` และ `Manual Alpaca Paper Trading` ยังคงรองรับเป็น fallback เมื่อมี `hourly-auto-trading-report` ที่มี account values จริง
 
 ```text
-Hourly / Manual GitHub Action
+GitHub Actions
         │
-        ├─ รัน Manager + Execution + Risk + Agents ภายใน runner ตาม workflow
+        ├─ Broker Sync Check  ← preferred owner-balance source
+        │      ├─ Execution_Agent อ่าน Alpaca Paper
+        │      ├─ reconcile → Database_Agent
+        │      ├─ verify mismatch.is_synced = true
+        │      └─ broker-sync-check-reports
         │
-        ├─ สร้าง hourly-auto-trading-report artifact
+        ├─ Hourly / Soak / Manual Paper workflow  ← compatible fallback
+        │      └─ hourly-auto-trading-report
         │
-        ├─ Public Dashboard Snapshot
-        │      └─ privacy=masked → dashboard-data → Trading_Frontend
-        │
-        └─ Secure Owner Snapshot
-               ├─ สร้าง dashboard-snapshot.v2 แบบ privacy=full ใน runner ชั่วคราว
-               ├─ ไม่ upload artifact และไม่ commit ข้อมูลเต็มลง GitHub
-               └─ POST ผ่าน HTTPS → Railway Manager_Agent
+        └─ Publish Secure Owner Snapshot
+               ├─ เลือก broker-sync-check-reports ก่อน ถ้ามี
+               ├─ ยอมรับเฉพาะ source run ที่ conclusion=success
+               ├─ Broker Sync ต้องเป็น ALPACA + PAPER เท่านั้น
+               ├─ สร้าง dashboard-snapshot.v2 privacy=full ใน runner ชั่วคราว
+               ├─ ไม่ upload/commit full owner snapshot
+               └─ POST HTTPS → Railway Manager_Agent
                          ↓
-                  secure local snapshot store
+                  secure owner snapshot store
                          ↓
 Trading_Frontend Owner Secure View
         └─ GET /web-control/owner-snapshot + X-Operator-Token
 ```
 
+กฎ fail-closed ของ Broker Sync source:
+
+- `reconcile.status` ต้องเป็น success และ `reconcile.data.ok=true`
+- broker → Database sync ต้องสำเร็จ
+- `database_sync_status.data.has_snapshot=true`
+- `mismatch.is_synced=true`
+- broker account ต้องระบุ `paper=true`; live account จะถูกปฏิเสธ
+- account, positions และ orders response ต้องสำเร็จทั้งหมด
+- ต้องมีอย่างน้อยหนึ่งค่าจาก `cash`, `equity`, `buying_power`
+- source workflow ที่ failure/cancelled หรือ artifact ไม่ครบจะไม่เขียนทับ snapshot ล่าสุด
+
 หลักการสำคัญ:
 
-- `Execution_Agent` ไม่จำเป็นต้อง deploy ค้างบน Railway เพื่อให้หน้าเว็บแสดงยอด ถ้า Execution ทำงานอยู่ภายใน GitHub Actions อยู่แล้ว
+- `Execution_Agent` ไม่จำเป็นต้อง deploy ค้างบน Railway เพื่อให้หน้าเว็บแสดงยอด เพราะ Broker Sync/Hourly workflows สตาร์ต Execution_Agent ชั่วคราวภายใน GitHub runner
 - public snapshot ยังคง `masked` เสมอ เงินสด, equity, buying power และตัวเลข position ไม่ถูก commit แบบเปิดเผย
 - full owner snapshot ถูกสร้างเฉพาะใน ephemeral GitHub runner แล้วส่งตรงไป Manager_Agent ผ่าน HTTPS
-- ถ้า run ล่าสุดเป็น control-only, skipped หรือไม่มี account values ระบบจะ **ไม่เขียนทับ** owner snapshot ที่มีค่าจริงล่าสุด
 - Owner Secure View เป็น read-only และ `GET /web-control/owner-snapshot` ไม่ติดต่อ broker หรือ trading agents ตอนผู้ใช้เปิดหน้าเว็บ
-- publisher token และ operator token แยกจากกัน เพื่อให้ credential สำหรับส่ง snapshot ไม่สามารถใช้เปิดดูข้อมูลเจ้าของได้โดยอัตโนมัติ
+- publisher token และ operator token แยกจากกัน
 - Manager ปฏิเสธ snapshot ที่ masked, ไม่มี account values, มีชื่อ field ที่เข้าข่าย secret หรือมาจาก workflow run ที่เก่ากว่า snapshot ปัจจุบัน
 
 Environment บน Railway Manager_Agent:
@@ -155,14 +172,16 @@ https://manageragent-production.up.railway.app
 
 ถ้าไม่กำหนด workflow จะใช้ Railway production URL ข้างต้นเป็นค่าเริ่มต้น
 
-Endpoints ของ Phase 24:
+Endpoints ของ Phase 24 / 24.1:
 
 | Endpoint | Method | Auth | หน้าที่ |
 | :--- | :--- | :--- | :--- |
 | `/web-control/owner-snapshot/publish` | `POST` | `X-Owner-Snapshot-Token` | รับ full snapshot จาก GitHub Actions และเก็บ snapshot ล่าสุด |
 | `/web-control/owner-snapshot` | `GET` | `X-Operator-Token` | ส่ง owner snapshot ล่าสุดให้ Frontend แบบ `no-store` |
 
-ไฟล์ `.github/workflows/publish-owner-snapshot.yml` รับ artifact จาก `Hourly Auto Trading`, `Alpaca Paper Soak` หรือ `Manual Alpaca Paper Trading` และ publish เฉพาะเมื่อ artifact มี account values จริง ส่วน `.github/workflows/publish-dashboard-snapshot.yml` ยังคงรับผิดชอบ public masked snapshot แยกกัน
+ไฟล์ `.github/workflows/publish-owner-snapshot.yml` ฟัง `Broker Sync Check`, `Hourly Auto Trading`, `Alpaca Paper Soak` และ `Manual Alpaca Paper Trading` โดยเลือก `broker-sync-check-reports` ก่อน `hourly-auto-trading-report` เมื่อ run มี artifact ที่รองรับ ส่วน `.github/workflows/publish-dashboard-snapshot.yml` ยังคงรับผิดชอบ public masked snapshot แยกกัน
+
+ตัวแปลง `scripts/normalize_broker_sync_owner_report.py` ลดข้อมูล Broker Sync ให้เหลือเฉพาะ account/positions/orders และ metadata ที่จำเป็น ก่อนส่งผ่าน `scripts/export_dashboard_snapshot.py` เพื่อสร้าง contract เดียวกับ Owner Secure View
 
 > หมายเหตุเรื่อง persistence: default store อยู่ใน filesystem ของ Manager container. หาก Railway service ถูก redeploy ก่อน GitHub Action ถัดไป snapshot อาจยังไม่มีชั่วคราว ควร mount persistent volume แล้วตั้ง `OWNER_SNAPSHOT_STORE_PATH=/data/latest-owner-dashboard-snapshot.json` สำหรับ production ที่ต้องการให้ snapshot อยู่รอดข้าม deployment.
 
