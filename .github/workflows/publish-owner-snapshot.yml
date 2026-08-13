@@ -6,6 +6,7 @@ on:
       - Hourly Auto Trading
       - Alpaca Paper Soak
       - Manual Alpaca Paper Trading
+      - Broker Sync Check
     types: [completed]
   workflow_dispatch:
     inputs:
@@ -49,53 +50,90 @@ jobs:
             exit 1
           fi
 
-          artifact_count=$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}/artifacts" \
-            --jq '[.artifacts[] | select(.name == "hourly-auto-trading-report" and (.expired | not))] | length')
-          if [ "$artifact_count" -eq 0 ]; then
+          run_json=$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}")
+          conclusion=$(jq -r '.conclusion // "unknown"' <<<"$run_json")
+          workflow_name=$(jq -r '.name // "unknown"' <<<"$run_json")
+          if [ "$conclusion" != "success" ]; then
             echo "publish=false" >> "$GITHUB_OUTPUT"
             echo "run_id=$run_id" >> "$GITHUB_OUTPUT"
-            echo "Source run has no current hourly report artifact; secure owner values will not be replaced."
+            echo "Source workflow ${workflow_name} concluded ${conclusion}; keeping the previous secure owner snapshot."
+            exit 0
+          fi
+
+          artifacts_json=$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}/artifacts")
+          broker_artifact_count=$(jq '[.artifacts[] | select(.name == "broker-sync-check-reports" and (.expired | not))] | length' <<<"$artifacts_json")
+          hourly_artifact_count=$(jq '[.artifacts[] | select(.name == "hourly-auto-trading-report" and (.expired | not))] | length' <<<"$artifacts_json")
+
+          if [ "$broker_artifact_count" -gt 0 ]; then
+            artifact_name="broker-sync-check-reports"
+            source_kind="broker-sync"
+          elif [ "$hourly_artifact_count" -gt 0 ]; then
+            artifact_name="hourly-auto-trading-report"
+            source_kind="hourly"
+          else
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+            echo "run_id=$run_id" >> "$GITHUB_OUTPUT"
+            echo "Source run has no supported current owner-snapshot artifact; secure owner values will not be replaced."
             exit 0
           fi
 
           echo "publish=true" >> "$GITHUB_OUTPUT"
           echo "run_id=$run_id" >> "$GITHUB_OUTPUT"
+          echo "artifact_name=$artifact_name" >> "$GITHUB_OUTPUT"
+          echo "source_kind=$source_kind" >> "$GITHUB_OUTPUT"
+          echo "Resolved ${workflow_name} run ${run_id} as ${source_kind}."
 
-      - name: Download private hourly report
+      - name: Download private source report
         if: steps.source.outputs.publish == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
           RUN_ID: ${{ steps.source.outputs.run_id }}
+          ARTIFACT_NAME: ${{ steps.source.outputs.artifact_name }}
         run: |
           set -euo pipefail
-          mkdir -p reports/hourly-artifact
+          mkdir -p reports/source-artifact
           gh run download "$RUN_ID" \
-            --name hourly-auto-trading-report \
-            --dir reports/hourly-artifact
+            --name "$ARTIFACT_NAME" \
+            --dir reports/source-artifact
 
       - name: Build full owner snapshot in ephemeral runner storage
         if: steps.source.outputs.publish == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
           RUN_ID: ${{ steps.source.outputs.run_id }}
+          SOURCE_KIND: ${{ steps.source.outputs.source_kind }}
         run: |
           set -euo pipefail
-          input_path=$(find reports/hourly-artifact -type f -name hourly-auto-trading-report.json -print -quit 2>/dev/null || true)
-          if [ -z "$input_path" ]; then
-            echo "Hourly report artifact did not contain hourly-auto-trading-report.json."
-            exit 1
-          fi
 
           gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${RUN_ID}" \
             --jq '{runId: .id, runNumber: .run_number, runUrl: .html_url, workflowName: .name, eventName: .event, status: .status, conclusion: (.conclusion // "unknown"), startedAt: .run_started_at, completedAt: .updated_at}' \
             > reports/workflow-metadata.json
 
-          python scripts/normalize_hourly_operator_report.py \
-            --input "$input_path" \
-            --output reports/normalized-hourly-auto-trading-report.json
+          if [ "$SOURCE_KIND" = "broker-sync" ]; then
+            input_path=$(find reports/source-artifact -type f -name broker-sync-check.json -print -quit 2>/dev/null || true)
+            if [ -z "$input_path" ]; then
+              echo "Broker Sync artifact did not contain broker-sync-check.json."
+              exit 1
+            fi
+            python scripts/normalize_broker_sync_owner_report.py \
+              --input "$input_path" \
+              --output reports/normalized-owner-source-report.json
+          elif [ "$SOURCE_KIND" = "hourly" ]; then
+            input_path=$(find reports/source-artifact -type f -name hourly-auto-trading-report.json -print -quit 2>/dev/null || true)
+            if [ -z "$input_path" ]; then
+              echo "Hourly report artifact did not contain hourly-auto-trading-report.json."
+              exit 1
+            fi
+            python scripts/normalize_hourly_operator_report.py \
+              --input "$input_path" \
+              --output reports/normalized-owner-source-report.json
+          else
+            echo "Unsupported owner snapshot source kind: $SOURCE_KIND"
+            exit 1
+          fi
 
           python scripts/export_dashboard_snapshot.py \
-            --input reports/normalized-hourly-auto-trading-report.json \
+            --input reports/normalized-owner-source-report.json \
             --workflow-metadata reports/workflow-metadata.json \
             --output reports/latest-owner-dashboard-snapshot.json \
             --privacy-mode full \
@@ -105,6 +143,8 @@ jobs:
       - name: Validate value-bearing owner snapshot
         if: steps.source.outputs.publish == 'true'
         id: owner
+        env:
+          SOURCE_KIND: ${{ steps.source.outputs.source_kind }}
         run: |
           set -euo pipefail
           python - <<'PY'
@@ -117,6 +157,12 @@ jobs:
           assert payload['schemaVersion'] == 'dashboard-snapshot.v2'
           assert payload['privacy'] == {'mode': 'full', 'valuesMasked': False}
           assert payload['account']['valuesMasked'] is False
+
+          if os.environ.get('SOURCE_KIND') == 'broker-sync':
+              assert payload['runtime']['mode'] == 'PAPER'
+              assert payload['runtime']['brokerMode'] == 'ALPACA'
+              assert payload['runtime']['flow'] == 'broker_sync_check'
+              assert payload['cycle']['status'] == 'success'
 
           account = payload['account']
           has_values = any(account.get(key) is not None for key in ('cash', 'equity', 'buyingPower'))
@@ -157,5 +203,6 @@ jobs:
         if: always()
         run: |
           rm -f reports/latest-owner-dashboard-snapshot.json
-          rm -f reports/normalized-hourly-auto-trading-report.json
-          rm -rf reports/hourly-artifact
+          rm -f reports/normalized-owner-source-report.json
+          rm -f reports/workflow-metadata.json
+          rm -rf reports/source-artifact
