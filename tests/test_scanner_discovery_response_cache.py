@@ -7,11 +7,24 @@ from app.scanner_client import (
 )
 
 
+def _data_bundle(symbol):
+    return {
+        "schema_version": "scanner-data-bundle.v1",
+        "symbol": symbol,
+        "data_quality": {
+            "status": "complete",
+            "coverage_ratio": 1.0,
+            "missing_components": [],
+            "partial_components": [],
+        },
+    }
+
+
 def scanner_success_response(correlation_id="scanner-first-call"):
     return {
         "status": "success",
         "agent_type": "scanner",
-        "version": "1.0.0",
+        "version": "1.3.0",
         "schema_version": "1.0",
         "timestamp": "2026-07-15T00:00:00Z",
         "correlation_id": correlation_id,
@@ -24,14 +37,20 @@ def scanner_success_response(correlation_id="scanner-first-call"):
                     "candidate_score": 0.919,
                     "recommendation_hint": "FUNDAMENTAL_TOP_10",
                     "raw_scores": {"fundamental_score": 91.9},
-                    "metadata": {"source": "real_market_fundamental_discovery"},
+                    "metadata": {
+                        "source": "real_market_fundamental_discovery",
+                        "data_bundle": _data_bundle("ACGL"),
+                    },
                 },
                 {
                     "symbol": "ADBE",
                     "candidate_score": 0.882,
                     "recommendation_hint": "FUNDAMENTAL_TOP_10",
                     "raw_scores": {"fundamental_score": 88.2},
-                    "metadata": {"source": "real_market_fundamental_discovery"},
+                    "metadata": {
+                        "source": "real_market_fundamental_discovery",
+                        "data_bundle": _data_bundle("ADBE"),
+                    },
                 },
             ],
             "metadata": {"selected_universe_count": 1000},
@@ -46,6 +65,7 @@ def scanner_success_response(correlation_id="scanner-first-call"):
 def reset_scanner_discovery_cache(monkeypatch):
     clear_scanner_discovery_cache()
     monkeypatch.setenv("SCANNER_DISCOVERY_CACHE_TTL_SECONDS", "1800")
+    monkeypatch.setenv("SCANNER_MIN_DATA_COVERAGE", "0.80")
     yield
     clear_scanner_discovery_cache()
 
