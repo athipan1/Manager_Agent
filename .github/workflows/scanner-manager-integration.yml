@@ -5,8 +5,11 @@ on:
     branches: [main]
     paths:
       - "app/scanner_client.py"
+      - "app/contracts/scanner.py"
+      - "app/services/scanner_data_quality_service.py"
       - "docker-compose.hourly-paper.yml"
       - "docker-compose.hourly-simulator.yml"
+      - "tests/test_scanner_data_quality_gate.py"
       - "tests/test_scanner_real_market_contract.py"
       - ".github/workflows/scanner-manager-integration.yml"
   workflow_dispatch:
@@ -90,6 +93,7 @@ jobs:
         env:
           SCANNER_AGENT_URL: http://localhost:8003
           SCANNER_REQUIRE_REAL_MARKET_DATA: "true"
+          SCANNER_MIN_DATA_COVERAGE: "0.80"
           SCANNER_SCREENER: america
           SCANNER_EXCHANGE: NASDAQ
           AGENT_CLIENT_TIMEOUT: "60"
@@ -114,6 +118,43 @@ jobs:
                   return value.model_dump(mode="json")
               return {}
 
+          def assert_quality_outcome(name, response):
+              data = to_dict(response.data)
+              candidates = data.get("candidates") or []
+              review = data.get("review_candidates") or []
+              gate = (data.get("metadata") or {}).get("scanner_data_quality_gate") or {}
+
+              if candidates:
+                  if gate.get("passed_count") != len(candidates):
+                      raise RuntimeError(
+                          f"{name} quality gate pass count mismatch: {gate}"
+                      )
+                  if any(row.get("decision") != "REVIEW" for row in review):
+                      raise RuntimeError(f"{name} returned malformed REVIEW rows: {review}")
+                  print(
+                      f"{name}: PASS candidates={len(candidates)} "
+                      f"review={len(review)} correlation_id={response.correlation_id}"
+                  )
+                  return
+
+              # During the cross-repo rollout Scanner main may still predate
+              # scanner-data-bundle.v1. Manager must fail safe by moving those
+              # candidates to REVIEW instead of passing them downstream.
+              if review:
+                  if gate.get("decision") != "REVIEW":
+                      raise RuntimeError(f"{name} expected REVIEW gate summary: {gate}")
+                  if any(row.get("decision") != "REVIEW" for row in review):
+                      raise RuntimeError(f"{name} malformed REVIEW rows: {review}")
+                  print(
+                      f"{name}: rollout-safe REVIEW candidates={len(review)} "
+                      f"codes={gate.get('review_reason_codes')}"
+                  )
+                  return
+
+              raise RuntimeError(
+                  f"{name} scan returned neither quality-passed nor REVIEW candidates"
+              )
+
           async def main():
               async with ScannerAgentClient() as client:
                   technical = await client.scan(
@@ -129,15 +170,7 @@ jobs:
                   ("technical", technical),
                   ("fundamental", fundamental),
               ):
-                  data = to_dict(response.data)
-                  candidates = data.get("candidates") or []
-                  if not candidates:
-                      raise RuntimeError(f"{name} scan returned no candidates")
-                  print(
-                      f"{name}: status={response.status} "
-                      f"candidates={len(candidates)} "
-                      f"correlation_id={response.correlation_id}"
-                  )
+                  assert_quality_outcome(name, response)
 
           asyncio.run(main())
           PY
