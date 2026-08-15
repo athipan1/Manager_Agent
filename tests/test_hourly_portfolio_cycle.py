@@ -1,14 +1,15 @@
+import pytest
+
+import scripts.hourly_portfolio_cycle as hourly_portfolio_cycle
+from app.hourly_paper_runtime import RuntimeSafetyError
 from scripts.hourly_portfolio_cycle import (
     CycleClients,
     classify_position_action,
     profit_lifecycle_payload,
     protection_gaps,
     require_safe_broker_sync,
+    run_candidate_cycle,
 )
-
-import pytest
-
-from app.hourly_paper_runtime import RuntimeSafetyError
 
 
 def test_hourly_profit_client_uses_api_key(monkeypatch):
@@ -17,6 +18,14 @@ def test_hourly_profit_client_uses_api_key(monkeypatch):
     clients = CycleClients("hourly-correlation-id")
 
     assert clients.profit.headers == {"X-API-KEY": "hourly-profit-key"}
+
+
+def test_hourly_market_regime_client_uses_api_key(monkeypatch):
+    monkeypatch.setenv("MARKET_REGIME_AGENT_API_KEY", "hourly-market-key")
+
+    clients = CycleClients("hourly-correlation-id")
+
+    assert clients.market.headers == {"X-API-KEY": "hourly-market-key"}
 
 
 def test_unprotected_position_is_detected_and_replace_is_selected():
@@ -121,3 +130,76 @@ def test_hourly_profit_request_does_not_invent_missing_lifecycle():
         )
         is None
     )
+
+
+class _CandidateClients:
+    execution = object()
+    manager = object()
+
+    def __init__(self):
+        self.manager_payload = None
+
+    def get(self, client, path):
+        assert client is self.execution
+        assert path == "/broker/protection-diagnostics"
+        return {"data": {"positions": []}}
+
+    def post(self, client, path, payload):
+        if client is self.manager:
+            assert path == "/discover-analyze-trade"
+            self.manager_payload = payload
+            return {"data": {"execution": {"status": "skipped"}}}
+        raise AssertionError(f"unexpected POST: {path}")
+
+
+def _candidate_preflight():
+    return {
+        "market_open": True,
+        "market_mode": "REVIEW_AND_TRADE",
+        "portfolio_cycle_id": "cycle-1",
+        "runtime": {"paper_automation": True},
+    }
+
+
+def test_hourly_candidate_execution_is_blocked_when_market_gate_reviews(monkeypatch):
+    clients = _CandidateClients()
+    monkeypatch.setattr(hourly_portfolio_cycle, "_reconcile", lambda *args, **kwargs: {})
+
+    result = run_candidate_cycle(
+        clients,
+        preflight=_candidate_preflight(),
+        account_id="1",
+        review_report={
+            "market_regime_gate": {
+                "new_entries_allowed": False,
+                "decision": "REVIEW",
+                "reasons": ["market_regime_data_quality_blocks_trade"],
+            }
+        },
+    )
+
+    assert clients.manager_payload["execute"] is False
+    assert result["execute_requested"] is False
+    assert result["execution_blocked_by_market_regime"] is True
+
+
+def test_hourly_candidate_execution_can_proceed_only_when_market_gate_passes(monkeypatch):
+    clients = _CandidateClients()
+    monkeypatch.setattr(hourly_portfolio_cycle, "_reconcile", lambda *args, **kwargs: {})
+
+    result = run_candidate_cycle(
+        clients,
+        preflight=_candidate_preflight(),
+        account_id="1",
+        review_report={
+            "market_regime_gate": {
+                "new_entries_allowed": True,
+                "decision": "PASS",
+                "reasons": [],
+            }
+        },
+    )
+
+    assert clients.manager_payload["execute"] is True
+    assert result["execute_requested"] is True
+    assert result["execution_blocked_by_market_regime"] is False

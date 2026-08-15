@@ -74,6 +74,7 @@ def test_workflow_uses_secrets_without_placeholder_fallbacks():
         "RISK_ADMIN_TOKEN",
         "PORTFOLIO_AGENT_API_KEY",
         "PROFIT_AGENT_API_KEY",
+        "MARKET_REGIME_API_KEY",
     ):
         assert f"{name}: ${{{{ secrets.{name} }}}}" in workflow
     assert "secrets.ALPACA_API_URL ||" not in workflow

@@ -17,6 +17,10 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from scripts.hourly_runtime_loader import runtime  # noqa: E402
+from app.market_regime_contract import (  # noqa: E402
+    evaluate_market_regime_gate,
+    market_regime_envelope_issues,
+)
 from app.profit_market_context import compose_profit_market_context  # noqa: E402
 
 JsonHttpClient = runtime.JsonHttpClient
@@ -153,6 +157,11 @@ class CycleClients:
         execution_key = os.getenv("EXECUTION_API_KEY", "")
         database_key = os.getenv("DATABASE_AGENT_API_KEY", "")
         portfolio_key = os.getenv("PORTFOLIO_AGENT_API_KEY", "")
+        market_key = (
+            os.getenv("MARKET_REGIME_AGENT_API_KEY")
+            or os.getenv("MARKET_REGIME_API_KEY")
+            or ""
+        ).strip()
         self.execution = JsonHttpClient(
             os.getenv("EXECUTION_AGENT_URL", "http://localhost:8006"),
             "Execution_Agent",
@@ -183,6 +192,7 @@ class CycleClients:
         self.market = JsonHttpClient(
             os.getenv("MARKET_REGIME_AGENT_URL", "http://localhost:8013"),
             "Market_Regime_Agent",
+            {"X-API-KEY": market_key} if market_key else {},
             timeout_seconds=30,
         )
         self.portfolio = JsonHttpClient(
@@ -334,11 +344,17 @@ def review_existing_positions(
     }
 
     regime_inputs = as_dict(preflight.get("market_regime_inputs"))
-    regime = as_dict(
-        unwrap(clients.post(clients.market, "/market/regime", regime_inputs))
-    )
-    strategy = as_dict(
-        unwrap(clients.post(clients.market, "/market/strategy", regime_inputs))
+    regime_response = clients.post(clients.market, "/market/regime", regime_inputs)
+    strategy_response = clients.post(clients.market, "/market/strategy", regime_inputs)
+    regime = as_dict(unwrap(regime_response))
+    strategy = as_dict(unwrap(strategy_response))
+    market_gate = evaluate_market_regime_gate(
+        regime,
+        strategy,
+        contract_issues=[
+            *market_regime_envelope_issues(regime_response, clients.correlation_id),
+            *market_regime_envelope_issues(strategy_response, clients.correlation_id),
+        ],
     )
     equity = number(account.get("equity") or account.get("portfolio_value"))
     cash = number(account.get("cash"))
@@ -545,6 +561,7 @@ def review_existing_positions(
         },
         "market_regime": regime,
         "market_strategy": strategy,
+        "market_regime_gate": market_gate,
         "portfolio_allocation": portfolio,
         "performance_session_risk": session_risk,
         "protection_diagnostics": diagnostics,
@@ -576,7 +593,9 @@ def run_candidate_cycle(
 ) -> dict[str, Any]:
     market_open = bool(preflight.get("market_open"))
     paper_automation = bool(as_dict(preflight.get("runtime")).get("paper_automation"))
-    execute = market_open and paper_automation
+    market_gate = as_dict(review_report.get("market_regime_gate"))
+    market_entries_allowed = market_gate.get("new_entries_allowed") is True
+    execute = market_open and paper_automation and market_entries_allowed
     if paper_automation:
         _reconcile(clients, account_id, "pre-execution")
         current_protection = clients.get(
@@ -604,6 +623,10 @@ def run_candidate_cycle(
     return {
         "execute_requested": execute,
         "market_mode": preflight["market_mode"],
+        "market_regime_gate": market_gate,
+        "execution_blocked_by_market_regime": (
+            market_open and paper_automation and not market_entries_allowed
+        ),
         "manager_response": response,
     }
 

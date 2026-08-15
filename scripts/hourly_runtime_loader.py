@@ -27,6 +27,15 @@ if runtime is None:
     SPEC.loader.exec_module(runtime)
 
 
+# Market_Regime_Agent v0.2 enables API-key auth for production. The hourly
+# Paper preflight must prove that secret exists before starting a trading stack.
+if "MARKET_REGIME_API_KEY" not in runtime.SCHEDULED_REQUIRED_SECRETS:
+    runtime.SCHEDULED_REQUIRED_SECRETS = (
+        *runtime.SCHEDULED_REQUIRED_SECRETS,
+        "MARKET_REGIME_API_KEY",
+    )
+
+
 _BaseJsonHttpClient = runtime.JsonHttpClient
 
 
@@ -35,6 +44,15 @@ def _performance_api_key() -> str:
     return (
         os.getenv("PERFORMANCE_AGENT_API_KEY")
         or os.getenv("PROFIT_AGENT_API_KEY")
+        or ""
+    ).strip()
+
+
+def _market_regime_api_key() -> str:
+    """Resolve the Market_Regime_Agent key used by the hourly runtime."""
+    return (
+        os.getenv("MARKET_REGIME_AGENT_API_KEY")
+        or os.getenv("MARKET_REGIME_API_KEY")
         or ""
     ).strip()
 
@@ -82,6 +100,10 @@ class HourlyJsonHttpClient(_BaseJsonHttpClient):
         effective_headers = dict(headers or {})
         if service_name == "Performance_Agent":
             api_key = _performance_api_key()
+            if api_key:
+                effective_headers.setdefault("X-API-KEY", api_key)
+        if service_name == "Market_Regime_Agent":
+            api_key = _market_regime_api_key()
             if api_key:
                 effective_headers.setdefault("X-API-KEY", api_key)
         super().__init__(

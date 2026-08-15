@@ -92,8 +92,19 @@ def test_alpha_regime_backtest_plan_route(monkeypatch):
             "recommendation": {
                 "symbol": payload["symbol"],
                 "regime": "bull",
+                "recommended_action": "trade",
                 "recommended_strategy": "trend_following",
                 "position_size_multiplier": 0.5,
+                "risk_multiplier": 0.5,
+                "risk_budget_multiplier": 0.5,
+                "exposure_cap": 0.5,
+                "allowed_strategies": ["trend_following", "breakout", "sma_crossover"],
+                "data_quality": {"status": "good", "trade_allowed": True},
+            },
+            "gate": {
+                "new_entries_allowed": True,
+                "decision": "PASS",
+                "reasons": [],
             },
         }
 

@@ -3,6 +3,8 @@ from __future__ import annotations
 from copy import deepcopy
 from typing import Any, Dict, List
 
+from .market_regime_contract import evaluate_market_regime_gate
+
 
 DEFAULT_COMPARE_STRATEGIES = [
     "sma_crossover",
@@ -73,11 +75,16 @@ def build_compare_candidates(
 def build_regime_backtest_plan(
     recommendation: Dict[str, Any],
     backtest_payload: Dict[str, Any],
+    *,
+    market_gate: Dict[str, Any] | None = None,
 ) -> Dict[str, Any]:
-    """Turn a Market_Regime_Agent recommendation into a Backtest_Agent compare payload.
+    """Turn a Market_Regime_Agent recommendation into a safe compare payload.
 
     This function is planning-only. It does not call Backtest_Agent or Execution_Agent.
+    Market Regime contract v1.1 must explicitly permit new entries before Manager
+    creates a compare candidate set.
     """
+    gate = market_gate or evaluate_market_regime_gate({}, recommendation)
     recommended_strategy = recommendation.get("recommended_strategy")
     position_size_multiplier = _clamp_ratio(_float_value(recommendation.get("position_size_multiplier"), 1.0))
     risk_budget_multiplier = _clamp_ratio(_float_value(recommendation.get("risk_budget_multiplier"), 1.0))
@@ -87,34 +94,7 @@ def build_regime_backtest_plan(
     base_max_position_pct = _float_value(backtest_payload.get("max_position_pct"), 0.10)
     adjusted_max_position_pct = round(base_max_position_pct * effective_size_multiplier, 6)
     allowed_strategies = _allowed_strategy_names(recommendation)
-
-    if (
-        not recommended_strategy
-        or recommended_strategy in NO_TRADE_STRATEGIES
-        or adjusted_max_position_pct <= 0
-        or not allowed_strategies
-    ):
-        return {
-            "action": "no_trade",
-            "reason": recommendation.get("reason") or "Market regime recommendation does not allow new entries.",
-            "recommendation": recommendation,
-            "market_context": {
-                "position_size_multiplier": position_size_multiplier,
-                "risk_budget_multiplier": risk_budget_multiplier,
-                "exposure_cap": exposure_cap,
-                "effective_size_multiplier": effective_size_multiplier,
-                "allowed_strategies": allowed_strategies,
-                "blocked_strategies": recommendation.get("blocked_strategies") or [],
-                "decision_notes": recommendation.get("decision_notes") or [],
-            },
-            "backtest_compare_payload": None,
-        }
-
-    fast_window = int(backtest_payload.get("fast_window", 2))
-    slow_window = int(backtest_payload.get("slow_window", 3))
-    compare_payload = deepcopy(backtest_payload)
-    compare_payload["max_position_pct"] = adjusted_max_position_pct
-    compare_payload["market_context"] = {
+    market_context = {
         "position_size_multiplier": position_size_multiplier,
         "risk_budget_multiplier": risk_budget_multiplier,
         "exposure_cap": exposure_cap,
@@ -122,7 +102,36 @@ def build_regime_backtest_plan(
         "allowed_strategies": allowed_strategies,
         "blocked_strategies": recommendation.get("blocked_strategies") or [],
         "decision_notes": recommendation.get("decision_notes") or [],
+        "market_regime_gate": gate,
     }
+
+    if (
+        gate.get("new_entries_allowed") is not True
+        or not recommended_strategy
+        or recommended_strategy in NO_TRADE_STRATEGIES
+        or adjusted_max_position_pct <= 0
+        or not allowed_strategies
+    ):
+        gate_reasons = gate.get("reasons") or []
+        reason = (
+            "; ".join(str(item) for item in gate_reasons)
+            if gate_reasons
+            else recommendation.get("reason")
+            or "Market regime recommendation does not allow new entries."
+        )
+        return {
+            "action": "no_trade",
+            "reason": reason,
+            "recommendation": recommendation,
+            "market_context": market_context,
+            "backtest_compare_payload": None,
+        }
+
+    fast_window = int(backtest_payload.get("fast_window", 2))
+    slow_window = int(backtest_payload.get("slow_window", 3))
+    compare_payload = deepcopy(backtest_payload)
+    compare_payload["max_position_pct"] = adjusted_max_position_pct
+    compare_payload["market_context"] = market_context
     compare_payload["candidates"] = build_compare_candidates(
         recommended_strategy,
         fast_window=fast_window,

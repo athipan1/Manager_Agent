@@ -33,6 +33,7 @@ def scheduled_env():
         "DATABASE_AGENT_API_KEY": "database-runtime-value",
         "RISK_ADMIN_TOKEN": "risk-runtime-value",
         "PORTFOLIO_AGENT_API_KEY": "portfolio-runtime-value",
+        "MARKET_REGIME_API_KEY": "market-regime-runtime-value",
     }
 
 
@@ -56,6 +57,7 @@ def test_scheduled_runtime_accepts_only_exact_paper_contract():
         "DATABASE_AGENT_API_KEY",
         "RISK_ADMIN_TOKEN",
         "PORTFOLIO_AGENT_API_KEY",
+        "MARKET_REGIME_API_KEY",
     ],
 )
 def test_missing_scheduled_secret_fails_closed(field):
