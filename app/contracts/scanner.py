@@ -48,6 +48,7 @@ class ScannerResponseData(BaseModel):
     count: int
     metadata: Dict[str, Any] = Field(default_factory=dict)
     errors: Dict[str, Any] = Field(default_factory=dict)
+    review_candidates: List[Dict[str, Any]] = Field(default_factory=list)
 
     @model_validator(mode="before")
     @classmethod
