@@ -6,6 +6,9 @@ from .config import SCANNER_AGENT_URL
 from .contracts import ScannerEndpoints, StandardAgentResponse
 from .logger import report_logger
 from .resilient_client import AgentUnavailable, ResilientAgentClient
+from .services.scanner_data_quality_service import (
+    partition_scanner_candidates_by_data_quality,
+)
 
 
 SCANNER_PREFETCH_CACHE: Dict[str, Dict[str, Any]] = {}
@@ -104,6 +107,52 @@ def _validate_scanner_market_data_contract(
             "Scanner real-market contract rejected fallback candidates: "
             f"{fallback_candidates}"
         )
+
+
+def _apply_scanner_data_quality_gate(
+    response: StandardAgentResponse,
+) -> StandardAgentResponse:
+    """Move insufficient Scanner candidates to REVIEW before downstream agents."""
+
+    if response.status != "success":
+        return response
+
+    response_payload = response.model_dump(mode="json")
+    data = _to_dict(response_payload.get("data"))
+    candidates = data.get("candidates") or []
+    passed, review_candidates, summary = (
+        partition_scanner_candidates_by_data_quality(candidates)
+    )
+
+    data["candidates"] = passed
+    data["count"] = len(passed)
+    data["review_candidates"] = review_candidates
+    data["metadata"] = {
+        **_to_dict(data.get("metadata")),
+        "scanner_data_quality_gate": summary,
+    }
+    response_payload["data"] = data
+    response_payload["metadata"] = {
+        **_to_dict(response_payload.get("metadata")),
+        "scanner_data_quality_gate": summary,
+    }
+
+    if review_candidates:
+        report_logger.warning(
+            "Scanner data-quality gate moved %s/%s candidates to REVIEW: codes=%s",
+            len(review_candidates),
+            summary["original_count"],
+            summary["review_reason_codes"],
+        )
+    else:
+        report_logger.info(
+            "Scanner data-quality gate passed %s/%s candidates at min coverage %.4f",
+            summary["passed_count"],
+            summary["original_count"],
+            summary["min_coverage_ratio"],
+        )
+
+    return StandardAgentResponse.model_validate(response_payload)
 
 
 def get_scanner_prefetch(symbol: str) -> Optional[Dict[str, Any]]:
@@ -247,6 +296,7 @@ class ScannerAgentClient(ResilientAgentClient):
         )
         response = self.validate_standard_response(response_data)
         _validate_scanner_market_data_contract(response, correlation_id)
+        response = _apply_scanner_data_quality_gate(response)
         _cache_scanner_candidates(response)
         return response
 
@@ -264,6 +314,7 @@ class ScannerAgentClient(ResilientAgentClient):
         )
         response = self.validate_standard_response(response_data)
         _validate_scanner_market_data_contract(response, correlation_id)
+        response = _apply_scanner_data_quality_gate(response)
         _cache_scanner_candidates(response)
         return response
 
@@ -313,6 +364,7 @@ class ScannerAgentClient(ResilientAgentClient):
         )
         response = self.validate_standard_response(response_data)
         _validate_scanner_market_data_contract(response, correlation_id)
+        response = _apply_scanner_data_quality_gate(response)
         _cache_scanner_candidates(response)
         _store_discovery_response(cache_key, response)
         return response
