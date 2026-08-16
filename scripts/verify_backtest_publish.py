@@ -6,6 +6,10 @@ verifier runs. They must be verified in place: rerunning a legacy selection
 pipeline here would replace the authoritative nested evidence with a different
 candidate set and validation profile.
 
+For nested production reports, the persisted result is also compared with the
+result emitted to the Hourly console. Downstream trade gating may consume the
+persisted report only when both evidence channels are identical.
+
 Legacy/research reports continue to use ``verify_backtest_publish_legacy`` so
 existing manual compatibility behavior is preserved outside the nested
 production contract.
@@ -25,6 +29,11 @@ if str(REPOSITORY_ROOT) not in sys.path:
     sys.path.insert(0, str(REPOSITORY_ROOT))
 
 from scripts import verify_backtest_publish_legacy as _legacy
+from scripts.verify_backtest_evidence_coherence import (
+    SCHEMA_VERSION as COHERENCE_SCHEMA_VERSION,
+    load_authoritative_console_result,
+    verify_evidence_coherence,
+)
 
 
 NESTED_WALK_FORWARD_MODE = "nested_walk_forward_multi_strategy_selection"
@@ -164,6 +173,42 @@ def verify_backtest_publish(report: Dict[str, Any]) -> Dict[str, Any]:
     return _legacy.verify_backtest_publish(report)
 
 
+def _write_coherence_report(path: Path, result: Dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(result, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+
+def _verify_nested_coherence(report_path: Path, report: Dict[str, Any]) -> None:
+    console_path = report_path.with_name("hourly-backtest-console.json")
+    output_path = report_path.with_name("hourly-backtest-evidence-coherence.json")
+    try:
+        console_result = load_authoritative_console_result(console_path)
+        result = verify_evidence_coherence(console_result, report)
+    except (ValueError, json.JSONDecodeError) as exc:
+        result = {
+            "schema_version": COHERENCE_SCHEMA_VERSION,
+            "status": "fail",
+            "coherent": False,
+            "reasons": ["evidence_unreadable"],
+            "error": str(exc),
+            "safety": {
+                "trade_gate_may_consume_persisted_result": False,
+                "broker_mutation_allowed_by_this_check": False,
+            },
+        }
+    _write_coherence_report(output_path, result)
+    if result.get("coherent") is not True:
+        raise SystemExit(
+            "Backtest evidence coherence check failed: "
+            f"reasons={result.get('reasons')} "
+            f"console_sha={result.get('console_data_sha256')} "
+            f"persisted_sha={result.get('persisted_data_sha256')}"
+        )
+
+
 def _verify_nested_report_in_place(report_path: Path) -> bool:
     """Verify a nested v3 report without invoking any legacy selection runner."""
 
@@ -177,13 +222,15 @@ def _verify_nested_report_in_place(report_path: Path) -> bool:
     except ValueError as exc:
         raise SystemExit(str(exc)) from exc
 
+    _verify_nested_coherence(report_path, report)
     print(
         "Nested walk-forward Backtests verified in place: "
         f"eligible_symbols={verified.get('eligible_symbols')} "
         f"ineligible_symbols={verified.get('ineligible_symbols')} "
         f"strategy_ids_by_symbol={verified.get('strategy_ids_by_symbol')} "
         f"published_count={verified.get('published_count')} "
-        f"validation_profile={verified.get('validation_profile')}"
+        f"validation_profile={verified.get('validation_profile')} "
+        "evidence_coherent=true"
     )
     return True
 
