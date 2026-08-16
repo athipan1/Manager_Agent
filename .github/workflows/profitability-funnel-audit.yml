@@ -23,6 +23,14 @@ jobs:
       - name: Checkout Manager_Agent
         uses: actions/checkout@v6
 
+      - name: Checkout Backtest_Agent diagnostics
+        uses: actions/checkout@v6
+        with:
+          repository: athipan1/Backtest_Agent
+          ref: main
+          path: Backtest_Agent
+          fetch-depth: 1
+
       - name: Download hourly trading artifact
         env:
           GH_TOKEN: ${{ github.token }}
@@ -48,7 +56,54 @@ jobs:
             --output reports/hourly-profitability-funnel.json \
             --markdown reports/hourly-profitability-funnel.md
 
-      - name: Upload profitability funnel artifact
+      - name: Build Backtest nested training gate diagnostic
+        env:
+          SOURCE_RUN_ID: ${{ github.event.workflow_run.id }}
+        run: |
+          set -euo pipefail
+          if [ -f reports-source/hourly-backtest-console.json ]; then
+            python -m pip install --disable-pip-version-check -r Backtest_Agent/requirements.txt
+            PYTHONPATH="${GITHUB_WORKSPACE}/Backtest_Agent" \
+              python Backtest_Agent/scripts/diagnose_nested_training_gates.py \
+                --input reports-source/hourly-backtest-console.json \
+                --output reports/hourly-backtest-training-gates.json \
+                --markdown reports/hourly-backtest-training-gates.md
+          else
+            python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          report = {
+              "schema_version": "nested-training-gate-diagnostics.v1",
+              "status": "not_run",
+              "mode": "diagnostic_only",
+              "source_run_id": os.environ.get("SOURCE_RUN_ID"),
+              "reason": "hourly_backtest_console_not_available",
+              "aggregate": {
+                  "symbol_count": 0,
+                  "performance_gate_failure_counts": {},
+              },
+              "safety": {
+                  "selection_thresholds_changed": False,
+                  "backtest_rerun_performed": False,
+                  "market_data_refetched": False,
+                  "promotion_behavior_changed": False,
+              },
+          }
+          Path("reports").mkdir(parents=True, exist_ok=True)
+          Path("reports/hourly-backtest-training-gates.json").write_text(
+              json.dumps(report, indent=2, sort_keys=True), encoding="utf-8"
+          )
+          Path("reports/hourly-backtest-training-gates.md").write_text(
+              "# Nested Training Gate Diagnostics\n\n"
+              "Backtest evidence was not available for this Hourly run. No Backtest was rerun and no market data was refetched.\n",
+              encoding="utf-8",
+          )
+          PY
+          fi
+
+      - name: Upload profitability and Backtest diagnostics
         uses: actions/upload-artifact@v7
         with:
           name: profitability-funnel-audit
