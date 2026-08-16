@@ -1,13 +1,20 @@
 #!/usr/bin/env python3
 """Backtest publish verifier with nested walk-forward compatibility.
 
-The original verifier is retained in ``verify_backtest_publish_legacy``. This
-module adds the current nested walk-forward v2 envelope while preserving every
-legacy single, batch, multi-strategy, and rolling walk-forward contract.
+Nested production Backtests are already executed by Backtest_Agent before this
+verifier runs. They must be verified in place: rerunning a legacy selection
+pipeline here would replace the authoritative nested evidence with a different
+candidate set and validation profile.
+
+Legacy/research reports continue to use ``verify_backtest_publish_legacy`` so
+existing manual compatibility behavior is preserved outside the nested
+production contract.
 """
 
 from __future__ import annotations
 
+import argparse
+import json
 import sys
 from pathlib import Path
 from typing import Any, Dict
@@ -21,7 +28,7 @@ from scripts import verify_backtest_publish_legacy as _legacy
 
 
 NESTED_WALK_FORWARD_MODE = "nested_walk_forward_multi_strategy_selection"
-NESTED_WALK_FORWARD_PROFILE = "nested_walk_forward_v2"
+NESTED_WALK_FORWARD_PROFILE = "nested_walk_forward_v3"
 NESTED_SELECTION_METHOD = "nested_train_select_test_evaluate"
 
 WALK_FORWARD_MODE = _legacy.WALK_FORWARD_MODE
@@ -157,10 +164,43 @@ def verify_backtest_publish(report: Dict[str, Any]) -> Dict[str, Any]:
     return _legacy.verify_backtest_publish(report)
 
 
+def _verify_nested_report_in_place(report_path: Path) -> bool:
+    """Verify a nested v3 report without invoking any legacy selection runner."""
+
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    data = unwrap_backtest_report(report)
+    if data.get("mode") != NESTED_WALK_FORWARD_MODE:
+        return False
+
+    try:
+        verified = _verify_nested_walk_forward_publish(data)
+    except ValueError as exc:
+        raise SystemExit(str(exc)) from exc
+
+    print(
+        "Nested walk-forward Backtests verified in place: "
+        f"eligible_symbols={verified.get('eligible_symbols')} "
+        f"ineligible_symbols={verified.get('ineligible_symbols')} "
+        f"strategy_ids_by_symbol={verified.get('strategy_ids_by_symbol')} "
+        f"published_count={verified.get('published_count')} "
+        f"validation_profile={verified.get('validation_profile')}"
+    )
+    return True
+
+
 def main() -> None:
-    # Reuse argument parsing, strategy-selection execution, and operator output
-    # from the established verifier while substituting this compatibility-aware
-    # verification function.
+    parser = argparse.ArgumentParser(
+        description="Verify Backtest_Agent database publishing"
+    )
+    parser.add_argument("report", type=Path)
+    args = parser.parse_args()
+    if not args.report.exists():
+        raise SystemExit(f"Backtest report was not created: {args.report}")
+
+    if _verify_nested_report_in_place(args.report):
+        return
+
+    # Preserve established research/manual compatibility for non-nested reports.
     _legacy.verify_backtest_publish = verify_backtest_publish
     _legacy.main()
 
