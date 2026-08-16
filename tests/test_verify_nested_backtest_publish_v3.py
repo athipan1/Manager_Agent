@@ -49,8 +49,15 @@ def test_nested_v3_main_verifies_in_place_without_legacy_rerun(
     capsys: pytest.CaptureFixture[str],
 ):
     report_path = tmp_path / "hourly-backtest-result.json"
-    original = json.dumps(_nested_no_trade_report(), indent=2, sort_keys=True)
+    payload = _nested_no_trade_report()
+    original = json.dumps(payload, indent=2, sort_keys=True)
     report_path.write_text(original, encoding="utf-8")
+    (tmp_path / "hourly-backtest-console.json").write_text(
+        json.dumps({"event": "backtest_runtime_mode", "backtest_mode": "nested_promotion"})
+        + "\n"
+        + json.dumps(payload),
+        encoding="utf-8",
+    )
 
     def forbidden_legacy_main() -> None:
         raise AssertionError("nested production verification must not run legacy selection")
@@ -61,9 +68,17 @@ def test_nested_v3_main_verifies_in_place_without_legacy_rerun(
     verifier.main()
 
     assert report_path.read_text(encoding="utf-8") == original
+    coherence = json.loads(
+        (tmp_path / "hourly-backtest-evidence-coherence.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert coherence["coherent"] is True
+    assert coherence["console_data_sha256"] == coherence["persisted_data_sha256"]
     output = capsys.readouterr().out
     assert "verified in place" in output
     assert "validation_profile=nested_walk_forward_v3" in output
+    assert "evidence_coherent=true" in output
 
 
 def test_nested_v2_is_rejected_in_place_instead_of_falling_back_to_legacy(
