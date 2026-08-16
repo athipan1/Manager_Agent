@@ -288,12 +288,12 @@ jobs:
           recommendation = manager_result.get("recommendation") or {}
           gate = manager_result.get("gate") or {}
           decision = str(gate.get("decision") or "").upper()
-          if decision not in {"TRADE", "REVIEW", "NO_TRADE"}:
+          if decision not in {"PASS", "REVIEW", "NO_TRADE"}:
               raise SystemExit(f"Unexpected Market Regime gate decision: {gate}")
-          if decision == "TRADE" and gate.get("new_entries_allowed") is not True:
-              raise SystemExit(f"TRADE must allow new entries: {gate}")
-          if decision != "TRADE" and gate.get("new_entries_allowed") is True:
-              raise SystemExit(f"Non-TRADE gate must block new entries: {gate}")
+          if decision == "PASS" and gate.get("new_entries_allowed") is not True:
+              raise SystemExit(f"PASS must allow new entries: {gate}")
+          if decision != "PASS" and gate.get("new_entries_allowed") is True:
+              raise SystemExit(f"Non-PASS gate must block new entries: {gate}")
 
           regime = regime_response.get("data") or {}
           quality = regime.get("data_quality") or {}
@@ -321,6 +321,10 @@ jobs:
           if direct_gate.get("new_entries_allowed") != gate.get("new_entries_allowed"):
               raise SystemExit(
                   "Manager gate and direct Market Regime gate disagree on new-entry safety"
+              )
+          if direct_gate.get("decision") != gate.get("decision"):
+              raise SystemExit(
+                  "Manager gate and direct Market Regime gate disagree on gate decision"
               )
 
           report = {
