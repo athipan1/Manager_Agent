@@ -10,9 +10,10 @@ from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote
 
 PAPER_API_URL = "https://paper-api.alpaca.markets"
-SCHEMA_VERSION = "paper-profit-evidence.v1"
+SCHEMA_VERSION = "paper-profit-evidence.v1.1"
 
 
 class ProfitEvidenceError(RuntimeError):
@@ -49,6 +50,13 @@ def _account_ref(account_id: Any) -> str:
     if not text:
         return "unknown"
     return hashlib.sha256(text.encode("utf-8")).hexdigest()[:12]
+
+
+def _unwrap_agent_data(payload: Any) -> dict[str, Any]:
+    if not isinstance(payload, dict):
+        return {}
+    data = payload.get("data") if "data" in payload else payload
+    return data if isinstance(data, dict) else {}
 
 
 def fetch_alpaca_paper_account(
@@ -89,10 +97,80 @@ def fetch_alpaca_paper_account(
     return payload
 
 
-def _performance_evidence(position_review: dict[str, Any]) -> dict[str, Any]:
+def fetch_database_session_risk(
+    *,
+    database_url: str,
+    api_key: str,
+    account_id: str,
+    correlation_id: str | None = None,
+    timeout_seconds: float = 10.0,
+) -> tuple[dict[str, Any], str]:
+    """Read strict managed-fill provenance from Database_Agent.
+
+    This lookup is optional for report availability. If it cannot be verified,
+    profitability attribution stays fail-closed instead of failing the whole
+    reporting workflow or inventing provenance from account-level P&L.
+    """
+
+    base = str(database_url or "").strip().rstrip("/")
+    key = str(api_key or "").strip()
+    account = str(account_id or "").strip()
+    if not base or not key or not account:
+        return {}, "not_configured"
+
+    headers = {"Accept": "application/json", "X-API-KEY": key}
+    if correlation_id:
+        headers["X-Correlation-ID"] = correlation_id
+    request = urllib.request.Request(
+        f"{base}/accounts/{quote(account, safe='')}/risk/session",
+        headers=headers,
+        method="GET",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=timeout_seconds) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+    except Exception:
+        return {}, "unavailable"
+
+    data = _unwrap_agent_data(payload)
+    if not data:
+        return {}, "invalid_response"
+    return data, "success"
+
+
+def _performance_evidence(
+    position_review: dict[str, Any],
+    database_session_risk: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     performance = position_review.get("performance_session_risk")
     if not isinstance(performance, dict):
         performance = {}
+    database_session_risk = (
+        database_session_risk if isinstance(database_session_risk, dict) else {}
+    )
+
+    # Provenance may only come from Database_Agent's strict persisted chain.
+    # Performance_Agent's ordinary account-level fills remain useful for P&L and
+    # risk metrics, but are not accepted as proof of AI ownership.
+    system_managed_realized_pnl = _decimal(
+        database_session_risk.get("system_managed_realized_pnl")
+    )
+    provenance_verified = bool(
+        database_session_risk.get("system_provenance_verified")
+    )
+    system_managed_trades_today = int(
+        database_session_risk.get("system_managed_trades_today") or 0
+    )
+    system_unverified_trades_today = int(
+        database_session_risk.get("system_unverified_trades_today") or 0
+    )
+    if provenance_verified and (
+        system_managed_trades_today <= 0
+        or system_managed_realized_pnl is None
+        or system_unverified_trades_today != 0
+    ):
+        provenance_verified = False
+
     return {
         "daily_realized_pnl": _decimal(performance.get("daily_realized_pnl"))
         or Decimal("0"),
@@ -102,6 +180,13 @@ def _performance_evidence(position_review: dict[str, Any]) -> dict[str, Any]:
         "consecutive_losses": int(performance.get("consecutive_losses") or 0),
         "warnings": list(performance.get("warnings") or []),
         "source": str(performance.get("source") or "unavailable"),
+        "system_provenance_verified": provenance_verified,
+        "system_managed_trades_today": system_managed_trades_today,
+        "system_unverified_trades_today": system_unverified_trades_today,
+        "system_managed_realized_pnl": system_managed_realized_pnl,
+        "provenance_source": str(
+            database_session_risk.get("system_provenance_source") or "unavailable"
+        ),
     }
 
 
@@ -112,6 +197,9 @@ def _attribution(
     trades_today: int,
     orders_submitted_this_cycle: bool,
     position_count: int,
+    system_provenance_verified: bool,
+    system_managed_trades_today: int,
+    system_managed_realized_pnl: Decimal | None,
 ) -> dict[str, Any]:
     penny = Decimal("0.01")
     if abs(day_change) < penny and abs(daily_realized_pnl) < penny:
@@ -119,29 +207,68 @@ def _attribution(
             "status": "flat",
             "confidence": "high",
             "reason_codes": ["broker_day_equity_flat", "no_realized_pnl_evidence"],
+            "recorded_trade_pnl_consistent": True,
             "system_profit_proven": False,
+            "provenance_verified": system_provenance_verified,
+        }
+
+    if (
+        system_provenance_verified
+        and system_managed_trades_today > 0
+        and system_managed_realized_pnl is not None
+    ):
+        tolerance = max(Decimal("0.05"), abs(day_change) * Decimal("0.05"))
+        if abs(day_change - system_managed_realized_pnl) <= tolerance:
+            return {
+                "status": "system_managed_realized_pnl_aligned",
+                "confidence": "high",
+                "reason_codes": [
+                    "database_system_trade_provenance_verified",
+                    "broker_day_change_matches_system_managed_realized_pnl",
+                ],
+                "recorded_trade_pnl_consistent": True,
+                "system_profit_proven": day_change > 0,
+                "provenance_verified": True,
+            }
+        return {
+            "status": "system_managed_activity_partial_attribution",
+            "confidence": "medium",
+            "reason_codes": [
+                "database_system_trade_provenance_verified",
+                "broker_day_change_differs_from_system_managed_realized_pnl",
+            ],
+            "recorded_trade_pnl_consistent": False,
+            "system_profit_proven": False,
+            "provenance_verified": True,
         }
 
     if trades_today > 0 or abs(daily_realized_pnl) >= penny:
         tolerance = max(Decimal("0.05"), abs(day_change) * Decimal("0.05"))
-        if abs(day_change - daily_realized_pnl) <= tolerance:
+        aligned = abs(day_change - daily_realized_pnl) <= tolerance
+        if aligned:
             return {
-                "status": "system_realized_pnl_aligned",
-                "confidence": "high",
+                "status": "recorded_trade_pnl_aligned_provenance_unverified",
+                "confidence": "medium",
                 "reason_codes": [
-                    "performance_agent_trade_activity_present",
-                    "broker_day_change_matches_realized_pnl",
+                    "performance_agent_recorded_trade_activity_present",
+                    "broker_day_change_matches_recorded_realized_pnl",
+                    "database_system_trade_provenance_not_verified",
                 ],
-                "system_profit_proven": day_change > 0,
+                "recorded_trade_pnl_consistent": True,
+                "system_profit_proven": False,
+                "provenance_verified": False,
             }
         return {
-            "status": "system_activity_partial_attribution",
-            "confidence": "medium",
+            "status": "recorded_trade_activity_partial_provenance_unverified",
+            "confidence": "low",
             "reason_codes": [
-                "performance_agent_trade_activity_present",
-                "broker_day_change_differs_from_realized_pnl",
+                "performance_agent_recorded_trade_activity_present",
+                "broker_day_change_differs_from_recorded_realized_pnl",
+                "database_system_trade_provenance_not_verified",
             ],
-            "system_profit_proven": daily_realized_pnl > 0,
+            "recorded_trade_pnl_consistent": False,
+            "system_profit_proven": False,
+            "provenance_verified": False,
         }
 
     if orders_submitted_this_cycle:
@@ -150,9 +277,11 @@ def _attribution(
             "confidence": "low",
             "reason_codes": [
                 "broker_order_submitted_this_cycle",
-                "no_realized_fill_evidence_yet",
+                "no_proven_realized_system_fill_evidence_yet",
             ],
+            "recorded_trade_pnl_consistent": False,
             "system_profit_proven": False,
+            "provenance_verified": False,
         }
 
     if position_count > 0:
@@ -161,9 +290,11 @@ def _attribution(
             "confidence": "low",
             "reason_codes": [
                 "open_positions_present",
-                "no_realized_trade_evidence_for_day_change",
+                "no_proven_system_trade_evidence_for_day_change",
             ],
+            "recorded_trade_pnl_consistent": False,
             "system_profit_proven": False,
+            "provenance_verified": False,
         }
 
     return {
@@ -171,9 +302,11 @@ def _attribution(
         "confidence": "high",
         "reason_codes": [
             "broker_equity_changed",
-            "no_system_trade_or_position_evidence",
+            "no_proven_system_trade_or_position_evidence",
         ],
+        "recorded_trade_pnl_consistent": False,
         "system_profit_proven": False,
+        "provenance_verified": False,
     }
 
 
@@ -182,6 +315,8 @@ def build_profit_evidence(
     account: dict[str, Any],
     hourly_report: dict[str, Any] | None = None,
     position_review: dict[str, Any] | None = None,
+    database_session_risk: dict[str, Any] | None = None,
+    database_provenance_fetch_status: str = "not_requested",
     baseline_equity: Decimal | None = None,
     source_run_id: str | None = None,
 ) -> dict[str, Any]:
@@ -197,7 +332,7 @@ def build_profit_evidence(
 
     day_change = equity - last_equity
     day_return = day_change / last_equity
-    performance = _performance_evidence(position_review)
+    performance = _performance_evidence(position_review, database_session_risk)
     positions = hourly_report.get("positions") or []
     open_orders = hourly_report.get("openOrders") or []
     position_count = len(positions) if isinstance(positions, list) else 0
@@ -210,6 +345,9 @@ def build_profit_evidence(
         trades_today=performance["trades_today"],
         orders_submitted_this_cycle=orders_submitted,
         position_count=position_count,
+        system_provenance_verified=performance["system_provenance_verified"],
+        system_managed_trades_today=performance["system_managed_trades_today"],
+        system_managed_realized_pnl=performance["system_managed_realized_pnl"],
     )
 
     baseline: dict[str, Any] = {
@@ -255,6 +393,20 @@ def build_profit_evidence(
             "consecutive_losses": performance["consecutive_losses"],
             "performance_source": performance["source"],
             "performance_warnings": performance["warnings"],
+            "database_provenance_fetch_status": database_provenance_fetch_status,
+            "system_provenance_verified": performance[
+                "system_provenance_verified"
+            ],
+            "system_managed_trades_today": performance[
+                "system_managed_trades_today"
+            ],
+            "system_unverified_trades_today": performance[
+                "system_unverified_trades_today"
+            ],
+            "system_managed_realized_pnl": _round(
+                performance["system_managed_realized_pnl"]
+            ),
+            "system_provenance_source": performance["provenance_source"],
         },
         "attribution": attribution,
         "baseline": baseline,
@@ -262,6 +414,7 @@ def build_profit_evidence(
             "paper_endpoint_only": True,
             "broker_mutation_performed": False,
             "credentials_emitted": False,
+            "explicit_system_provenance_required_for_profit_claim": True,
         },
     }
 
@@ -277,8 +430,12 @@ def render_markdown(evidence: dict[str, Any]) -> str:
         f"- Equity: `${broker['equity']:,.2f}`",
         f"- Last equity: `${broker['last_equity']:,.2f}`",
         f"- Day equity change: `${broker['day_equity_change']:,.2f}` ({broker['day_return_pct']:.4f}%)",
-        f"- Daily realized P&L from Performance_Agent: `${system['daily_realized_pnl']:,.2f}`",
-        f"- Trades today: `{system['trades_today']}`",
+        f"- Recorded daily realized P&L: `${system['daily_realized_pnl']:,.2f}`",
+        f"- Recorded trades today: `{system['trades_today']}`",
+        f"- Database provenance lookup: `{system['database_provenance_fetch_status']}`",
+        f"- System provenance verified: `{system['system_provenance_verified']}`",
+        f"- System-managed trades today: `{system['system_managed_trades_today']}`",
+        f"- Unverified trades today: `{system['system_unverified_trades_today']}`",
         f"- Attribution: `{attribution['status']}` ({attribution['confidence']})",
         f"- System profit proven: `{attribution['system_profit_proven']}`",
     ]
@@ -293,6 +450,8 @@ def render_markdown(evidence: dict[str, Any]) -> str:
     lines.extend(
         [
             "",
+            "A matching broker P&L and recorded trade P&L is not called AI-system profit unless Database_Agent verifies the full managed fill/order/execution/Risk chain.",
+            "",
             "This evidence is read-only and never places, cancels, or modifies broker orders.",
             "",
         ]
@@ -301,7 +460,9 @@ def render_markdown(evidence: dict[str, Any]) -> str:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Capture read-only Alpaca Paper P&L evidence")
+    parser = argparse.ArgumentParser(
+        description="Capture read-only Alpaca Paper P&L evidence"
+    )
     parser.add_argument("--hourly-report", type=Path)
     parser.add_argument("--position-review", type=Path)
     parser.add_argument("--output", type=Path, required=True)
@@ -314,17 +475,27 @@ def main() -> int:
         api_key_id=os.getenv("ALPACA_API_KEY_ID", ""),
         secret_key=os.getenv("ALPACA_SECRET_KEY", ""),
     )
+    database_session_risk, provenance_status = fetch_database_session_risk(
+        database_url=os.getenv("DATABASE_AGENT_URL", ""),
+        api_key=os.getenv("DATABASE_AGENT_API_KEY", ""),
+        account_id=os.getenv("DEFAULT_ACCOUNT_ID", "1"),
+        correlation_id=args.source_run_id,
+    )
     baseline = _decimal(os.getenv("PAPER_ACCOUNT_BASELINE_EQUITY"))
     evidence = build_profit_evidence(
         account=account,
         hourly_report=_read_json(args.hourly_report),
         position_review=_read_json(args.position_review),
+        database_session_risk=database_session_risk,
+        database_provenance_fetch_status=provenance_status,
         baseline_equity=baseline,
         source_run_id=args.source_run_id,
     )
 
     args.output.parent.mkdir(parents=True, exist_ok=True)
-    args.output.write_text(json.dumps(evidence, indent=2, sort_keys=True), encoding="utf-8")
+    args.output.write_text(
+        json.dumps(evidence, indent=2, sort_keys=True), encoding="utf-8"
+    )
     if args.markdown:
         args.markdown.parent.mkdir(parents=True, exist_ok=True)
         args.markdown.write_text(render_markdown(evidence), encoding="utf-8")
@@ -335,7 +506,9 @@ def main() -> int:
                 "schema_version": evidence["schema_version"],
                 "day_equity_change": evidence["broker"]["day_equity_change"],
                 "attribution_status": evidence["attribution"]["status"],
-                "system_profit_proven": evidence["attribution"]["system_profit_proven"],
+                "system_profit_proven": evidence["attribution"][
+                    "system_profit_proven"
+                ],
             },
             sort_keys=True,
         )
