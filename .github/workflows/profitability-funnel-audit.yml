@@ -1,0 +1,52 @@
+name: Profitability Funnel Audit
+
+on:
+  workflow_run:
+    workflows:
+      - Hourly Auto Trading
+    types:
+      - completed
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: profitability-funnel-audit-${{ github.event.workflow_run.id }}
+  cancel-in-progress: false
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout Manager_Agent
+        uses: actions/checkout@v6
+
+      - name: Download hourly trading artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_RUN_ID: ${{ github.event.workflow_run.id }}
+        run: |
+          set -euo pipefail
+          mkdir -p reports-source
+          gh run download "${SOURCE_RUN_ID}" \
+            --name hourly-auto-trading-report \
+            --dir reports-source
+
+      - name: Build profitability funnel
+        run: |
+          set -euo pipefail
+          test -f reports-source/hourly-pre-backtest-discovery.json
+          python scripts/build_profitability_funnel.py \
+            --input reports-source/hourly-pre-backtest-discovery.json \
+            --output reports/hourly-profitability-funnel.json \
+            --markdown reports/hourly-profitability-funnel.md
+
+      - name: Upload profitability funnel artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: profitability-funnel-audit
+          path: reports/
+          if-no-files-found: error
+          retention-days: 30
