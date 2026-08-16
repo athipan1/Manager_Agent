@@ -1,0 +1,59 @@
+name: Paper Profit Evidence
+
+on:
+  workflow_run:
+    workflows:
+      - Hourly Auto Trading
+    types:
+      - completed
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: paper-profit-evidence-${{ github.event.workflow_run.id }}
+  cancel-in-progress: false
+
+jobs:
+  capture:
+    if: github.event.workflow_run.head_branch == 'main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      SOURCE_RUN_ID: ${{ github.event.workflow_run.id }}
+      ALPACA_API_KEY_ID: ${{ secrets.ALPACA_API_KEY_ID }}
+      ALPACA_SECRET_KEY: ${{ secrets.ALPACA_SECRET_KEY }}
+      ALPACA_API_URL: ${{ secrets.ALPACA_API_URL }}
+      PAPER_ACCOUNT_BASELINE_EQUITY: ${{ vars.PAPER_ACCOUNT_BASELINE_EQUITY }}
+
+    steps:
+      - name: Checkout Manager_Agent
+        uses: actions/checkout@v6
+
+      - name: Download hourly audit evidence when available
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p reports-source
+          gh run download "${SOURCE_RUN_ID}" \
+            --name hourly-auto-trading-report \
+            --dir reports-source || true
+
+      - name: Capture read-only Alpaca Paper profit evidence
+        run: |
+          set -euo pipefail
+          python scripts/build_paper_profit_evidence.py \
+            --hourly-report reports-source/hourly-auto-trading-report.json \
+            --position-review reports-source/hourly-position-review.json \
+            --output reports/paper-profit-evidence.json \
+            --markdown reports/paper-profit-evidence.md
+
+      - name: Upload Paper profit evidence
+        uses: actions/upload-artifact@v7
+        with:
+          name: paper-profit-evidence
+          path: reports/
+          if-no-files-found: error
+          retention-days: 90
