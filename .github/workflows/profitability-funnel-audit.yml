@@ -34,12 +34,17 @@ jobs:
             --name hourly-auto-trading-report \
             --dir reports-source
 
-      - name: Build profitability funnel
+      - name: Build profitability funnel or upstream diagnostic
+        env:
+          SOURCE_RUN_ID: ${{ github.event.workflow_run.id }}
+          SOURCE_RUN_CONCLUSION: ${{ github.event.workflow_run.conclusion }}
         run: |
           set -euo pipefail
-          test -f reports-source/hourly-pre-backtest-discovery.json
-          python scripts/build_profitability_funnel.py \
-            --input reports-source/hourly-pre-backtest-discovery.json \
+          python scripts/run_profitability_funnel_audit.py \
+            --discovery reports-source/hourly-pre-backtest-discovery.json \
+            --upstream-report reports-source/hourly-auto-trading-report.json \
+            --source-run-id "${SOURCE_RUN_ID}" \
+            --source-run-conclusion "${SOURCE_RUN_CONCLUSION}" \
             --output reports/hourly-profitability-funnel.json \
             --markdown reports/hourly-profitability-funnel.md
 
