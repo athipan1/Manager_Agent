@@ -1,0 +1,367 @@
+name: Temporary Market Regime Hourly Paper Integration
+run-name: Market Regime Hourly Paper Integration · ${{ github.event_name }} · #${{ github.run_number }}
+
+on:
+  push:
+    branches:
+      - agent/tmp-market-regime-hourly-integration
+  workflow_dispatch:
+
+concurrency:
+  group: tmp-market-regime-hourly-paper-integration
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  issues: read
+
+jobs:
+  market-regime-hourly-paper-integration:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      TRADING_ENABLED: "true"
+      TRADING_MODE: PAPER
+      BROKER_MODE: ALPACA
+      DRY_RUN: "false"
+      ALLOW_LIVE_TRADING: "false"
+      PAPER_SCHEDULE_AUTHORIZED: "false"
+      BACKTEST_PROMOTION_AUTO_APPROVE_PAPER: "false"
+      BACKTEST_PROMOTION_OBSERVATION_REQUIRED: "false"
+      BACKTEST_EXECUTION_GATE_REQUIRED: "true"
+      BROKER_RECONCILE_REQUIRED: "true"
+      BROKER_RECONCILE_CONTEXT_REQUIRED: "true"
+      PERFORMANCE_SESSION_RISK_REQUIRED: "true"
+      PROFIT_DECISION_EXECUTION_ENABLED: "false"
+      PROFIT_AUTO_EXIT_ALL_ENABLED: "false"
+      ALPACA_API_KEY_ID: ${{ secrets.ALPACA_API_KEY_ID }}
+      ALPACA_SECRET_KEY: ${{ secrets.ALPACA_SECRET_KEY }}
+      ALPACA_API_URL: ${{ secrets.ALPACA_API_URL }}
+      EXECUTION_API_KEY: ${{ secrets.EXECUTION_API_KEY }}
+      DATABASE_AGENT_URL: ${{ secrets.DATABASE_AGENT_URL }}
+      DATABASE_AGENT_API_KEY: ${{ secrets.DATABASE_AGENT_API_KEY }}
+      RISK_ADMIN_TOKEN: ${{ secrets.RISK_ADMIN_TOKEN }}
+      PORTFOLIO_AGENT_API_KEY: ${{ secrets.PORTFOLIO_AGENT_API_KEY }}
+      PROFIT_AGENT_API_KEY: ${{ secrets.PROFIT_AGENT_API_KEY }}
+      DEFAULT_ACCOUNT_ID: "1"
+      BACKTEST_ENABLED: "true"
+      BACKTEST_SKILL_ID: ${{ vars.BACKTEST_SKILL_ID || 'hourly-sma-crossover' }}
+      BACKTEST_STRATEGY_ID: ${{ vars.BACKTEST_STRATEGY_ID || 'hourly-sma-crossover' }}
+      BACKTEST_TIMEFRAME: ${{ vars.BACKTEST_TIMEFRAME || '1d' }}
+      BACKTEST_MINIMUM_BARS_REQUESTED: ${{ vars.BACKTEST_MINIMUM_BARS || '252' }}
+      BACKTEST_BAR_LIMIT: ${{ vars.BACKTEST_BAR_LIMIT || '10000' }}
+      BACKTEST_INITIAL_EQUITY: ${{ vars.BACKTEST_INITIAL_EQUITY || '100000' }}
+      BACKTEST_STRATEGY: ${{ vars.BACKTEST_STRATEGY || 'sma_crossover' }}
+      BACKTEST_FAST_WINDOW: ${{ vars.BACKTEST_FAST_WINDOW || '2' }}
+      BACKTEST_SLOW_WINDOW: ${{ vars.BACKTEST_SLOW_WINDOW || '3' }}
+      BACKTEST_FEE_BPS: ${{ vars.BACKTEST_FEE_BPS || '10' }}
+      BACKTEST_SLIPPAGE_BPS: ${{ vars.BACKTEST_SLIPPAGE_BPS || '5' }}
+      ALPACA_DATA_API_URL: https://data.alpaca.markets
+      ALPACA_DATA_FEED: iex
+      ALPHA_AGENTS_ENABLED: "true"
+      MARKET_REGIME_AGENT_ENABLED: "true"
+      MARKET_REGIME_AGENT_URL: http://localhost:8014
+      EXECUTE_PAPER_PROTECTION_RECONCILIATION: "false"
+      PYTHONUNBUFFERED: "1"
+
+    steps:
+      - name: Checkout Manager_Agent test branch
+        uses: actions/checkout@v6
+        with:
+          path: Manager_Agent
+
+      - name: Generate ephemeral Market Regime API key
+        shell: bash
+        run: |
+          set -euo pipefail
+          key="$(python -c 'import secrets; print(secrets.token_urlsafe(48))')"
+          echo "::add-mask::$key"
+          echo "MARKET_REGIME_API_KEY=$key" >> "$GITHUB_ENV"
+          echo "MARKET_REGIME_AGENT_API_KEY=$key" >> "$GITHUB_ENV"
+
+      - name: Check durable Alpaca Paper emergency halt
+        working-directory: Manager_Agent
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: python scripts/paper_trading_control.py assert-clear
+
+      - name: Resolve Backtest runtime contract
+        working-directory: Manager_Agent
+        run: |
+          python scripts/resolve_backtest_runtime.py \
+            --github-env "$GITHUB_ENV" \
+            --output reports/backtest-runtime-contract.json
+
+      - name: Validate real Alpaca Paper preflight and market data
+        id: preflight
+        working-directory: Manager_Agent
+        run: python scripts/hourly_paper_preflight.py
+
+      - name: Require Paper automation preflight
+        working-directory: Manager_Agent
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          report = json.loads(Path("reports/hourly-preflight.json").read_text())
+          runtime = report.get("runtime") or {}
+          assert report.get("status") == "ready", report
+          assert runtime.get("paper_automation") is True, runtime
+          assert runtime.get("broker_mode") == "ALPACA", runtime
+          assert runtime.get("dry_run") is False, runtime
+          market = report.get("market_regime_inputs") or {}
+          required = ("symbol", "price", "sma_50", "sma_200", "atr_pct", "market_data_timestamp")
+          missing = [name for name in required if market.get(name) in (None, "")]
+          if missing:
+              raise SystemExit(f"Market preflight inputs missing: {missing}")
+          print(json.dumps({
+              "status": "paper-preflight-ready",
+              "market_open": report.get("market_open"),
+              "market_mode": report.get("market_mode"),
+              "symbol": market.get("symbol"),
+              "market_data_timestamp": market.get("market_data_timestamp"),
+              "required_market_fields_present": True,
+          }, indent=2, sort_keys=True))
+          PY
+
+      - name: Configure isolated Paper runtime stack
+        working-directory: Manager_Agent
+        run: |
+          echo "COMPOSE_FILE=docker-compose.yml:docker-compose.risk.yml:docker-compose.alpha.yml:docker-compose.hourly-paper.yml" >> "$GITHUB_ENV"
+          echo "RUNTIME_DATABASE_AGENT_URL=${DATABASE_AGENT_URL}" >> "$GITHUB_ENV"
+
+      - name: Checkout Scanner_Agent
+        uses: actions/checkout@v6
+        with:
+          repository: athipan1/Scanner_Agent
+          ref: main
+          path: Scanner_Agent
+          fetch-depth: 1
+
+      - name: Checkout Technical_Agent
+        uses: actions/checkout@v6
+        with:
+          repository: athipan1/Technical_Agent
+          ref: main
+          path: Technical_Agent
+          fetch-depth: 1
+
+      - name: Checkout Fundamental_Agent
+        uses: actions/checkout@v6
+        with:
+          repository: athipan1/Fundamental_Agent
+          ref: main
+          path: Fundamental_Agent
+          fetch-depth: 1
+
+      - name: Checkout Backtest_Agent
+        uses: actions/checkout@v6
+        with:
+          repository: athipan1/Backtest_Agent
+          ref: main
+          path: Backtest_Agent
+          fetch-depth: 1
+
+      - name: Checkout Execution_Agent
+        uses: actions/checkout@v6
+        with:
+          repository: athipan1/Execution_Agent
+          ref: main
+          path: Execution_Agent
+          fetch-depth: 1
+
+      - name: Checkout Risk_Agent
+        uses: actions/checkout@v6
+        with:
+          repository: athipan1/Risk_Agent
+          ref: main
+          path: Risk_Agent
+          fetch-depth: 1
+
+      - name: Checkout Portfolio_Agent
+        uses: actions/checkout@v6
+        with:
+          repository: athipan1/Portfolio_Agent
+          ref: main
+          path: Portfolio_Agent
+          fetch-depth: 1
+
+      - name: Checkout Profit_Agent
+        uses: actions/checkout@v6
+        with:
+          repository: athipan1/Profit_Agent
+          ref: main
+          path: Profit_Agent
+          fetch-depth: 1
+
+      - name: Checkout Performance_Agent
+        uses: actions/checkout@v6
+        with:
+          repository: athipan1/Performance_Agent
+          ref: main
+          path: Performance_Agent
+          fetch-depth: 1
+
+      - name: Checkout Market_Regime_Agent
+        uses: actions/checkout@v6
+        with:
+          repository: athipan1/Market_Regime_Agent
+          ref: main
+          path: Market_Regime_Agent
+          fetch-depth: 1
+
+      - name: Install Manager host-script dependencies
+        working-directory: Manager_Agent
+        run: python -m pip install --disable-pip-version-check -r requirements.prod.base.txt
+
+      - name: Validate compose model
+        working-directory: Manager_Agent
+        run: docker compose --profile backtest config --quiet
+
+      - name: Start AI Trading agent stack
+        working-directory: Manager_Agent
+        run: |
+          docker compose --profile backtest up --build -d \
+            scanner-agent technical-agent fundamental-agent risk-agent \
+            backtest-agent market-regime-agent portfolio-agent profit-agent \
+            performance-agent execution-agent manager-agent
+
+      - name: Wait for required AI Trading services
+        working-directory: Manager_Agent
+        env:
+          MANAGER_AGENT_URL: http://localhost:8000
+          TECHNICAL_AGENT_URL: http://localhost:8002
+          FUNDAMENTAL_AGENT_URL: http://localhost:8001
+          MARKET_REGIME_AGENT_URL: http://localhost:8014
+          PORTFOLIO_AGENT_URL: http://localhost:8012
+          PROFIT_AGENT_URL: http://localhost:8011
+          PERFORMANCE_AGENT_URL: http://localhost:8013
+          EXECUTION_AGENT_URL: http://localhost:8006
+          DATABASE_AGENT_URL: ${{ env.RUNTIME_DATABASE_AGENT_URL }}
+        run: python scripts/hourly_portfolio_cycle.py wait
+
+      - name: Verify Manager to Market Regime contract and gate
+        working-directory: Manager_Agent
+        env:
+          MARKET_REGIME_AGENT_URL: http://localhost:8014
+          MARKET_REGIME_AGENT_ENABLED: "true"
+          ALPHA_AGENTS_ENABLED: "true"
+        run: |
+          python - <<'PY'
+          import asyncio
+          import json
+          from pathlib import Path
+
+          from app.alpha_agent_client import recommend_market_strategy
+          from app.market_regime_contract import (
+              evaluate_market_regime_gate,
+              market_regime_envelope_issues,
+          )
+          from scripts.hourly_runtime_loader import runtime
+
+          preflight = json.loads(Path("reports/hourly-preflight.json").read_text())
+          payload = preflight.get("market_regime_inputs") or {}
+          correlation_id = str(preflight.get("correlation_id") or preflight.get("portfolio_cycle_id"))
+          if not correlation_id:
+              raise SystemExit("Preflight correlation_id is missing")
+
+          client = runtime.JsonHttpClient(
+              base_url="http://localhost:8014",
+              service_name="Market_Regime_Agent",
+              timeout_seconds=30,
+          )
+          regime_response = client.request(
+              "/market/regime",
+              method="POST",
+              payload=payload,
+              correlation_id=correlation_id,
+          )
+          regime_issues = market_regime_envelope_issues(regime_response, correlation_id)
+          if regime_issues:
+              raise SystemExit(f"Market regime envelope failed: {regime_issues}")
+
+          manager_result = asyncio.run(recommend_market_strategy(payload, correlation_id))
+          if manager_result.get("enabled") is not True:
+              raise SystemExit(f"Manager Market Regime client disabled: {manager_result}")
+
+          recommendation = manager_result.get("recommendation") or {}
+          gate = manager_result.get("gate") or {}
+          decision = str(gate.get("decision") or "").upper()
+          if decision not in {"TRADE", "REVIEW", "NO_TRADE"}:
+              raise SystemExit(f"Unexpected Market Regime gate decision: {gate}")
+          if decision == "TRADE" and gate.get("new_entries_allowed") is not True:
+              raise SystemExit(f"TRADE must allow new entries: {gate}")
+          if decision != "TRADE" and gate.get("new_entries_allowed") is True:
+              raise SystemExit(f"Non-TRADE gate must block new entries: {gate}")
+
+          regime = regime_response.get("data") or {}
+          quality = regime.get("data_quality") or {}
+          if quality.get("status") not in {"good", "review", "blocked"}:
+              raise SystemExit(f"Invalid data quality contract: {quality}")
+
+          direct_strategy_response = client.request(
+              "/market/strategy",
+              method="POST",
+              payload=payload,
+              correlation_id=correlation_id,
+          )
+          strategy_issues = market_regime_envelope_issues(
+              direct_strategy_response,
+              correlation_id,
+          )
+          if strategy_issues:
+              raise SystemExit(f"Market strategy envelope failed: {strategy_issues}")
+          direct_recommendation = direct_strategy_response.get("data") or {}
+          direct_gate = evaluate_market_regime_gate(
+              regime,
+              direct_recommendation,
+              contract_issues=[],
+          )
+          if direct_gate.get("new_entries_allowed") != gate.get("new_entries_allowed"):
+              raise SystemExit(
+                  "Manager gate and direct Market Regime gate disagree on new-entry safety"
+              )
+
+          report = {
+              "status": "success",
+              "integration": "Manager_Agent -> Market_Regime_Agent -> Manager gate",
+              "paper_preflight": True,
+              "paper_order_mutation_exercised": False,
+              "correlation_id": correlation_id,
+              "symbol": payload.get("symbol"),
+              "market_data_timestamp": payload.get("market_data_timestamp"),
+              "regime": regime.get("regime"),
+              "risk_level": regime.get("risk_level"),
+              "recommended_mode": regime.get("recommended_mode"),
+              "data_quality": quality,
+              "strategy_recommended_action": recommendation.get("recommended_action"),
+              "strategy": recommendation.get("recommended_strategy"),
+              "gate": gate,
+              "manager_and_direct_gate_agree": True,
+          }
+          output = Path("reports/market-regime-hourly-paper-integration.json")
+          output.write_text(json.dumps(report, indent=2, sort_keys=True), encoding="utf-8")
+          print(json.dumps(report, indent=2, sort_keys=True))
+          PY
+
+      - name: Show Market Regime integration diagnostics
+        if: always()
+        working-directory: Manager_Agent
+        run: |
+          docker compose --profile backtest ps || true
+          docker compose --profile backtest logs --tail=250 market-regime-agent manager-agent || true
+
+      - name: Upload Market Regime integration report
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: market-regime-hourly-paper-integration
+          path: Manager_Agent/reports/
+          if-no-files-found: warn
+          retention-days: 7
+
+      - name: Stop AI Trading stack
+        if: always()
+        working-directory: Manager_Agent
+        run: docker compose --profile backtest down -v
