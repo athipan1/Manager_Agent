@@ -4,7 +4,7 @@ from scripts.verify_backtest_publish import verify_backtest_publish
 
 
 MODE = "nested_walk_forward_multi_strategy_selection"
-PROFILE = "nested_walk_forward_v2"
+PROFILE = "nested_walk_forward_v3"
 METHOD = "nested_train_select_test_evaluate"
 
 
@@ -123,7 +123,7 @@ def test_rejects_nested_no_trade_that_published_fixed_result_as_selected():
         verify_backtest_publish(report)
 
 
-def test_rejects_nested_mode_without_v2_profile():
+def test_rejects_nested_mode_without_v3_profile():
     report = _batch([_no_trade_item()])
     report["data"]["validation_profile"] = "rolling_walk_forward_v1"
 
