@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 from dataclasses import dataclass
 from typing import Any, Dict, Optional
 
@@ -20,6 +21,10 @@ from .config import (
     PROFIT_AGENT_API_KEY,
     PROFIT_AGENT_TIMEOUT,
     PROFIT_AGENT_URL,
+)
+from .market_regime_contract import (
+    evaluate_market_regime_gate,
+    market_regime_envelope_issues,
 )
 from .resilient_client import ResilientAgentClient
 from .services.serialization_service import dict_or_empty
@@ -74,10 +79,21 @@ ALPHA_AGENT_SPECS = {
 }
 
 
+def _market_regime_api_key() -> str:
+    return (
+        os.getenv("MARKET_REGIME_AGENT_API_KEY")
+        or os.getenv("MARKET_REGIME_API_KEY")
+        or ""
+    ).strip()
+
+
 def _client_headers(spec: AlphaAgentSpec) -> Dict[str, str] | None:
-    if not spec.api_key:
+    api_key = spec.api_key
+    if spec.name == "market_regime":
+        api_key = _market_regime_api_key() or api_key
+    if not api_key:
         return None
-    return {"X-API-KEY": spec.api_key}
+    return {"X-API-KEY": api_key}
 
 
 def _client_for_spec(spec: AlphaAgentSpec) -> ResilientAgentClient:
@@ -108,6 +124,10 @@ async def _call_alpha_agent(
             response_correlation_id = response.get("correlation_id")
             if response_correlation_id not in {None, correlation_id}:
                 raise ValueError("Profit Agent correlation_id did not match the request")
+        if spec.name == "market_regime":
+            response_correlation_id = response.get("correlation_id")
+            if response_correlation_id not in {None, "", correlation_id}:
+                raise ValueError("Market Regime Agent correlation_id did not match the request")
         validated = client.validate_standard_response(response)
         return validated.model_dump(mode="json")
 
@@ -123,19 +143,34 @@ async def recommend_market_strategy(
     request_payload: Dict[str, Any],
     correlation_id: str,
 ) -> Dict[str, Any]:
-    """Ask Market_Regime_Agent for the strategy best suited to the current regime."""
+    """Ask Market_Regime_Agent for a strategy and evaluate its new-entry gate."""
     if not MARKET_REGIME_AGENT_ENABLED:
         return {
             "enabled": False,
             "skipped": "MARKET_REGIME_AGENT_ENABLED is false",
             "recommendation": None,
+            "gate": {
+                "new_entries_allowed": False,
+                "decision": "REVIEW",
+                "reasons": ["market_regime_agent_disabled"],
+            },
         }
-    async with ResilientAgentClient(base_url=MARKET_REGIME_AGENT_URL, timeout=MARKET_REGIME_AGENT_TIMEOUT) as client:
+
+    spec = ALPHA_AGENT_SPECS["market_regime"]
+    async with _client_for_spec(spec) as client:
         response = await client._post("/market/strategy", correlation_id, request_payload)
+        contract_issues = market_regime_envelope_issues(response, correlation_id)
         validated = client.validate_standard_response(response)
+        recommendation = dict_or_empty(validated.data)
+        gate = evaluate_market_regime_gate(
+            {},
+            recommendation,
+            contract_issues=contract_issues,
+        )
         return {
             "enabled": True,
-            "recommendation": dict_or_empty(validated.data),
+            "recommendation": recommendation,
+            "gate": gate,
         }
 
 

@@ -78,7 +78,11 @@ async def run_regime_backtest_compare(
 
     strategy_data = await recommend_market_strategy(market_regime_payload, correlation_id)
     recommendation = strategy_data.get("recommendation") or {}
-    plan = build_regime_backtest_plan(recommendation, backtest_payload)
+    plan = build_regime_backtest_plan(
+        recommendation,
+        backtest_payload,
+        market_gate=strategy_data.get("gate"),
+    )
 
     if plan.get("action") != "compare":
         return {

@@ -8,6 +8,7 @@ from app.alpha_agent_client import (
     _call_alpha_agent,
     _health_alpha_agent,
     build_alpha_advisory,
+    recommend_market_strategy,
 )
 
 
@@ -24,6 +25,7 @@ async def test_build_alpha_advisory_skips_all_when_disabled():
 class _ValidatedResponse:
     def __init__(self, payload):
         self.payload = payload
+        self.data = payload.get("data") if isinstance(payload, dict) else None
 
     def model_dump(self, mode="json"):
         return self.payload
@@ -126,3 +128,101 @@ async def test_profit_advisory_client_sets_api_key_and_correlation_id(monkeypatc
     assert captured["headers"] == {"X-API-KEY": "profit-service-key"}
     assert captured["correlation_id"] == "profit-correlation-id"
     assert captured["endpoint"] == "/profit/plan"
+
+
+@pytest.mark.asyncio
+async def test_market_regime_advisory_client_sets_api_key_and_correlation_id(monkeypatch):
+    captured = {}
+    monkeypatch.setenv("MARKET_REGIME_AGENT_API_KEY", "market-service-key")
+
+    class FakeClient:
+        def __init__(self, *, base_url, timeout, headers=None):
+            captured["headers"] = headers
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc_val, exc_tb):
+            return None
+
+        async def _post(self, endpoint, correlation_id, payload):
+            captured.update(
+                endpoint=endpoint,
+                correlation_id=correlation_id,
+                payload=payload,
+            )
+            return {
+                "status": "success",
+                "agent_type": "market-regime-agent",
+                "schema_version": "1.1",
+                "correlation_id": correlation_id,
+                "data": payload,
+            }
+
+        def validate_standard_response(self, response):
+            return _ValidatedResponse(response)
+
+    monkeypatch.setattr(alpha_agent_client, "ResilientAgentClient", FakeClient)
+    payload = {"symbol": "SPY"}
+    await _call_alpha_agent(
+        ALPHA_AGENT_SPECS["market_regime"],
+        "market-correlation-id",
+        payload,
+    )
+
+    assert captured["headers"] == {"X-API-KEY": "market-service-key"}
+    assert captured["correlation_id"] == "market-correlation-id"
+    assert captured["endpoint"] == "/market/regime"
+    assert captured["payload"] == payload
+
+
+@pytest.mark.asyncio
+async def test_market_strategy_returns_fail_closed_gate_and_preserves_correlation(monkeypatch):
+    captured = {}
+    monkeypatch.setenv("MARKET_REGIME_AGENT_API_KEY", "market-service-key")
+
+    class FakeClient:
+        def __init__(self, *, base_url, timeout, headers=None):
+            captured["headers"] = headers
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc_val, exc_tb):
+            return None
+
+        async def _post(self, endpoint, correlation_id, payload):
+            captured.update(endpoint=endpoint, correlation_id=correlation_id)
+            return {
+                "status": "success",
+                "agent_type": "market-regime-agent",
+                "version": "0.2.0",
+                "schema_version": "1.1",
+                "timestamp": "2026-08-16T00:00:00Z",
+                "correlation_id": correlation_id,
+                "data": {
+                    "recommended_action": "trade",
+                    "recommended_strategy": "trend_following",
+                    "position_size_multiplier": 1.0,
+                    "risk_multiplier": 1.0,
+                    "risk_budget_multiplier": 1.0,
+                    "exposure_cap": 1.0,
+                    "allowed_strategies": ["trend_following"],
+                    "data_quality": {"status": "good", "trade_allowed": True},
+                },
+                "metadata": {},
+                "error": None,
+            }
+
+        def validate_standard_response(self, response):
+            return _ValidatedResponse(response)
+
+    monkeypatch.setattr(alpha_agent_client, "ResilientAgentClient", FakeClient)
+
+    result = await recommend_market_strategy({"symbol": "SPY"}, "market-correlation-id")
+
+    assert captured["headers"] == {"X-API-KEY": "market-service-key"}
+    assert captured["endpoint"] == "/market/strategy"
+    assert captured["correlation_id"] == "market-correlation-id"
+    assert result["gate"]["new_entries_allowed"] is True
+    assert result["gate"]["decision"] == "PASS"

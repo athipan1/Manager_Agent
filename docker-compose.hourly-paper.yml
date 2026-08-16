@@ -27,6 +27,7 @@ services:
       PERFORMANCE_SESSION_RISK_ENABLED: "true"
       PERFORMANCE_SESSION_RISK_REQUIRED: "true"
       MARKET_REGIME_AGENT_ENABLED: "true"
+      MARKET_REGIME_AGENT_API_KEY: ${MARKET_REGIME_API_KEY:?MARKET_REGIME_API_KEY is required}
       PORTFOLIO_AGENT_ENABLED: "true"
       PROFIT_AGENT_ENABLED: "true"
       MARKET_REGIME_AGENT_URL: http://market-regime-agent:8014
@@ -90,6 +91,12 @@ services:
     environment:
       ADMIN_TOKEN: ${RISK_ADMIN_TOKEN:?RISK_ADMIN_TOKEN is required}
       EMERGENCY_HALT: "false"
+
+  market-regime-agent:
+    environment:
+      APP_ENV: production
+      MARKET_REGIME_AUTH_REQUIRED: "true"
+      MARKET_REGIME_API_KEY: ${MARKET_REGIME_API_KEY:?MARKET_REGIME_API_KEY is required}
 
   portfolio-agent:
     environment:

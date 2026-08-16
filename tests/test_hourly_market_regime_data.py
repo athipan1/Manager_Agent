@@ -46,6 +46,7 @@ def test_market_regime_uses_explicit_history_window(monkeypatch):
     assert query["limit"] == ["10000"]
     assert result["bar_count"] == 220
     assert result["data_feed"] == "iex"
+    assert result["market_data_timestamp"] == "2026-07-26T00:00:00+00:00"
     assert result["sma_200"] > 0
     assert result["atr_pct"] > 0
 

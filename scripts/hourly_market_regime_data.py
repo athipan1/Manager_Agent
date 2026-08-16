@@ -38,11 +38,10 @@ def fetch_market_regime_inputs(
 ) -> dict[str, Any]:
     """Fetch enough historical daily bars and derive deterministic regime inputs.
 
-    Alpaca defaults a historical-bars request with no ``start`` value to the
-    beginning of the current day. The previous implementation therefore often
-    received zero or one daily bar. This implementation requests an explicit
-    lookback window and follows ``next_page_token`` while keeping the safety
-    gate fail-closed.
+    ``market_data_timestamp`` is the observation/fetch timestamp, not the daily
+    candle timestamp. That distinction lets Market_Regime_Agent measure whether
+    Manager's evidence snapshot is fresh while the underlying strategy remains a
+    daily-bar regime model.
     """
     normalized_symbol = symbol.strip().upper()
     if not normalized_symbol or not normalized_symbol.replace(".", "").isalnum():
@@ -122,6 +121,7 @@ def fetch_market_regime_inputs(
         "sma_50": round(sum(closes[-50:]) / 50, 6),
         "sma_200": round(sum(closes[-200:]) / 200, 6),
         "atr_pct": round(atr / price, 8) if price > 0 else None,
+        "market_data_timestamp": end.isoformat(),
         "bar_count": len(bars),
         "data_feed": "iex",
     }

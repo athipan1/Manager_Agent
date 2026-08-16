@@ -3,16 +3,31 @@ import pytest
 from app.regime_backtest_compare_service import build_regime_backtest_decision, run_regime_backtest_compare
 
 
+def _trade_recommendation(symbol="SPY"):
+    return {
+        "symbol": symbol,
+        "regime": "bull",
+        "recommended_action": "trade",
+        "recommended_strategy": "trend_following",
+        "position_size_multiplier": 1.0,
+        "risk_multiplier": 1.0,
+        "risk_budget_multiplier": 1.0,
+        "exposure_cap": 1.0,
+        "allowed_strategies": ["trend_following", "breakout"],
+        "data_quality": {"status": "good", "trade_allowed": True},
+    }
+
+
 @pytest.mark.asyncio
 async def test_run_regime_backtest_compare_executes_compare(monkeypatch):
     async def fake_recommend_market_strategy(payload, correlation_id):
         return {
             "enabled": True,
-            "recommendation": {
-                "symbol": payload["symbol"],
-                "regime": "bull",
-                "recommended_strategy": "trend_following",
-                "position_size_multiplier": 1.0,
+            "recommendation": _trade_recommendation(payload["symbol"]),
+            "gate": {
+                "new_entries_allowed": True,
+                "decision": "PASS",
+                "reasons": [],
             },
         }
 
@@ -65,8 +80,19 @@ async def test_run_regime_backtest_compare_skips_no_trade(monkeypatch):
             "recommendation": {
                 "symbol": payload["symbol"],
                 "regime": "volatile",
+                "recommended_action": "no_trade",
                 "recommended_strategy": "no_trade",
                 "position_size_multiplier": 0.0,
+                "risk_multiplier": 0.0,
+                "risk_budget_multiplier": 0.0,
+                "exposure_cap": 0.0,
+                "allowed_strategies": [],
+                "data_quality": {"status": "good", "trade_allowed": True},
+            },
+            "gate": {
+                "new_entries_allowed": False,
+                "decision": "NO_TRADE",
+                "reasons": ["market_regime_recommended_no_trade"],
             },
         }
 
