@@ -1,0 +1,78 @@
+name: Backtest Exact GET Probe
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  exact-get:
+    name: Exact Backtest run GET
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      DATABASE_AGENT_URL: ${{ secrets.DATABASE_AGENT_URL }}
+      DATABASE_AGENT_API_KEY: ${{ secrets.DATABASE_AGENT_API_KEY }}
+      RUN_ID: backtest-storage-e2e-dd71d2bda9f2a165a3912441
+    steps:
+      - name: Normalize Database URL and verify exact run
+        run: |
+          test -n "$DATABASE_AGENT_URL" || { echo "DATABASE_AGENT_URL missing"; exit 1; }
+          test -n "$DATABASE_AGENT_API_KEY" || { echo "DATABASE_AGENT_API_KEY missing"; exit 1; }
+          case "$DATABASE_AGENT_URL" in
+            http://*|https://*) base_url="${DATABASE_AGENT_URL%/}" ;;
+            *) base_url="https://${DATABASE_AGENT_URL%/}" ;;
+          esac
+          correlation_id="backtest-exact-get-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          status="$(curl --max-time 120 --silent --show-error \
+            --output /tmp/exact-run.json \
+            --write-out '%{http_code}' \
+            -H "X-API-KEY: $DATABASE_AGENT_API_KEY" \
+            -H "X-Correlation-ID: $correlation_id" \
+            "$base_url/backtests/runs/$RUN_ID")"
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          body = json.loads(Path('/tmp/exact-run.json').read_text())
+          expected_run_id = 'backtest-storage-e2e-dd71d2bda9f2a165a3912441'
+          if body.get('status') != 'success':
+              raise SystemExit(f"Database response status is not success: {body.get('status')}")
+          run = (body.get('data') or {}).get('run') or {}
+          expected = {
+              'run_id': expected_run_id,
+              'skill_id': 'hourly-backtest-storage-e2e',
+              'strategy_id': 'breakout-balanced-v1',
+              'symbol': 'META',
+              'timeframe': '1d',
+          }
+          actual = {key: run.get(key) for key in expected}
+          if actual != expected:
+              raise SystemExit(f'Exact identity mismatch: expected={expected} actual={actual}')
+          evidence = {
+              'status': 'success',
+              'run_id': run.get('run_id'),
+              'skill_id': run.get('skill_id'),
+              'strategy_id': run.get('strategy_id'),
+              'symbol': run.get('symbol'),
+              'timeframe': run.get('timeframe'),
+              'run_status': run.get('status'),
+              'exact_identity_match': True,
+              'trade_count': len((body.get('data') or {}).get('trades') or []),
+              'equity_point_count': len((body.get('data') or {}).get('equity_curve') or []),
+          }
+          Path('exact-get-evidence.json').write_text(json.dumps(evidence, indent=2, sort_keys=True))
+          print(json.dumps(evidence, indent=2, sort_keys=True))
+          PY
+          test "$status" = "200" || { echo "Exact GET returned HTTP $status"; cat /tmp/exact-run.json; exit 1; }
+
+      - name: Upload exact GET evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: backtest-exact-get-${{ github.run_id }}
+          path: exact-get-evidence.json
+          if-no-files-found: warn
+          retention-days: 30
