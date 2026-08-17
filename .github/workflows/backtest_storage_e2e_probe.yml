@@ -1,0 +1,245 @@
+name: Backtest Storage E2E Probe
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+env:
+  DATABASE_AGENT_URL: ${{ secrets.DATABASE_AGENT_URL }}
+  DATABASE_AGENT_API_KEY: ${{ secrets.DATABASE_AGENT_API_KEY }}
+  ALPACA_API_KEY_ID: ${{ secrets.ALPACA_API_KEY_ID }}
+  ALPACA_SECRET_KEY: ${{ secrets.ALPACA_SECRET_KEY }}
+  ALPACA_DATA_API_URL: https://data.alpaca.markets
+  ALPACA_DATA_FEED: iex
+  BACKTEST_FEE_BPS: '0'
+  BACKTEST_SLIPPAGE_BPS: '0'
+  BACKTEST_RISK_PER_TRADE: '0.01'
+  BACKTEST_MAX_POSITION_PCT: '0.10'
+  BACKTEST_STOP_LOSS_PCT: '0.03'
+  BACKTEST_REWARD_RISK_RATIO: '2.0'
+  BACKTEST_USE_RISK_AGENT: 'true'
+  BACKTEST_MAX_TRADES_PER_DAY: '5'
+  BACKTEST_EMERGENCY_HALT: 'false'
+  BACKTEST_FORCE_CLOSE_AT_END: 'false'
+  BACKTEST_MAX_TOTAL_EXPOSURE_PCT: '1.0'
+  BACKTEST_MAX_OPEN_POSITIONS: '25'
+  BACKTEST_CASH_RESERVE_PCT: '0.0'
+  BACKTEST_MAX_NEW_POSITIONS_PER_BAR: '25'
+  BACKTEST_PERIODS_PER_YEAR: '252'
+  BACKTEST_ANNUAL_RISK_FREE_RATE: '0.0'
+  BACKTEST_MAX_VOLUME_PARTICIPATION_PCT: '1.0'
+  BACKTEST_MARKET_IMPACT_BPS: '0.0'
+
+jobs:
+  storage-e2e:
+    name: Real Backtest storage POST and exact GET
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout Manager probe
+        uses: actions/checkout@v6
+
+      - name: Checkout Backtest_Agent main
+        uses: actions/checkout@v6
+        with:
+          repository: athipan1/Backtest_Agent
+          ref: main
+          path: Backtest_Agent
+          fetch-depth: 1
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: Backtest_Agent/requirements-dev.txt
+
+      - name: Install Backtest dependencies
+        working-directory: Backtest_Agent
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements-dev.txt
+
+      - name: Run real storage-only Backtest and exact GET
+        working-directory: Backtest_Agent
+        run: |
+          python - <<'PY'
+          from __future__ import annotations
+
+          import hashlib
+          import json
+          import os
+          from pathlib import Path
+
+          import httpx
+
+          from app.data_provider import AlpacaMarketDataProvider, dataset_fingerprint
+          from app.hourly_promotion_runner import (
+              DEFAULT_FINAL_HOLDOUT_BARS,
+              DEFAULT_HISTORY_DAYS,
+              DEFAULT_MINIMUM_BARS,
+              _default_date_range,
+              _request_kwargs,
+          )
+          from app.multi_strategy import build_run_request
+          from app.multi_strategy_walk_forward import WalkForwardMultiStrategyRequest
+          from app.publisher import publish_backtest_result
+          from app.risk_engine import run_backtest_with_risk
+          from app.database_client import DatabaseAgentClient
+
+          symbol = 'META'
+          timeframe = '1d'
+          start, end = _default_date_range()
+          provider = AlpacaMarketDataProvider(
+              api_key=os.environ['ALPACA_API_KEY_ID'],
+              secret_key=os.environ['ALPACA_SECRET_KEY'],
+              base_url=os.environ.get('ALPACA_DATA_API_URL', 'https://data.alpaca.markets'),
+              feed=os.environ.get('ALPACA_DATA_FEED', 'iex'),
+          )
+          bars = provider.fetch_bars(
+              symbol=symbol,
+              timeframe=timeframe,
+              start=start,
+              end=end,
+              minimum_bars=DEFAULT_MINIMUM_BARS + DEFAULT_FINAL_HOLDOUT_BARS,
+              limit=10000,
+          )
+          # Keep the final 252 bars sealed. This storage probe uses research data only.
+          research_bars = bars[:-DEFAULT_FINAL_HOLDOUT_BARS]
+          request = WalkForwardMultiStrategyRequest(
+              **_request_kwargs(symbol=symbol, bars=research_bars)
+          )
+
+          # Storage-only evidence uses the best diagnostic candidate. It does NOT
+          # create a promotion and MUST NOT be interpreted as approved for trading.
+          from app.multi_strategy import run_multi_strategy_backtest
+          selection = run_multi_strategy_backtest(request)
+          best = selection.best_overall
+          if best is None:
+              raise SystemExit('No diagnostic candidate was produced')
+          candidate = next(
+              candidate for candidate in request.candidates
+              if (candidate.strategy_id or '') == best.strategy_id
+          )
+          run_request = build_run_request(candidate, request).model_copy(
+              deep=True,
+              update={'force_close_at_end': True},
+          )
+          result = run_backtest_with_risk(run_request)
+          fingerprint = dataset_fingerprint({symbol: research_bars})
+          identity = {
+              'symbol': symbol,
+              'strategy_id': best.strategy_id,
+              'timeframe': timeframe,
+              'dataset_fingerprint': fingerprint,
+              'workflow_run_id': os.environ.get('GITHUB_RUN_ID', 'local'),
+          }
+          digest = hashlib.sha256(
+              json.dumps(identity, sort_keys=True).encode('utf-8')
+          ).hexdigest()[:24]
+          run_id = f'backtest-storage-e2e-{digest}'
+          correlation_id = f'backtest-storage-e2e-{os.environ.get("GITHUB_RUN_ID", "local")}'
+
+          publication = publish_backtest_result(
+              request=run_request,
+              result=result,
+              account_id='1',
+              run_id=run_id,
+              skill_id='hourly-backtest-storage-e2e',
+              strategy_id=best.strategy_id,
+              timeframe=timeframe,
+              correlation_id=correlation_id,
+              metadata={
+                  'source': 'backtest_storage_e2e_probe',
+                  'storage_only': True,
+                  'safe_for_trading': False,
+                  'promotion_eligible': False,
+                  'promotion_created': False,
+                  'selection_status': selection.selection_status,
+                  'dataset_fingerprint': fingerprint,
+                  'history_days': DEFAULT_HISTORY_DAYS,
+                  'research_bar_count': len(research_bars),
+                  'sealed_holdout_bar_count': DEFAULT_FINAL_HOLDOUT_BARS,
+                  'sealed_holdout_opened': False,
+              },
+          )
+          if publication.get('status') != 'success':
+              raise SystemExit(f'POST /backtests/runs failed: {publication}')
+
+          client = DatabaseAgentClient()
+          response = httpx.get(
+              f'{client.base_url}/backtests/runs/{run_id}',
+              headers={
+                  'X-API-KEY': client.api_key,
+                  'X-Correlation-ID': correlation_id,
+              },
+              timeout=30.0,
+          )
+          if response.status_code != 200:
+              raise SystemExit(
+                  f'GET exact run failed: HTTP {response.status_code}: {response.text[:500]}'
+              )
+          document = response.json()
+          persisted = (document.get('data') or {}).get('run') or {}
+          expected = {
+              'run_id': run_id,
+              'symbol': symbol,
+              'strategy_id': best.strategy_id,
+              'timeframe': timeframe,
+          }
+          actual = {
+              'run_id': persisted.get('run_id'),
+              'symbol': persisted.get('symbol'),
+              'strategy_id': persisted.get('strategy_id'),
+              'timeframe': persisted.get('timeframe'),
+          }
+          if document.get('status') != 'success' or actual != expected:
+              raise SystemExit(
+                  f'Exact persisted identity mismatch: expected={expected} actual={actual}'
+              )
+
+          evidence = {
+              'status': 'success',
+              'real_market_data': True,
+              'storage_only': True,
+              'promotion_created': False,
+              'safe_for_trading': False,
+              'symbol': symbol,
+              'strategy_id': best.strategy_id,
+              'selection_status': selection.selection_status,
+              'run_id': run_id,
+              'correlation_id': correlation_id,
+              'post_status': publication.get('status'),
+              'exact_get_http_status': response.status_code,
+              'exact_identity_match': True,
+              'database_provider': 'Database_Agent',
+              'research_bar_count': len(research_bars),
+              'sealed_holdout_bar_count': DEFAULT_FINAL_HOLDOUT_BARS,
+              'sealed_holdout_opened': False,
+              'metrics': {
+                  'trade_count': result.metrics.trade_count,
+                  'return_pct': result.metrics.return_pct,
+                  'sharpe_ratio': result.metrics.sharpe_ratio,
+                  'max_drawdown': result.metrics.max_drawdown,
+                  'profit_factor': result.metrics.profit_factor,
+              },
+          }
+          Path('reports').mkdir(exist_ok=True)
+          Path('reports/backtest-storage-e2e.json').write_text(
+              json.dumps(evidence, indent=2, sort_keys=True),
+              encoding='utf-8',
+          )
+          print(json.dumps(evidence, indent=2, sort_keys=True))
+          PY
+
+      - name: Upload storage E2E evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: backtest-storage-e2e-${{ github.run_id }}
+          path: Backtest_Agent/reports/backtest-storage-e2e.json
+          if-no-files-found: warn
+          retention-days: 30
