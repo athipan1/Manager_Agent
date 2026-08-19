@@ -4,6 +4,7 @@ from fastapi import FastAPI
 
 from .dashboard_security import configure_dashboard_cors
 from .routes.owner_dashboard import router as owner_dashboard_router
+from .routes.strategy_promotion import router as strategy_promotion_router
 from .routes.web_control import router as web_control_router
 from .routes.web_finance import router as web_finance_router
 from .routes.wiring import (
@@ -30,6 +31,7 @@ def create_app(
 ) -> FastAPI:
     app = FastAPI()
     configure_dashboard_cors(app)
+    app.include_router(strategy_promotion_router)
 
     if include_system:
         register_system_routes(app)
