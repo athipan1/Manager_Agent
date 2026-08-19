@@ -138,22 +138,43 @@ jobs:
             -f /tmp/full-system-profit-e2e.yml \
             config > reports/full-system-profit-compose-config.yml
 
-      - name: Build and start Profit lifecycle stack
+      - name: Build, migrate, and start Profit lifecycle stack
         working-directory: Manager_Agent
         run: |
+          set -euo pipefail
+          compose=(docker compose -f docker-compose.yml -f /tmp/full-system-profit-e2e.yml)
+
+          "${compose[@]}" build database-agent risk-agent execution-agent profit-agent \
+            2>&1 | tee reports/full-system-profit-compose-build.log
+
+          "${compose[@]}" up -d db \
+            2>&1 | tee reports/full-system-profit-postgres-up.log
+
+          database_ready=false
+          for attempt in {1..36}; do
+            if "${compose[@]}" exec -T db pg_isready -U user -d trading_db >/dev/null 2>&1; then
+              database_ready=true
+              break
+            fi
+            sleep 2
+          done
+          if [ "$database_ready" != "true" ]; then
+            echo "PostgreSQL did not become ready before Database_Agent migration."
+            "${compose[@]}" ps --all || true
+            exit 1
+          fi
+
+          "${compose[@]}" run --rm --no-deps database-agent \
+            python -m scripts.apply_runtime_migrations \
+            2>&1 | tee reports/full-system-profit-database-migrations.log
+
           set +e
-          docker compose \
-            -f docker-compose.yml \
-            -f /tmp/full-system-profit-e2e.yml \
-            up --build -d \
-            db database-agent risk-agent execution-agent profit-agent \
+          "${compose[@]}" up -d database-agent risk-agent execution-agent profit-agent \
             2>&1 | tee reports/full-system-profit-compose-up.log
           status=${PIPESTATUS[0]}
+          set -e
           if [ "$status" != "0" ]; then
-            docker compose \
-              -f docker-compose.yml \
-              -f /tmp/full-system-profit-e2e.yml \
-              ps --all || true
+            "${compose[@]}" ps --all || true
             exit "$status"
           fi
 
