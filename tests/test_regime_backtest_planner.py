@@ -18,6 +18,24 @@ def _trade_contract(**overrides):
     return recommendation
 
 
+def _opportunity(**overrides):
+    profile = {
+        "schema_version": "scanner-opportunity-profile.v1",
+        "status": "qualified",
+        "opportunity_score": 0.82,
+        "is_binding": False,
+        "manager_decision_required": True,
+        "preferred_strategy_hint": "trend_following",
+        "strategy_affinity": {
+            "trend_following": 0.85,
+            "breakout": 0.72,
+            "mean_reversion": 0.30,
+        },
+    }
+    profile.update(overrides)
+    return profile
+
+
 def test_build_compare_candidates_puts_recommended_strategy_first():
     candidates = build_compare_candidates("trend_following", fast_window=5, slow_window=20)
 
@@ -33,6 +51,19 @@ def test_build_compare_candidates_puts_recommended_strategy_first():
         "mean_reversion",
         "breakout",
     }
+
+
+def test_build_compare_candidates_can_be_restricted_by_policy_allow_list():
+    candidates = build_compare_candidates(
+        "trend_following",
+        fast_window=5,
+        slow_window=20,
+        allowed_strategies=["trend_following", "breakout"],
+    )
+    assert [candidate["strategy"] for candidate in candidates] == [
+        "trend_following",
+        "breakout",
+    ]
 
 
 def test_build_regime_backtest_plan_creates_compare_payload():
@@ -65,12 +96,11 @@ def test_build_regime_backtest_plan_creates_compare_payload():
     assert compare_payload["market_context"]["effective_size_multiplier"] == 0.5
     assert compare_payload["market_context"]["market_regime_gate"]["decision"] == "PASS"
     assert compare_payload["candidates"][0]["strategy"] == "trend_following"
-    assert {candidate["strategy"] for candidate in compare_payload["candidates"]} == {
-        "sma_crossover",
+    assert [candidate["strategy"] for candidate in compare_payload["candidates"]] == [
         "trend_following",
-        "mean_reversion",
+        "sma_crossover",
         "breakout",
-    }
+    ]
     assert "strategy" not in compare_payload
     assert "fast_window" not in compare_payload
     assert "slow_window" not in compare_payload
@@ -106,15 +136,109 @@ def test_build_regime_backtest_plan_applies_market_context_limits():
     assert market_context["exposure_cap"] == 0.4
     assert market_context["effective_size_multiplier"] == 0.4
     assert market_context["allowed_strategies"] == ["trend_following", "breakout"]
+    assert market_context["market_regime_allowed_strategies"] == [
+        "trend_following",
+        "breakout",
+    ]
     assert market_context["blocked_strategies"] == ["mean_reversion"]
     assert market_context["decision_notes"] == ["reduced exposure"]
     assert market_context["market_regime_gate"]["new_entries_allowed"] is True
     assert [candidate["strategy"] for candidate in compare_payload["candidates"]] == [
         "trend_following",
+        "breakout",
+    ]
+
+
+def test_scanner_opportunity_can_only_narrow_market_regime_allow_list():
+    recommendation = _trade_contract(
+        allowed_strategies=["trend_following", "breakout", "sma_crossover"]
+    )
+    plan = build_regime_backtest_plan(
+        recommendation,
+        {"symbols": ["AAPL"], "max_position_pct": 0.10},
+        opportunity_profile=_opportunity(
+            strategy_affinity={
+                "trend_following": 0.45,
+                "breakout": 0.88,
+                "mean_reversion": 0.95,
+            },
+            preferred_strategy_hint="breakout",
+        ),
+    )
+
+    assert plan["action"] == "compare"
+    context = plan["market_context"]
+    assert context["market_regime_allowed_strategies"] == [
+        "trend_following",
+        "breakout",
         "sma_crossover",
+    ]
+    assert context["scanner_opportunity_allowed_strategies"] == [
         "mean_reversion",
         "breakout",
     ]
+    assert context["allowed_strategies"] == ["breakout"]
+    assert context["effective_recommended_strategy"] == "breakout"
+    assert [
+        candidate["strategy"] for candidate in plan["backtest_compare_payload"]["candidates"]
+    ] == ["breakout"]
+
+
+def test_scanner_and_market_regime_disagreement_returns_no_trade():
+    recommendation = _trade_contract(
+        allowed_strategies=["trend_following", "breakout"]
+    )
+    plan = build_regime_backtest_plan(
+        recommendation,
+        {"symbols": ["AAPL"], "max_position_pct": 0.10},
+        opportunity_profile=_opportunity(
+            strategy_affinity={
+                "trend_following": 0.20,
+                "breakout": 0.30,
+                "mean_reversion": 0.92,
+            },
+            preferred_strategy_hint="mean_reversion",
+        ),
+    )
+
+    assert plan["action"] == "no_trade"
+    assert plan["backtest_compare_payload"] is None
+    assert plan["market_context"]["allowed_strategies"] == []
+    assert "no intersection" in plan["reason"]
+
+
+def test_scanner_profile_cannot_reintroduce_market_blocked_strategy():
+    recommendation = _trade_contract(
+        allowed_strategies=["trend_following"],
+        blocked_strategies=["breakout", "mean_reversion"],
+    )
+    plan = build_regime_backtest_plan(
+        recommendation,
+        {"symbols": ["AAPL"], "max_position_pct": 0.10},
+        opportunity_profile=_opportunity(
+            strategy_affinity={
+                "trend_following": 0.70,
+                "breakout": 1.0,
+                "mean_reversion": 1.0,
+            }
+        ),
+    )
+    assert plan["action"] == "compare"
+    assert plan["market_context"]["allowed_strategies"] == ["trend_following"]
+    assert [
+        candidate["strategy"] for candidate in plan["backtest_compare_payload"]["candidates"]
+    ] == ["trend_following"]
+
+
+def test_nonqualified_scanner_profile_cannot_create_compare_plan():
+    recommendation = _trade_contract()
+    plan = build_regime_backtest_plan(
+        recommendation,
+        {"symbols": ["AAPL"], "max_position_pct": 0.10},
+        opportunity_profile=_opportunity(status="review"),
+    )
+    assert plan["action"] == "no_trade"
+    assert plan["market_context"]["scanner_opportunity_allowed_strategies"] == []
 
 
 def test_build_regime_backtest_plan_returns_no_trade_for_market_action():
