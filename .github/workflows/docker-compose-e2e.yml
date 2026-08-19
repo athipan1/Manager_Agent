@@ -241,9 +241,25 @@ jobs:
           echo "Extended services did not become reachable in time."
           exit 1
 
-      - name: Run direct API and Manager flow contracts
+      - name: Validate Risk Database Execution contracts
         working-directory: Manager_Agent
-        run: python scripts/run_agent_contract_checks.py
+        run: python scripts/run_agent_contract_checks.py --check risk-database-execution
+
+      - name: Validate Analysis Agent contracts
+        working-directory: Manager_Agent
+        run: python scripts/run_agent_contract_checks.py --check analysis-agents
+
+      - name: Validate Curator readiness contract
+        working-directory: Manager_Agent
+        run: python scripts/run_agent_contract_checks.py --check curator-readiness
+
+      - name: Validate Portfolio Profit contracts
+        working-directory: Manager_Agent
+        run: python scripts/run_agent_contract_checks.py --check portfolio-profit
+
+      - name: Validate Manager dry-run contract
+        working-directory: Manager_Agent
+        run: python scripts/run_agent_contract_checks.py --check manager-dry-run
 
       - name: Show logs on failure
         if: failure()
