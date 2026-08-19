@@ -136,6 +136,14 @@ def test_full_system_profit_workflow_is_fail_closed_and_collects_evidence():
         assert f"repository: {repository}" in text
     assert "postgresql://user:password@db:5432/trading_db" in text
     assert 'USE_SQLITE: ""' in text
+    assert "pg_isready -U user -d trading_db" in text
+    assert "python -m scripts.apply_runtime_migrations" in text
+    assert "full-system-profit-database-migrations.log" in text
+    migration_index = text.index("python -m scripts.apply_runtime_migrations")
+    runtime_start_index = text.index(
+        '"${compose[@]}" up -d database-agent risk-agent execution-agent profit-agent'
+    )
+    assert migration_index < runtime_start_index
     assert "python -m scripts.full_system_profit_e2e" in text
     assert "actions/upload-artifact@v4" in text
     assert "if-no-files-found: error" in text

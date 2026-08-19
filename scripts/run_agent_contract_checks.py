@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+import argparse
 import json
 import urllib.error
 import urllib.request
 from datetime import datetime, timedelta, timezone
-from typing import Any
+from typing import Any, Callable
 
 
 def request_json(
@@ -343,12 +344,32 @@ def check_manager_dry_run() -> None:
     assert metadata.get("trading_mode") == "PAPER", response
 
 
+CHECKS: dict[str, Callable[[], None]] = {
+    "risk-database-execution": check_risk_database_execution,
+    "analysis-agents": check_analysis_agents,
+    "curator-readiness": check_curator_readiness,
+    "portfolio-profit": check_portfolio_and_profit,
+    "manager-dry-run": check_manager_dry_run,
+}
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Run Agent Contract E2E checks.")
+    parser.add_argument(
+        "--check",
+        choices=tuple(CHECKS),
+        help="Run one contract group instead of the complete suite.",
+    )
+    return parser.parse_args()
+
+
 def main() -> int:
-    check_risk_database_execution()
-    check_analysis_agents()
-    check_curator_readiness()
-    check_portfolio_and_profit()
-    check_manager_dry_run()
+    args = parse_args()
+    selected = {args.check: CHECKS[args.check]} if args.check else CHECKS
+    for name, check in selected.items():
+        print(f"Running Agent Contract group: {name}", flush=True)
+        check()
+        print(f"Agent Contract group passed: {name}", flush=True)
     print("Agent Contract E2E checks passed.")
     return 0
 

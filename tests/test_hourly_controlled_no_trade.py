@@ -130,10 +130,13 @@ def test_operator_artifact_reports_not_attempted_without_false_failure() -> None
     assert phases["final_reconciliation"]["status"] == "success"
 
 
-def test_hourly_workflow_guards_trade_and_always_reconciles() -> None:
+def test_hourly_workflow_guards_trade_and_reconciles_after_portfolio_review() -> None:
     workflow = Path(".github/workflows/hourly-auto-trading.yml").read_text(
         encoding="utf-8"
     )
     assert "steps.trade_gate.outputs.should_trade == 'true'" in workflow
-    assert "if: ${{ !cancelled() }}" in workflow
+    assert (
+        "if: ${{ !cancelled() && steps.portfolio_review.outcome == 'success' }}"
+        in workflow
+    )
     assert "python scripts/resolve_hourly_trade_gate.py" in workflow

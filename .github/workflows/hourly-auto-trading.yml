@@ -461,7 +461,7 @@ jobs:
 
       - name: Verify fills, protection and post-execution reconciliation
         id: final_reconciliation
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && steps.portfolio_review.outcome == 'success' }}
         working-directory: Manager_Agent
         env:
           EXECUTION_AGENT_URL: http://localhost:8006
@@ -523,16 +523,20 @@ jobs:
         if: failure()
         working-directory: Manager_Agent
         run: |
-          if [ "${{ steps.preflight.outputs.paper_automation }}" = "true" ]; then
-            COMPOSE_ARGS=(-f docker-compose.yml -f docker-compose.risk.yml -f docker-compose.alpha.yml -f docker-compose.hourly-paper.yml)
-          else
-            COMPOSE_ARGS=(-f docker-compose.yml -f docker-compose.risk.yml -f docker-compose.alpha.yml -f docker-compose.hourly-simulator.yml)
+          if [ -z "${COMPOSE_FILE:-}" ]; then
+            echo "Runtime stack was not configured; skipping compose diagnostics."
+            exit 0
           fi
-          docker compose "${COMPOSE_ARGS[@]}" ps || true
-          docker compose "${COMPOSE_ARGS[@]}" logs --tail=180 manager-agent execution-agent risk-agent portfolio-agent profit-agent performance-agent market-regime-agent || true
+          docker compose ps || true
+          docker compose logs --tail=180 manager-agent execution-agent risk-agent portfolio-agent profit-agent performance-agent market-regime-agent || true
 
       - name: Stop stack
         if: always()
         continue-on-error: true
         working-directory: Manager_Agent
-        run: docker compose --profile backtest down -v
+        run: |
+          if [ -z "${COMPOSE_FILE:-}" ]; then
+            echo "Runtime stack was not configured; nothing to stop."
+            exit 0
+          fi
+          docker compose --profile backtest down -v
