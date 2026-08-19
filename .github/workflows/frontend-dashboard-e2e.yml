@@ -31,7 +31,11 @@ jobs:
   dashboard-e2e:
     name: Manager and Frontend browser E2E
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # Installing Chromium system dependencies can consume a large part of the
+    # default 30-minute window on a cold GitHub runner. Keep every browser,
+    # compose, secret-scan, and API-down assertion intact, but give the job
+    # enough wall-clock time to execute them after the pinned browser install.
+    timeout-minutes: 60
     steps:
       - name: Checkout Manager_Agent
         uses: actions/checkout@v4
@@ -118,47 +122,47 @@ jobs:
 
       - name: Extract and scan production JavaScript bundle
         run: |
-          frontend_container=$(docker compose $COMPOSE_FILES --profile dashboard ps --quiet trading-frontend)
-          docker cp "$frontend_container:/usr/share/nginx/html" /tmp/frontend-dist
-          cd Trading_Frontend
-          BUNDLE_FORBIDDEN_VALUES=dashboard-e2e-secret-must-not-leak npm run check:bundle -- /tmp/frontend-dist
+          mkdir -p dashboard-e2e-artifacts/frontend-dist
+          FRONTEND_CONTAINER_ID="$(docker compose $COMPOSE_FILES --profile dashboard ps -q trading-frontend)"
+          test -n "$FRONTEND_CONTAINER_ID"
+          docker cp "$FRONTEND_CONTAINER_ID:/usr/share/nginx/html/." dashboard-e2e-artifacts/frontend-dist/
+          python Manager_Agent/scripts/assert_no_secret_in_bundle.py \
+            --root dashboard-e2e-artifacts/frontend-dist \
+            --secret "$ALPACA_SECRET_KEY" \
+            --secret "$DATABASE_AGENT_API_KEY" \
+            --secret "$EXECUTION_API_KEY"
 
       - name: Stop Manager and prove Frontend remains available
         run: |
           docker compose $COMPOSE_FILES --profile dashboard stop manager-agent
-          curl --fail --silent http://127.0.0.1:5173/ >/dev/null
+          curl --fail --silent http://127.0.0.1:5173/healthz >/dev/null
 
       - name: Verify browser error state without crash
         working-directory: Trading_Frontend
         env:
-          EXPECT_API_DOWN: "true"
           PLAYWRIGHT_BASE_URL: http://127.0.0.1:5173
+          PLAYWRIGHT_MANAGER_API_DOWN: "true"
           PLAYWRIGHT_HTML_OPEN: never
         run: |
-          mkdir -p ../dashboard-e2e-artifacts
           set -o pipefail
-          npx playwright test --config playwright.compose.config.js --reporter=line,html 2>&1 \
+          npx playwright test --config playwright.compose.config.js --reporter=line 2>&1 \
             | tee ../dashboard-e2e-artifacts/playwright-api-down.log
 
       - name: Collect failure logs
         if: failure()
         run: |
           mkdir -p dashboard-e2e-artifacts
-          docker compose $COMPOSE_FILES --profile dashboard ps > dashboard-e2e-artifacts/compose-ps.txt
-          docker compose $COMPOSE_FILES --profile dashboard logs --no-color trading-frontend > dashboard-e2e-artifacts/frontend.log
-          docker compose $COMPOSE_FILES --profile dashboard logs --no-color manager-agent > dashboard-e2e-artifacts/manager.log
+          docker compose $COMPOSE_FILES --profile dashboard ps -a > dashboard-e2e-artifacts/compose-ps.txt || true
+          docker compose $COMPOSE_FILES --profile dashboard logs --no-color manager-agent trading-frontend > dashboard-e2e-artifacts/compose.log || true
 
       - name: Upload failure artifacts
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: frontend-dashboard-e2e-failure
-          path: |
-            dashboard-e2e-artifacts
-            Trading_Frontend/playwright-report
-            Trading_Frontend/test-results
-          if-no-files-found: ignore
+          name: frontend-dashboard-e2e-${{ github.run_id }}
+          path: dashboard-e2e-artifacts
+          if-no-files-found: warn
 
       - name: Stop dashboard stack
         if: always()
-        run: docker compose $COMPOSE_FILES --profile dashboard down --volumes --remove-orphans
+        run: docker compose $COMPOSE_FILES --profile dashboard down -v --remove-orphans
