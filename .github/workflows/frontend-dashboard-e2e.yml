@@ -121,16 +121,14 @@ jobs:
             | tee ../dashboard-e2e-artifacts/playwright-happy-path.log
 
       - name: Extract and scan production JavaScript bundle
+        env:
+          BUNDLE_FORBIDDEN_VALUES: ${{ env.ALPACA_SECRET_KEY }},${{ env.DATABASE_AGENT_API_KEY }},${{ env.EXECUTION_API_KEY }}
         run: |
           mkdir -p dashboard-e2e-artifacts/frontend-dist
           FRONTEND_CONTAINER_ID="$(docker compose $COMPOSE_FILES --profile dashboard ps -q trading-frontend)"
           test -n "$FRONTEND_CONTAINER_ID"
           docker cp "$FRONTEND_CONTAINER_ID:/usr/share/nginx/html/." dashboard-e2e-artifacts/frontend-dist/
-          python Manager_Agent/scripts/assert_no_secret_in_bundle.py \
-            --root dashboard-e2e-artifacts/frontend-dist \
-            --secret "$ALPACA_SECRET_KEY" \
-            --secret "$DATABASE_AGENT_API_KEY" \
-            --secret "$EXECUTION_API_KEY"
+          node Trading_Frontend/scripts/check-bundle-secrets.mjs dashboard-e2e-artifacts/frontend-dist
 
       - name: Stop Manager and prove Frontend remains available
         run: |
