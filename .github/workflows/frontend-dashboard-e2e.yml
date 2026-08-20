@@ -31,10 +31,6 @@ jobs:
   dashboard-e2e:
     name: Manager and Frontend browser E2E
     runs-on: ubuntu-latest
-    # Installing Chromium system dependencies can consume a large part of the
-    # default 30-minute window on a cold GitHub runner. Keep every browser,
-    # compose, secret-scan, and API-down assertion intact, but give the job
-    # enough wall-clock time to execute them after the pinned browser install.
     timeout-minutes: 60
     steps:
       - name: Checkout Manager_Agent
@@ -80,7 +76,10 @@ jobs:
 
       - name: Install pinned Chromium
         working-directory: Trading_Frontend
-        run: npx playwright install --with-deps chromium
+        # GitHub-hosted Ubuntu already carries the browser system libraries.
+        # Avoid `--with-deps` here because it invokes apt mirrors and previously
+        # consumed the entire job timeout before browser tests could start.
+        run: npx playwright install chromium
 
       - name: Validate Compose model
         run: docker compose $COMPOSE_FILES --profile dashboard config --quiet
@@ -138,8 +137,8 @@ jobs:
       - name: Verify browser error state without crash
         working-directory: Trading_Frontend
         env:
+          EXPECT_API_DOWN: "true"
           PLAYWRIGHT_BASE_URL: http://127.0.0.1:5173
-          PLAYWRIGHT_MANAGER_API_DOWN: "true"
           PLAYWRIGHT_HTML_OPEN: never
         run: |
           set -o pipefail
