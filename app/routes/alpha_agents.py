@@ -99,19 +99,29 @@ async def alpha_market_strategy(payload: Dict[str, Any]) -> StandardAgentRespons
 
 @router.post("/regime-backtest-plan", response_model=StandardAgentResponse)
 async def alpha_regime_backtest_plan(payload: Dict[str, Any]) -> StandardAgentResponse:
-    """Build a Backtest_Agent compare payload from a Market_Regime_Agent strategy recommendation.
+    """Build a policy-constrained Backtest_Agent compare payload.
 
     Expected payload:
     - market_regime: request forwarded to Market_Regime_Agent /market/strategy
-    - backtest: base Backtest_Agent compare payload fields such as symbols, bars, equity, risk settings
+    - backtest: base Backtest_Agent compare payload
+    - scanner_opportunity: optional scanner-opportunity-profile.v1 evidence. It can
+      narrow, but never expand, Market_Regime_Agent's allowed strategies.
     """
     correlation_id = str(uuid.uuid4())
     try:
         market_regime_payload = payload.get("market_regime") or {}
         backtest_payload = payload.get("backtest") or {}
+        opportunity_profile = payload.get("scanner_opportunity") or None
         strategy_data = await recommend_market_strategy(market_regime_payload, correlation_id)
         recommendation = strategy_data.get("recommendation") or {}
-        plan = build_regime_backtest_plan(recommendation, backtest_payload)
+        plan = build_regime_backtest_plan(
+            recommendation,
+            backtest_payload,
+            market_gate=strategy_data.get("gate"),
+            opportunity_profile=(
+                opportunity_profile if isinstance(opportunity_profile, dict) else None
+            ),
+        )
         data = {
             "enabled": strategy_data.get("enabled", True),
             "market_strategy": strategy_data,
@@ -140,7 +150,7 @@ async def alpha_regime_backtest_plan(payload: Dict[str, Any]) -> StandardAgentRe
 
 @router.post("/regime-backtest-compare", response_model=StandardAgentResponse)
 async def alpha_regime_backtest_compare(payload: Dict[str, Any]) -> StandardAgentResponse:
-    """Run Backtest_Agent /backtest/compare from Market_Regime_Agent strategy guidance.
+    """Run Backtest_Agent /backtest/compare from policy-compatible strategy guidance.
 
     This endpoint is validation-only. It never calls Execution_Agent and never places orders.
     """
@@ -170,7 +180,7 @@ async def alpha_regime_backtest_compare(payload: Dict[str, Any]) -> StandardAgen
 
 @router.post("/regime-backtest-decision", response_model=StandardAgentResponse)
 async def alpha_regime_backtest_decision(payload: Dict[str, Any]) -> StandardAgentResponse:
-    """Run regime-guided compare and return a decision summary."""
+    """Run regime/opportunity-guided compare and return a decision summary."""
     correlation_id = str(uuid.uuid4())
     try:
         data = await run_regime_backtest_decision(payload, correlation_id)

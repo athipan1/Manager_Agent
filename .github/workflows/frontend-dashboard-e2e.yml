@@ -31,7 +31,7 @@ jobs:
   dashboard-e2e:
     name: Manager and Frontend browser E2E
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 60
     steps:
       - name: Checkout Manager_Agent
         uses: actions/checkout@v4
@@ -76,7 +76,10 @@ jobs:
 
       - name: Install pinned Chromium
         working-directory: Trading_Frontend
-        run: npx playwright install --with-deps chromium
+        # GitHub-hosted Ubuntu already carries the browser system libraries.
+        # Avoid `--with-deps` here because it invokes apt mirrors and previously
+        # consumed the entire job timeout before browser tests could start.
+        run: npx playwright install chromium
 
       - name: Validate Compose model
         run: docker compose $COMPOSE_FILES --profile dashboard config --quiet
@@ -117,16 +120,19 @@ jobs:
             | tee ../dashboard-e2e-artifacts/playwright-happy-path.log
 
       - name: Extract and scan production JavaScript bundle
+        env:
+          BUNDLE_FORBIDDEN_VALUES: ${{ env.ALPACA_SECRET_KEY }},${{ env.DATABASE_AGENT_API_KEY }},${{ env.EXECUTION_API_KEY }}
         run: |
-          frontend_container=$(docker compose $COMPOSE_FILES --profile dashboard ps --quiet trading-frontend)
-          docker cp "$frontend_container:/usr/share/nginx/html" /tmp/frontend-dist
-          cd Trading_Frontend
-          BUNDLE_FORBIDDEN_VALUES=dashboard-e2e-secret-must-not-leak npm run check:bundle -- /tmp/frontend-dist
+          mkdir -p dashboard-e2e-artifacts/frontend-dist
+          FRONTEND_CONTAINER_ID="$(docker compose $COMPOSE_FILES --profile dashboard ps -q trading-frontend)"
+          test -n "$FRONTEND_CONTAINER_ID"
+          docker cp "$FRONTEND_CONTAINER_ID:/usr/share/nginx/html/." dashboard-e2e-artifacts/frontend-dist/
+          node Trading_Frontend/scripts/check-bundle-secrets.mjs dashboard-e2e-artifacts/frontend-dist
 
       - name: Stop Manager and prove Frontend remains available
         run: |
           docker compose $COMPOSE_FILES --profile dashboard stop manager-agent
-          curl --fail --silent http://127.0.0.1:5173/ >/dev/null
+          curl --fail --silent http://127.0.0.1:5173/healthz >/dev/null
 
       - name: Verify browser error state without crash
         working-directory: Trading_Frontend
@@ -135,30 +141,25 @@ jobs:
           PLAYWRIGHT_BASE_URL: http://127.0.0.1:5173
           PLAYWRIGHT_HTML_OPEN: never
         run: |
-          mkdir -p ../dashboard-e2e-artifacts
           set -o pipefail
-          npx playwright test --config playwright.compose.config.js --reporter=line,html 2>&1 \
+          npx playwright test --config playwright.compose.config.js --reporter=line 2>&1 \
             | tee ../dashboard-e2e-artifacts/playwright-api-down.log
 
       - name: Collect failure logs
         if: failure()
         run: |
           mkdir -p dashboard-e2e-artifacts
-          docker compose $COMPOSE_FILES --profile dashboard ps > dashboard-e2e-artifacts/compose-ps.txt
-          docker compose $COMPOSE_FILES --profile dashboard logs --no-color trading-frontend > dashboard-e2e-artifacts/frontend.log
-          docker compose $COMPOSE_FILES --profile dashboard logs --no-color manager-agent > dashboard-e2e-artifacts/manager.log
+          docker compose $COMPOSE_FILES --profile dashboard ps -a > dashboard-e2e-artifacts/compose-ps.txt || true
+          docker compose $COMPOSE_FILES --profile dashboard logs --no-color manager-agent trading-frontend > dashboard-e2e-artifacts/compose.log || true
 
       - name: Upload failure artifacts
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: frontend-dashboard-e2e-failure
-          path: |
-            dashboard-e2e-artifacts
-            Trading_Frontend/playwright-report
-            Trading_Frontend/test-results
-          if-no-files-found: ignore
+          name: frontend-dashboard-e2e-${{ github.run_id }}
+          path: dashboard-e2e-artifacts
+          if-no-files-found: warn
 
       - name: Stop dashboard stack
         if: always()
-        run: docker compose $COMPOSE_FILES --profile dashboard down --volumes --remove-orphans
+        run: docker compose $COMPOSE_FILES --profile dashboard down -v --remove-orphans

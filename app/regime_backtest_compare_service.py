@@ -25,7 +25,11 @@ def _strategy_from_result(result: Dict[str, Any] | None) -> str | None:
 def build_regime_backtest_decision(compare_result: Dict[str, Any]) -> Dict[str, Any]:
     plan = compare_result.get("plan") or {}
     recommendation = plan.get("recommendation") or {}
-    recommended_strategy = recommendation.get("recommended_strategy")
+    market_context = plan.get("market_context") or {}
+    recommended_strategy = (
+        market_context.get("effective_recommended_strategy")
+        or recommendation.get("recommended_strategy")
+    )
 
     if compare_result.get("executed") is not True or plan.get("action") != "compare":
         return {
@@ -48,7 +52,7 @@ def build_regime_backtest_decision(compare_result: Dict[str, Any]) -> Dict[str, 
             "confidence": "high",
             "recommended_strategy": recommended_strategy,
             "backtest_best_strategy": best_strategy,
-            "reason": "Market regime recommendation matches the best Backtest_Agent compare result.",
+            "reason": "The policy-compatible strategy matches the best Backtest_Agent compare result.",
         }
 
     if recommended_strategy and recommended_strategy in ranked_strategies:
@@ -57,7 +61,7 @@ def build_regime_backtest_decision(compare_result: Dict[str, Any]) -> Dict[str, 
             "confidence": "medium",
             "recommended_strategy": recommended_strategy,
             "backtest_best_strategy": best_strategy,
-            "reason": "Market regime recommendation was tested but did not rank first.",
+            "reason": "The policy-compatible strategy was tested but did not rank first.",
         }
 
     return {
@@ -65,7 +69,7 @@ def build_regime_backtest_decision(compare_result: Dict[str, Any]) -> Dict[str, 
         "confidence": "low",
         "recommended_strategy": recommended_strategy,
         "backtest_best_strategy": best_strategy,
-        "reason": "Backtest compare results did not validate the market-regime recommendation.",
+        "reason": "Backtest compare results did not validate the policy-compatible recommendation.",
     }
 
 
@@ -75,6 +79,7 @@ async def run_regime_backtest_compare(
 ) -> Dict[str, Any]:
     market_regime_payload = payload.get("market_regime") or {}
     backtest_payload = payload.get("backtest") or {}
+    opportunity_profile = payload.get("scanner_opportunity") or None
 
     strategy_data = await recommend_market_strategy(market_regime_payload, correlation_id)
     recommendation = strategy_data.get("recommendation") or {}
@@ -82,6 +87,9 @@ async def run_regime_backtest_compare(
         recommendation,
         backtest_payload,
         market_gate=strategy_data.get("gate"),
+        opportunity_profile=(
+            opportunity_profile if isinstance(opportunity_profile, dict) else None
+        ),
     )
 
     if plan.get("action") != "compare":

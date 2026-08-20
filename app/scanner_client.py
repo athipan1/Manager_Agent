@@ -9,6 +9,9 @@ from .resilient_client import AgentUnavailable, ResilientAgentClient
 from .services.scanner_data_quality_service import (
     partition_scanner_candidates_by_data_quality,
 )
+from .services.scanner_opportunity_service import (
+    partition_scanner_candidates_by_opportunity,
+)
 
 
 SCANNER_PREFETCH_CACHE: Dict[str, Dict[str, Any]] = {}
@@ -155,6 +158,67 @@ def _apply_scanner_data_quality_gate(
     return StandardAgentResponse.model_validate(response_payload)
 
 
+def _apply_scanner_opportunity_gate(
+    response: StandardAgentResponse,
+) -> StandardAgentResponse:
+    """Filter present Scanner opportunity evidence before downstream analysis.
+
+    During the coordinated rollout a missing profile may pass only when
+    ``SCANNER_OPPORTUNITY_PROFILE_REQUIRED`` is false. Once a profile is present,
+    malformed, REVIEW, AVOID, weak-score, or incomplete execution evidence is
+    always moved to REVIEW. The gate never creates execution authority.
+    """
+
+    if response.status != "success":
+        return response
+
+    response_payload = response.model_dump(mode="json")
+    data = _to_dict(response_payload.get("data"))
+    candidates = data.get("candidates") or []
+    passed, opportunity_review, summary = partition_scanner_candidates_by_opportunity(
+        candidates
+    )
+    prior_review = list(data.get("review_candidates") or [])
+
+    data["candidates"] = passed
+    data["count"] = len(passed)
+    data["review_candidates"] = [*prior_review, *opportunity_review]
+    data["metadata"] = {
+        **_to_dict(data.get("metadata")),
+        "scanner_opportunity_gate": summary,
+    }
+    response_payload["data"] = data
+    response_payload["metadata"] = {
+        **_to_dict(response_payload.get("metadata")),
+        "scanner_opportunity_gate": summary,
+    }
+
+    if opportunity_review:
+        report_logger.warning(
+            "Scanner opportunity gate moved %s/%s quality-passed candidates to REVIEW: codes=%s",
+            len(opportunity_review),
+            summary["original_count"],
+            summary["review_reason_codes"],
+        )
+    else:
+        report_logger.info(
+            "Scanner opportunity gate passed %s/%s candidates; profile_required=%s compatibility_bypass=%s",
+            summary["passed_count"],
+            summary["original_count"],
+            summary["profile_required"],
+            summary["compatibility_bypass_count"],
+        )
+
+    return StandardAgentResponse.model_validate(response_payload)
+
+
+def _apply_scanner_candidate_gates(
+    response: StandardAgentResponse,
+) -> StandardAgentResponse:
+    response = _apply_scanner_data_quality_gate(response)
+    return _apply_scanner_opportunity_gate(response)
+
+
 def get_scanner_prefetch(symbol: str) -> Optional[Dict[str, Any]]:
     return SCANNER_PREFETCH_CACHE.get(symbol.upper())
 
@@ -296,7 +360,7 @@ class ScannerAgentClient(ResilientAgentClient):
         )
         response = self.validate_standard_response(response_data)
         _validate_scanner_market_data_contract(response, correlation_id)
-        response = _apply_scanner_data_quality_gate(response)
+        response = _apply_scanner_candidate_gates(response)
         _cache_scanner_candidates(response)
         return response
 
@@ -314,7 +378,7 @@ class ScannerAgentClient(ResilientAgentClient):
         )
         response = self.validate_standard_response(response_data)
         _validate_scanner_market_data_contract(response, correlation_id)
-        response = _apply_scanner_data_quality_gate(response)
+        response = _apply_scanner_candidate_gates(response)
         _cache_scanner_candidates(response)
         return response
 
@@ -364,7 +428,7 @@ class ScannerAgentClient(ResilientAgentClient):
         )
         response = self.validate_standard_response(response_data)
         _validate_scanner_market_data_contract(response, correlation_id)
-        response = _apply_scanner_data_quality_gate(response)
+        response = _apply_scanner_candidate_gates(response)
         _cache_scanner_candidates(response)
         _store_discovery_response(cache_key, response)
         return response
