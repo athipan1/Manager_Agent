@@ -7,6 +7,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 
 STRATEGY_PROMOTION_SCHEMA_VERSION = "manager-strategy-promotion.v1"
+MINIMUM_SHADOW_OBSERVATIONS_FOR_PAPER = 100
 
 
 class StrategyPromotionStage(str, Enum):
@@ -46,7 +47,10 @@ class StrategyPromotionEvidence(BaseModel):
 class StrategyPromotionPolicy(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    min_shadow_observations: int = Field(default=30, ge=1)
+    min_shadow_observations: int = Field(
+        default=MINIMUM_SHADOW_OBSERVATIONS_FOR_PAPER,
+        ge=MINIMUM_SHADOW_OBSERVATIONS_FOR_PAPER,
+    )
     min_paper_observations: int = Field(default=100, ge=1)
     min_net_expectancy_r: float = 0.0
     min_profit_factor: float = Field(default=1.10, ge=0)
