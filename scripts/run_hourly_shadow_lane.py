@@ -14,11 +14,20 @@ from typing import Any, Dict
 MINIMUM_SHADOW_OBSERVATIONS = 100
 
 
-def _post_json(url: str, payload: Dict[str, Any], timeout: int = 120) -> Dict[str, Any]:
+def _post_json(
+    url: str,
+    payload: Dict[str, Any],
+    timeout: int = 120,
+    *,
+    api_key: str | None = None,
+) -> Dict[str, Any]:
+    headers = {"Content-Type": "application/json"}
+    if api_key:
+        headers["X-API-KEY"] = api_key
     request = urllib.request.Request(
         url,
         data=json.dumps(payload).encode("utf-8"),
-        headers={"Content-Type": "application/json"},
+        headers=headers,
         method="POST",
     )
     try:
@@ -73,7 +82,10 @@ def _action_event_ids(result: Dict[str, Any]) -> set[str]:
     }
 
 
-def _verify_replay_idempotency(first: Dict[str, Any], replay: Dict[str, Any]) -> Dict[str, Any]:
+def _verify_replay_idempotency(
+    first: Dict[str, Any],
+    replay: Dict[str, Any],
+) -> Dict[str, Any]:
     _verify_shadow_safety(replay)
     first_ids = _action_event_ids(first)
     replay_ids = _action_event_ids(replay)
@@ -121,6 +133,19 @@ def _verify_performance_floor(performance_response: Dict[str, Any]) -> None:
             raise RuntimeError("Paper review became ready before sample floor")
 
 
+def _performance_api_key() -> str:
+    key = (
+        os.getenv("PERFORMANCE_AGENT_API_KEY")
+        or os.getenv("PROFIT_AGENT_API_KEY")
+        or ""
+    ).strip()
+    if not key:
+        raise RuntimeError(
+            "PERFORMANCE_AGENT_API_KEY is required for authenticated Shadow performance review"
+        )
+    return key
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="Advance research-only Shadow Trading from Scanner preselection evidence."
@@ -141,7 +166,9 @@ def main() -> None:
     )
     parser.add_argument(
         "--cycle-id",
-        default=os.getenv("PORTFOLIO_CYCLE_ID") or os.getenv("GITHUB_RUN_ID") or "manual-shadow-cycle",
+        default=os.getenv("PORTFOLIO_CYCLE_ID")
+        or os.getenv("GITHUB_RUN_ID")
+        or "manual-shadow-cycle",
     )
     parser.add_argument(
         "--max-marks",
@@ -189,6 +216,7 @@ def main() -> None:
                 "outcomes": outcomes,
                 "minimum_observations_for_paper_review": MINIMUM_SHADOW_OBSERVATIONS,
             },
+            api_key=_performance_api_key(),
         )
         _verify_performance_floor(performance)
         output.update(
