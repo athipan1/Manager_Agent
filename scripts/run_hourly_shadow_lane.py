@@ -53,8 +53,51 @@ def _verify_shadow_safety(result: Dict[str, Any]) -> None:
         for key, expected in required.items()
         if result.get(key) != expected
     ]
+    if int(result.get("persistence_error_count") or 0) != 0:
+        failures.append(
+            "persistence_error_count="
+            f"{result.get('persistence_error_count')!r}, expected 0"
+        )
     if failures:
         raise RuntimeError("Shadow safety invariant failed: " + "; ".join(failures))
+
+
+def _action_event_ids(result: Dict[str, Any]) -> set[str]:
+    actions = result.get("actions") or []
+    if not isinstance(actions, list):
+        return set()
+    return {
+        str(item.get("event_id"))
+        for item in actions
+        if isinstance(item, dict) and item.get("event_id")
+    }
+
+
+def _verify_replay_idempotency(first: Dict[str, Any], replay: Dict[str, Any]) -> Dict[str, Any]:
+    _verify_shadow_safety(replay)
+    first_ids = _action_event_ids(first)
+    replay_ids = _action_event_ids(replay)
+    new_ids = sorted(replay_ids - first_ids)
+    if new_ids:
+        raise RuntimeError(
+            "Shadow replay created new event ids: " + ", ".join(new_ids)
+        )
+    first_closed = int(first.get("closed_observation_count") or 0)
+    replay_closed = int(replay.get("closed_observation_count") or 0)
+    if replay_closed != first_closed:
+        raise RuntimeError(
+            "Shadow replay changed closed observation count: "
+            f"first={first_closed}, replay={replay_closed}"
+        )
+    if int(replay.get("planned_count") or 0) != int(first.get("planned_count") or 0):
+        raise RuntimeError("Shadow replay changed planned candidate count")
+    return {
+        "first_event_ids": sorted(first_ids),
+        "replay_event_ids": sorted(replay_ids),
+        "replay_new_event_ids": new_ids,
+        "replay_added_events": False,
+        "closed_observation_count_unchanged": True,
+    }
 
 
 def _verify_performance_floor(performance_response: Dict[str, Any]) -> None:
@@ -126,15 +169,19 @@ def main() -> None:
         "cycle_id": args.cycle_id,
         "research_candidate_count": len(candidates),
         "shadow": None,
+        "replay": None,
+        "replay_verification": None,
         "performance": None,
     }
 
     try:
-        shadow = _post_json(
-            args.manager_url.rstrip("/") + "/shadow-trading/hourly",
-            shadow_payload,
-        )
+        endpoint = args.manager_url.rstrip("/") + "/shadow-trading/hourly"
+        shadow = _post_json(endpoint, shadow_payload)
         _verify_shadow_safety(shadow)
+
+        replay = _post_json(endpoint, shadow_payload)
+        replay_verification = _verify_replay_idempotency(shadow, replay)
+
         outcomes = shadow.get("closed_outcomes") or []
         performance = _post_json(
             args.performance_url.rstrip("/") + "/performance/shadow",
@@ -148,6 +195,8 @@ def main() -> None:
             {
                 "status": "success",
                 "shadow": shadow,
+                "replay": replay,
+                "replay_verification": replay_verification,
                 "performance": performance,
                 "closed_observation_count": len(outcomes),
                 "risk_call_count": 0,
@@ -181,7 +230,8 @@ def main() -> None:
         f"research_candidates={len(candidates)}, "
         f"actions={shadow.get('action_count', 0)}, "
         f"closed={output['closed_observation_count']}, "
-        "risk_calls=0, execution_calls=0, broker_orders=0"
+        "risk_calls=0, execution_calls=0, broker_orders=0, "
+        "replay_added_events=false"
     )
 
 
