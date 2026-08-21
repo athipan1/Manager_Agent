@@ -23,13 +23,19 @@ def _candidate(
     spread_bps=4.0,
     strategy_hint="trend_following",
     include_profile=True,
+    quote_status="fresh",
+    workflow_status="ready",
+    fail_closed=False,
+    liquid_spread_sane=True,
 ):
     profile = {
         "schema_version": "scanner-opportunity-profile.v1",
         "status": opportunity_status,
+        "workflow_status": workflow_status,
         "opportunity_score": opportunity_score,
         "is_binding": False,
         "manager_decision_required": True,
+        "fail_closed": fail_closed,
         "preferred_strategy_hint": strategy_hint,
         "strategy_affinity": {
             "trend_following": 0.88,
@@ -43,6 +49,20 @@ def _candidate(
             "spread_bps": spread_bps,
             "atr_pct": 0.025,
             "relative_volume": 1.5,
+            "quote_timestamp": "2026-08-20T15:00:00+00:00",
+            "quote_age_seconds": 1.0,
+            "quote_status": quote_status,
+            "market_session": "regular" if quote_status != "market_closed" else "after_hours",
+            "market_open": quote_status != "market_closed",
+        },
+        "evidence_quality": {
+            "atr_available": True,
+            "relative_volume_available": True,
+            "spread_available": spread_bps is not None,
+            "quote_timestamp_available": True,
+            "liquid_spread_sane": liquid_spread_sane,
+            "spread_structurally_valid": not fail_closed,
+            "coverage_ratio": 1.0,
         },
         "reasons": ["strong_trend", "strong_relative_volume"],
     }
@@ -103,22 +123,102 @@ def test_qualified_profile_passes_manager_gate():
     assert result["opportunity_score"] == 0.84
     assert result["preferred_strategy_hint"] == "trend_following"
     assert result["compatibility_bypass"] is False
+    assert result["workflow_failure"] is False
 
 
-def test_review_and_avoid_profiles_fail_closed():
+def test_review_and_avoid_profiles_fail_closed_for_production_entry():
     review = evaluate_scanner_candidate_opportunity(
-        _candidate(opportunity_status="review", opportunity_score=0.65),
+        _candidate(
+            opportunity_status="review",
+            opportunity_score=0.65,
+            workflow_status="evidence_review",
+        ),
         profile_required=True,
     )
     avoid = evaluate_scanner_candidate_opportunity(
-        _candidate(opportunity_status="avoid", opportunity_score=0.25),
+        _candidate(
+            opportunity_status="avoid",
+            opportunity_score=0.25,
+            workflow_status="weak_opportunity",
+        ),
         profile_required=True,
     )
 
     assert review["allowed"] is False
     assert review["reason_code"] == "SCANNER_OPPORTUNITY_REVIEW"
+    assert review["research_lane_eligible"] is True
     assert avoid["allowed"] is False
     assert avoid["reason_code"] == "SCANNER_OPPORTUNITY_AVOID"
+    assert avoid["research_lane_eligible"] is False
+
+
+def test_market_closed_is_controlled_no_trade_not_workflow_failure():
+    result = evaluate_scanner_candidate_opportunity(
+        _candidate(
+            opportunity_status="review",
+            opportunity_score=0.72,
+            quote_status="market_closed",
+            workflow_status="market_closed",
+        ),
+        profile_required=True,
+        live_spread_required=True,
+    )
+
+    assert result["allowed"] is False
+    assert result["reason_code"] == "SCANNER_OPPORTUNITY_MARKET_CLOSED"
+    assert result["workflow_failure"] is False
+    assert result["controlled_no_trade"] is True
+    assert result["research_lane_eligible"] is True
+
+
+def test_stale_quote_is_controlled_review_not_workflow_failure():
+    result = evaluate_scanner_candidate_opportunity(
+        _candidate(
+            opportunity_status="review",
+            opportunity_score=0.72,
+            quote_status="stale_quote",
+            workflow_status="stale_quote",
+        ),
+        profile_required=True,
+    )
+
+    assert result["allowed"] is False
+    assert result["reason_code"] == "SCANNER_OPPORTUNITY_STALE_QUOTE"
+    assert result["workflow_failure"] is False
+    assert result["research_lane_eligible"] is True
+
+
+def test_explicit_fail_closed_profile_cannot_enter_shadow_or_production():
+    result = evaluate_scanner_candidate_opportunity(
+        _candidate(
+            opportunity_status="avoid",
+            opportunity_score=0.74,
+            workflow_status="fail_closed",
+            fail_closed=True,
+        ),
+        profile_required=True,
+    )
+
+    assert result["allowed"] is False
+    assert result["reason_code"] == "SCANNER_OPPORTUNITY_FAIL_CLOSED"
+    assert result["research_lane_eligible"] is False
+
+
+def test_liquid_spread_sanity_failure_routes_to_review():
+    result = evaluate_scanner_candidate_opportunity(
+        _candidate(
+            opportunity_status="review",
+            opportunity_score=0.71,
+            spread_bps=75.0,
+            workflow_status="evidence_review",
+            liquid_spread_sane=False,
+        ),
+        profile_required=True,
+    )
+
+    assert result["allowed"] is False
+    assert result["reason_code"] == "SCANNER_OPPORTUNITY_SPREAD_SANITY"
+    assert result["workflow_failure"] is False
 
 
 def test_present_profile_below_manager_threshold_is_blocked_even_if_scanner_says_qualified():
@@ -177,14 +277,26 @@ def test_unknown_strategy_hint_is_rejected():
     assert result["reason_code"] == "SCANNER_OPPORTUNITY_STRATEGY_HINT_INVALID"
 
 
-def test_partition_exposes_compatibility_bypass_count():
+def test_partition_exposes_compatibility_and_controlled_no_trade_counts():
     passed, review, summary = partition_scanner_candidates_by_opportunity(
-        [_candidate("AAPL"), _candidate("MSFT", include_profile=False)],
+        [
+            _candidate("AAPL"),
+            _candidate("MSFT", include_profile=False),
+            _candidate(
+                "NVDA",
+                opportunity_status="review",
+                quote_status="market_closed",
+                workflow_status="market_closed",
+            ),
+        ],
         profile_required=False,
     )
     assert len(passed) == 2
-    assert review == []
+    assert len(review) == 1
     assert summary["compatibility_bypass_count"] == 1
+    assert summary["controlled_no_trade_count"] == 1
+    assert summary["workflow_failure_count"] == 0
+    assert summary["research_lane_eligible_count"] == 1
 
 
 def test_combined_gates_move_low_opportunity_candidate_to_review_before_cache(monkeypatch):
@@ -201,6 +313,7 @@ def test_combined_gates_move_low_opportunity_candidate_to_review_before_cache(mo
                     "TSLA",
                     opportunity_status="review",
                     opportunity_score=0.62,
+                    workflow_status="evidence_review",
                 ),
             ]
         )
