@@ -100,25 +100,28 @@ jobs:
             -e BACKTEST_AGENT_ENABLED=false \
             shadow-e2e-manager:latest
 
-      - name: Verify isolated services are healthy
+      - name: Verify isolated services are ready
         run: |
           set -euo pipefail
+          # Manager /health intentionally requires Risk_Agent. This E2E proves the
+          # Shadow lane works while Risk/Execution do not exist, so use /ready to
+          # prove the Manager API process is accepting orchestration requests.
           for target in \
             "Database|http://localhost:8004/health|shadow-database" \
             "Performance|http://localhost:8013/health|shadow-performance" \
-            "Manager|http://localhost:8000/health|shadow-manager"; do
+            "Manager|http://localhost:8000/ready|shadow-manager"; do
             IFS='|' read -r name url container <<< "${target}"
             ready=false
             for attempt in $(seq 1 60); do
               if curl -fsS "${url}" >/dev/null; then
-                echo "${name} is healthy."
+                echo "${name} is ready."
                 ready=true
                 break
               fi
               sleep 2
             done
             if [ "${ready}" != "true" ]; then
-              echo "${name} did not become healthy."
+              echo "${name} did not become ready."
               docker logs "${container}" || true
               exit 1
             fi
