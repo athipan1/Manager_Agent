@@ -131,29 +131,49 @@ jobs:
               data = to_dict(response.data)
               candidates = data.get("candidates") or []
               review = data.get("review_candidates") or []
-              gate = (data.get("metadata") or {}).get("scanner_data_quality_gate") or {}
+              metadata = data.get("metadata") or {}
+              quality_gate = metadata.get("scanner_data_quality_gate") or {}
+              opportunity_gate = metadata.get("scanner_opportunity_gate") or {}
+
+              if any(row.get("decision") != "REVIEW" for row in review):
+                  raise RuntimeError(f"{name} returned malformed REVIEW rows: {review}")
 
               if candidates:
-                  if gate.get("passed_count") != len(candidates):
+                  if int(quality_gate.get("passed_count") or 0) < len(candidates):
                       raise RuntimeError(
-                          f"{name} quality gate pass count mismatch: {gate}"
+                          f"{name} quality gate pass count mismatch: {quality_gate}"
                       )
-                  if any(row.get("decision") != "REVIEW" for row in review):
-                      raise RuntimeError(f"{name} returned malformed REVIEW rows: {review}")
+                  if (
+                      opportunity_gate
+                      and int(opportunity_gate.get("passed_count") or 0) != len(candidates)
+                  ):
+                      raise RuntimeError(
+                          f"{name} opportunity gate pass count mismatch: {opportunity_gate}"
+                      )
                   print(
-                      f"{name}: PASS candidates={len(candidates)} "
-                      f"review={len(review)} correlation_id={response.correlation_id}"
+                      f"{name}: PASS candidates={len(candidates)} review={len(review)} "
+                      f"quality={quality_gate.get('decision')} "
+                      f"opportunity={opportunity_gate.get('decision')} "
+                      f"correlation_id={response.correlation_id}"
                   )
                   return
 
               if review:
-                  if gate.get("decision") != "REVIEW":
-                      raise RuntimeError(f"{name} expected REVIEW gate summary: {gate}")
-                  if any(row.get("decision") != "REVIEW" for row in review):
-                      raise RuntimeError(f"{name} malformed REVIEW rows: {review}")
+                  quality_review = quality_gate.get("decision") == "REVIEW"
+                  opportunity_review = opportunity_gate.get("decision") == "REVIEW"
+                  if not (quality_review or opportunity_review):
+                      raise RuntimeError(
+                          f"{name} review candidates lack a REVIEW gate summary: "
+                          f"quality={quality_gate}, opportunity={opportunity_gate}"
+                      )
+                  codes = sorted(
+                      set(quality_gate.get("review_reason_codes") or [])
+                      | set(opportunity_gate.get("review_reason_codes") or [])
+                  )
                   print(
-                      f"{name}: rollout-safe REVIEW candidates={len(review)} "
-                      f"codes={gate.get('review_reason_codes')}"
+                      f"{name}: REVIEW candidates={len(review)} codes={codes} "
+                      f"quality={quality_gate.get('decision')} "
+                      f"opportunity={opportunity_gate.get('decision')}"
                   )
                   return
 
