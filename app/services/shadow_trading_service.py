@@ -474,8 +474,12 @@ def build_exit_event(
     )
     exit_price = max(exit_price, 0.00000001)
     gross_return = exit_price / entry_price - 1.0
-    entry_slippage_pct = abs(entry_price - _finite(signal.get("decision_price")) or 0.0) / max(
-        _finite(signal.get("decision_price")) or entry_price,
+
+    signal_decision_price = _finite(signal.get("decision_price"))
+    if signal_decision_price is None or signal_decision_price <= 0:
+        signal_decision_price = entry_price
+    entry_slippage_pct = abs(entry_price - signal_decision_price) / max(
+        signal_decision_price,
         1e-12,
     )
     exit_slippage_pct = abs(decision_price - exit_price) / decision_price
