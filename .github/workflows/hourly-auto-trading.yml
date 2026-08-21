@@ -533,3 +533,25 @@ jobs:
           else
             echo "Email secrets are not configured; artifact remains the authoritative report."
           fi
+
+      - name: Show fail-closed diagnostics
+        if: failure()
+        working-directory: Manager_Agent
+        run: |
+          if [ -z "${COMPOSE_FILE:-}" ]; then
+            echo "Runtime stack was not configured; skipping compose diagnostics."
+            exit 0
+          fi
+          docker compose ps || true
+          docker compose logs --tail=180 manager-agent execution-agent risk-agent portfolio-agent profit-agent performance-agent market-regime-agent || true
+
+      - name: Stop stack
+        if: always()
+        continue-on-error: true
+        working-directory: Manager_Agent
+        run: |
+          if [ -z "${COMPOSE_FILE:-}" ]; then
+            echo "Runtime stack was not configured; nothing to stop."
+            exit 0
+          fi
+          docker compose --profile backtest down -v
