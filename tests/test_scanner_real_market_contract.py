@@ -118,6 +118,8 @@ def test_hourly_paper_compose_passes_real_scanner_credentials():
 
     assert 'SCANNER_REQUIRE_REAL_MARKET_DATA: "true"' in compose
     assert "SCANNER_MIN_DATA_COVERAGE: ${SCANNER_MIN_DATA_COVERAGE:-0.80}" in compose
+    assert 'SCANNER_OPPORTUNITY_PROFILE_REQUIRED: "true"' in compose
+    assert 'SCANNER_OPPORTUNITY_REQUIRE_LIVE_SPREAD: "true"' in compose
     assert 'SCANNER_DEV_MODE: "false"' in compose
     assert "APCA_API_KEY_ID: ${ALPACA_API_KEY_ID:?" in compose
     assert "APCA_API_SECRET_KEY: ${ALPACA_SECRET_KEY:?" in compose

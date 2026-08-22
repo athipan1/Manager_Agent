@@ -170,6 +170,8 @@ jobs:
       BACKTEST_SLIPPAGE_BPS: ${{ vars.BACKTEST_SLIPPAGE_BPS || '5' }}
       ALPACA_DATA_API_URL: https://data.alpaca.markets
       ALPACA_DATA_FEED: iex
+      SHADOW_MAX_MARKS: ${{ vars.SHADOW_MAX_MARKS || '6' }}
+      SHADOW_COST_BUFFER_BPS: ${{ vars.SHADOW_COST_BUFFER_BPS || '2.0' }}
       PYTHONUNBUFFERED: "1"
 
     steps:
@@ -409,6 +411,18 @@ jobs:
             --output reports/hourly-pre-backtest-discovery.json \
             --github-output "$GITHUB_OUTPUT"
 
+      - name: Run isolated Shadow research lane and verify replay safety
+        id: shadow_research
+        working-directory: Manager_Agent
+        env:
+          MANAGER_AGENT_URL: http://localhost:8000
+          PERFORMANCE_AGENT_URL: http://localhost:8013
+          SHADOW_ACCOUNT_ID: ${{ env.DEFAULT_ACCOUNT_ID }}
+        run: |
+          python scripts/run_hourly_shadow_lane.py \
+            --scanner-report reports/hourly-pre-backtest-discovery.json \
+            --output reports/hourly-shadow-lane.json
+
       - name: Run exact Backtest and publish to runtime Database_Agent
         id: backtest
         if: steps.scanner_preselection.outputs.backtest_symbols != ''
@@ -476,6 +490,7 @@ jobs:
           PHASE_PORTFOLIO_REVIEW_STATUS: ${{ steps.portfolio_review.outcome }}
           PHASE_PROTECTION_STATUS: ${{ steps.protection_reconciliation.outcome }}
           PHASE_SCANNER_STATUS: ${{ steps.scanner_preselection.outcome }}
+          PHASE_SHADOW_STATUS: ${{ steps.shadow_research.outcome }}
           PHASE_BACKTEST_STATUS: ${{ steps.backtest.outcome }}
           PHASE_RISK_STATUS: ${{ steps.trade.outcome }}
           PHASE_EXECUTION_STATUS: ${{ steps.trade.outcome }}

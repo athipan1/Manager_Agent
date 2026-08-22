@@ -7,12 +7,18 @@ on:
       - "app/scanner_client.py"
       - "app/contracts/scanner.py"
       - "app/services/scanner_data_quality_service.py"
+      - "app/services/scanner_opportunity_service.py"
+      - "app/services/shadow_trading_service.py"
+      - "scripts/run_hourly_shadow_lane.py"
       - "docker-compose.hourly-paper.yml"
       - "docker-compose.hourly-simulator.yml"
       - "tests/test_scanner_data_quality_gate.py"
       - "tests/test_scanner_real_market_contract.py"
       - ".github/workflows/scanner-manager-integration.yml"
   workflow_dispatch:
+  schedule:
+    # 15:05 UTC is safely inside US regular hours in both EDT and EST.
+    - cron: "5 15 * * 1-5"
 
 permissions:
   contents: read
@@ -21,21 +27,23 @@ jobs:
   manager-to-scanner:
     if: >-
       github.event_name == 'workflow_dispatch' ||
+      github.event_name == 'schedule' ||
       github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 30
     env:
       APCA_API_KEY_ID: ${{ secrets.ALPACA_API_KEY_ID }}
       APCA_API_SECRET_KEY: ${{ secrets.ALPACA_SECRET_KEY }}
+      REQUIRE_REGULAR_SESSION: ${{ github.event_name == 'schedule' && 'true' || 'false' }}
 
     steps:
       - name: Checkout Manager_Agent
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           path: Manager_Agent
 
       - name: Checkout Scanner_Agent main
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           repository: athipan1/Scanner_Agent
           ref: main
@@ -43,17 +51,18 @@ jobs:
           fetch-depth: 1
 
       - name: Set up Python 3.12
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: "3.12"
 
-      - name: Verify Alpaca Paper credentials
+      - name: Verify canonical Alpaca Paper credentials
         run: |
           set -euo pipefail
           if [ -z "${APCA_API_KEY_ID}" ] || [ -z "${APCA_API_SECRET_KEY}" ]; then
-            echo "ALPACA_API_KEY_ID and ALPACA_SECRET_KEY repository secrets are required."
+            echo "Manager ALPACA_API_KEY_ID and ALPACA_SECRET_KEY repository secrets are required."
             exit 1
           fi
+          echo "Using Manager canonical Alpaca credentials for Scanner integration."
 
       - name: Install Manager client dependencies
         run: |
@@ -200,15 +209,162 @@ jobs:
           asyncio.run(main())
           PY
 
+      - name: Verify opportunity evidence coverage and Alpaca auth
+        run: |
+          mkdir -p Manager_Agent/reports
+          python - <<'PY'
+          import json
+          import os
+          import sys
+          import urllib.request
+          from pathlib import Path
+
+          SYMBOLS = [
+              "AAPL", "MSFT", "NVDA", "GOOGL", "AMZN",
+              "META", "TSLA", "AMD", "AVGO", "NFLX",
+          ]
+          require_regular = os.getenv("REQUIRE_REGULAR_SESSION", "false").lower() == "true"
+          request = urllib.request.Request(
+              "http://localhost:8003/scan",
+              data=json.dumps({
+                  "symbols": SYMBOLS,
+                  "screener": "default",
+                  "exchange": "US",
+              }).encode("utf-8"),
+              headers={
+                  "Content-Type": "application/json",
+                  "X-Correlation-ID": "manager-canonical-scanner-smoke",
+              },
+              method="POST",
+          )
+          with urllib.request.urlopen(request, timeout=180) as response:
+              body = json.loads(response.read().decode("utf-8"))
+
+          candidates = ((body.get("data") or {}).get("candidates") or [])
+          if not candidates:
+              raise RuntimeError("Scanner returned no technical candidates")
+
+          evidence_rows = []
+          for candidate in candidates:
+              metadata = candidate.get("metadata") or {}
+              details = metadata.get("details") or {}
+              bundle = details.get("data_bundle") or metadata.get("data_bundle") or {}
+              profile = bundle.get("opportunity_profile") or {}
+              evidence = profile.get("evidence_quality") or {}
+              context = profile.get("execution_context") or {}
+              snapshot = bundle.get("market_snapshot") or {}
+              alpaca_errors = [
+                  item for item in (snapshot.get("provider_errors") or [])
+                  if isinstance(item, dict) and item.get("provider") == "alpaca"
+              ]
+              evidence_rows.append({
+                  "symbol": candidate.get("symbol"),
+                  "status": profile.get("status"),
+                  "workflow_status": profile.get("workflow_status"),
+                  "coverage_ratio": evidence.get("coverage_ratio"),
+                  "atr_available": evidence.get("atr_available"),
+                  "relative_volume_available": evidence.get("relative_volume_available"),
+                  "spread_available": evidence.get("spread_available"),
+                  "quote_timestamp_available": evidence.get("quote_timestamp_available"),
+                  "liquid_spread_sane": evidence.get("liquid_spread_sane"),
+                  "spread_structurally_valid": evidence.get("spread_structurally_valid"),
+                  "quote_status": context.get("quote_status"),
+                  "market_session": context.get("market_session"),
+                  "alpaca_status": (snapshot.get("provider_status") or {}).get("alpaca"),
+                  "alpaca_error_count": len(alpaca_errors),
+              })
+
+          count = len(evidence_rows)
+          atr_coverage = sum(row["atr_available"] is True for row in evidence_rows) / count
+          rvol_coverage = sum(row["relative_volume_available"] is True for row in evidence_rows) / count
+          alpaca_coverage = sum(
+              row["alpaca_status"] == "success" and row["alpaca_error_count"] == 0
+              for row in evidence_rows
+          ) / count
+
+          regular = [row for row in evidence_rows if row["market_session"] == "regular"]
+          spread_sanity_applicable = bool(regular)
+          spread_sanity = all(
+              row["spread_structurally_valid"] is True
+              and row["liquid_spread_sane"] is True
+              for row in regular
+          ) if regular else None
+
+          failures = []
+          if atr_coverage < 0.95:
+              failures.append(f"ATR coverage {atr_coverage:.1%} < 95%")
+          if rvol_coverage < 0.95:
+              failures.append(f"relative-volume coverage {rvol_coverage:.1%} < 95%")
+          if alpaca_coverage < 0.95:
+              failures.append(f"Alpaca provider success {alpaca_coverage:.1%} < 95%")
+          if spread_sanity_applicable and spread_sanity is not True:
+              failures.append("regular-session liquid spread sanity failed")
+
+          blocked_misclassified = [
+              row["symbol"] for row in evidence_rows
+              if row["quote_status"] in {"market_closed", "stale_quote", "missing_quote_timestamp"}
+              and row["workflow_status"] == "fail_closed"
+          ]
+          if blocked_misclassified:
+              failures.append(
+                  "closed/stale quote was misclassified as workflow failure: "
+                  + ", ".join(str(symbol) for symbol in blocked_misclassified)
+              )
+
+          if require_regular and len(regular) != count:
+              failures.append("scheduled run did not observe regular US session for all candidates")
+          if regular:
+              bad_quotes = [
+                  row["symbol"] for row in regular
+                  if row["quote_status"] != "fresh"
+                  or row["spread_available"] is not True
+                  or row["quote_timestamp_available"] is not True
+              ]
+              if bad_quotes:
+                  failures.append(
+                      "regular-session quote evidence is stale/incomplete: "
+                      + ", ".join(str(symbol) for symbol in bad_quotes)
+                  )
+
+          report = {
+              "require_regular_session": require_regular,
+              "candidate_count": count,
+              "atr_coverage": round(atr_coverage, 4),
+              "relative_volume_coverage": round(rvol_coverage, 4),
+              "alpaca_success_coverage": round(alpaca_coverage, 4),
+              "liquid_spread_sanity_applicable": spread_sanity_applicable,
+              "liquid_spread_sanity_passed": spread_sanity,
+              "evidence": evidence_rows,
+              "failures": failures,
+          }
+          Path("Manager_Agent/reports/scanner-canonical-auth-evidence.json").write_text(
+              json.dumps(report, indent=2), encoding="utf-8"
+          )
+          print(json.dumps(report, indent=2))
+          if failures:
+              for failure in failures:
+                  print(f"- {failure}", file=sys.stderr)
+              raise SystemExit(1)
+          PY
+
       - name: Fail on hidden Scanner provider or dataframe errors
         run: |
-          docker logs scanner-manager-contract > scanner-manager-contract.log 2>&1
+          docker logs scanner-manager-contract > Manager_Agent/reports/scanner-manager-contract.log 2>&1
           if grep -Eiq \
-            "401 Authorization Required|unauthorized|Exchange or symbol not found|truth value of a Series is ambiguous|FutureWarning: Calling float on a single element Series" \
-            scanner-manager-contract.log; then
-            cat scanner-manager-contract.log
+            "401 Authorization Required|403 Forbidden|unauthorized|Exchange or symbol not found|truth value of a Series is ambiguous|FutureWarning: Calling float on a single element Series" \
+            Manager_Agent/reports/scanner-manager-contract.log; then
+            cat Manager_Agent/reports/scanner-manager-contract.log
             exit 1
           fi
+
+      - name: Upload Scanner integration evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: scanner-manager-real-market-evidence
+          path: Manager_Agent/reports/
+          if-no-files-found: warn
+          retention-days: 30
 
       - name: Show Scanner logs
         if: always()

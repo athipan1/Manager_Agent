@@ -4,8 +4,8 @@ Scanner_Agent may attach ``scanner-opportunity-profile.v1`` inside its existing
 ``scanner-data-bundle.v1``. Manager treats the profile as advisory evidence and
 remains the authority that decides whether a candidate may continue toward
 Technical/Fundamental/Backtest/Risk. Present-but-weak or malformed opportunity
-evidence fails closed. A temporary compatibility flag controls whether a missing
-profile is also blocking while Scanner rollout is coordinated cross-repository.
+evidence fails closed. Closed-market and stale-quote evidence is a controlled
+no-trade/research state, not a workflow failure.
 """
 
 from __future__ import annotations
@@ -18,12 +18,16 @@ from .scanner_candidate_service import candidate_to_dict
 from .scanner_data_quality_service import scanner_candidate_data_bundle
 
 SCANNER_OPPORTUNITY_PROFILE_SCHEMA = "scanner-opportunity-profile.v1"
-SCANNER_OPPORTUNITY_POLICY_VERSION = "manager-scanner-opportunity-gate.v1"
+SCANNER_OPPORTUNITY_POLICY_VERSION = "manager-scanner-opportunity-gate.v2"
 DEFAULT_MIN_OPPORTUNITY_SCORE = 0.70
+RESEARCH_MIN_OPPORTUNITY_SCORE = 0.50
 _TRUE_VALUES = frozenset({"1", "true", "yes", "on"})
 _ALLOWED_STATUSES = frozenset({"qualified", "review", "avoid"})
 _ALLOWED_STRATEGY_HINTS = frozenset(
     {"trend_following", "breakout", "mean_reversion"}
+)
+_CONTROLLED_QUOTE_REVIEW_STATES = frozenset(
+    {"market_closed", "stale_quote", "missing_quote_timestamp"}
 )
 
 
@@ -87,6 +91,9 @@ def _review_result(
     min_score: float,
     profile_required: bool,
     live_spread_required: bool,
+    workflow_failure: bool = False,
+    controlled_no_trade: bool = True,
+    research_lane_eligible: bool = False,
 ) -> Dict[str, Any]:
     profile = profile or {}
     context = _to_dict(profile.get("execution_context"))
@@ -102,11 +109,16 @@ def _review_result(
         "profile_required": profile_required,
         "live_spread_required": live_spread_required,
         "status": profile.get("status"),
+        "workflow_status": profile.get("workflow_status"),
         "opportunity_score": _finite_number(profile.get("opportunity_score")),
         "min_opportunity_score": min_score,
         "preferred_strategy_hint": profile.get("preferred_strategy_hint"),
         "execution_context": context,
+        "evidence_quality": _to_dict(profile.get("evidence_quality")),
         "profile_reasons": list(profile.get("reasons") or []),
+        "workflow_failure": workflow_failure,
+        "controlled_no_trade": controlled_no_trade,
+        "research_lane_eligible": research_lane_eligible,
     }
 
 
@@ -167,12 +179,17 @@ def evaluate_scanner_candidate_opportunity(
             "profile_required": False,
             "live_spread_required": require_spread,
             "status": None,
+            "workflow_status": None,
             "opportunity_score": None,
             "min_opportunity_score": threshold,
             "preferred_strategy_hint": None,
             "execution_context": {},
+            "evidence_quality": {},
             "profile_reasons": [],
             "compatibility_bypass": True,
+            "workflow_failure": False,
+            "controlled_no_trade": False,
+            "research_lane_eligible": False,
         }
 
     schema = str(profile.get("schema_version") or "").strip()
@@ -243,6 +260,7 @@ def evaluate_scanner_candidate_opportunity(
         )
 
     context = _to_dict(profile.get("execution_context"))
+    evidence_quality = _to_dict(profile.get("evidence_quality"))
     current_price = _finite_number(context.get("current_price"))
     dollar_volume = _finite_number(context.get("estimated_dollar_volume"))
     if current_price is None or current_price <= 0 or dollar_volume is None or dollar_volume <= 0:
@@ -256,6 +274,66 @@ def evaluate_scanner_candidate_opportunity(
             live_spread_required=require_spread,
         )
 
+    if profile.get("fail_closed") is True or evidence_quality.get("spread_structurally_valid") is False:
+        return _review_result(
+            symbol=symbol,
+            reason_code="SCANNER_OPPORTUNITY_FAIL_CLOSED",
+            reason="Scanner opportunity evidence is explicitly fail-closed.",
+            profile=profile,
+            min_score=threshold,
+            profile_required=require_profile,
+            live_spread_required=require_spread,
+        )
+
+    quote_status = str(context.get("quote_status") or "").strip().lower()
+    research_eligible = score >= RESEARCH_MIN_OPPORTUNITY_SCORE and status in {
+        "qualified",
+        "review",
+    }
+    if quote_status == "market_closed" or str(profile.get("workflow_status") or "").lower() == "market_closed":
+        return _review_result(
+            symbol=symbol,
+            reason_code="SCANNER_OPPORTUNITY_MARKET_CLOSED",
+            reason=(
+                "US regular session is closed; automated entry is skipped without "
+                "marking the hourly workflow as failed."
+            ),
+            profile=profile,
+            min_score=threshold,
+            profile_required=require_profile,
+            live_spread_required=require_spread,
+            research_lane_eligible=research_eligible,
+        )
+
+    if quote_status in {"stale_quote", "missing_quote_timestamp"} or str(
+        profile.get("workflow_status") or ""
+    ).lower() == "stale_quote":
+        return _review_result(
+            symbol=symbol,
+            reason_code="SCANNER_OPPORTUNITY_STALE_QUOTE",
+            reason=(
+                "Live quote is stale or cannot be timestamp-verified; automated entry "
+                "is blocked while the workflow remains healthy."
+            ),
+            profile=profile,
+            min_score=threshold,
+            profile_required=require_profile,
+            live_spread_required=require_spread,
+            research_lane_eligible=research_eligible,
+        )
+
+    if evidence_quality.get("liquid_spread_sane") is False:
+        return _review_result(
+            symbol=symbol,
+            reason_code="SCANNER_OPPORTUNITY_SPREAD_SANITY",
+            reason="Liquid-stock spread evidence is outside the configured sanity bound.",
+            profile=profile,
+            min_score=threshold,
+            profile_required=require_profile,
+            live_spread_required=require_spread,
+            research_lane_eligible=research_eligible,
+        )
+
     spread_bps = _finite_number(context.get("spread_bps"))
     if require_spread and (spread_bps is None or spread_bps < 0):
         return _review_result(
@@ -266,6 +344,7 @@ def evaluate_scanner_candidate_opportunity(
             min_score=threshold,
             profile_required=require_profile,
             live_spread_required=require_spread,
+            research_lane_eligible=research_eligible,
         )
 
     if status == "avoid":
@@ -287,6 +366,7 @@ def evaluate_scanner_candidate_opportunity(
             min_score=threshold,
             profile_required=require_profile,
             live_spread_required=require_spread,
+            research_lane_eligible=research_eligible,
         )
     if score < threshold:
         return _review_result(
@@ -300,6 +380,7 @@ def evaluate_scanner_candidate_opportunity(
             min_score=threshold,
             profile_required=require_profile,
             live_spread_required=require_spread,
+            research_lane_eligible=research_eligible,
         )
 
     return {
@@ -314,13 +395,18 @@ def evaluate_scanner_candidate_opportunity(
         "profile_required": require_profile,
         "live_spread_required": require_spread,
         "status": status,
+        "workflow_status": profile.get("workflow_status"),
         "opportunity_score": score,
         "min_opportunity_score": threshold,
         "preferred_strategy_hint": hint or None,
         "strategy_affinity": _to_dict(profile.get("strategy_affinity")),
         "execution_context": context,
+        "evidence_quality": evidence_quality,
         "profile_reasons": list(profile.get("reasons") or []),
         "compatibility_bypass": False,
+        "workflow_failure": False,
+        "controlled_no_trade": False,
+        "research_lane_eligible": False,
     }
 
 
@@ -366,6 +452,15 @@ def partition_scanner_candidates_by_opportunity(
     compatibility_bypass_count = sum(
         1 for row in evaluations if row.get("compatibility_bypass") is True
     )
+    controlled_no_trade_count = sum(
+        1 for row in evaluations if row.get("controlled_no_trade") is True
+    )
+    workflow_failure_count = sum(
+        1 for row in evaluations if row.get("workflow_failure") is True
+    )
+    research_lane_eligible_count = sum(
+        1 for row in evaluations if row.get("research_lane_eligible") is True
+    )
     summary = {
         "policy_version": SCANNER_OPPORTUNITY_POLICY_VERSION,
         "required_schema": SCANNER_OPPORTUNITY_PROFILE_SCHEMA,
@@ -376,6 +471,9 @@ def partition_scanner_candidates_by_opportunity(
         "passed_count": len(passed),
         "review_count": len(review),
         "compatibility_bypass_count": compatibility_bypass_count,
+        "controlled_no_trade_count": controlled_no_trade_count,
+        "workflow_failure_count": workflow_failure_count,
+        "research_lane_eligible_count": research_lane_eligible_count,
         "decision": "REVIEW" if review and not passed else "PARTIAL" if review else "PASS",
         "review_reason_codes": sorted({row["reason_code"] for row in review}),
         "evaluations": evaluations,

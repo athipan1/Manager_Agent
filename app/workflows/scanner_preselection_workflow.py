@@ -66,6 +66,28 @@ def _copy_order_tree(row: dict[str, Any]) -> dict[str, Any]:
     return copied
 
 
+def _research_shadow_candidates(scan_payload: dict[str, Any]) -> list[dict[str, Any]]:
+    """Return controlled Scanner REVIEW rows that may enter broker-isolated Shadow."""
+
+    rows = scan_payload.get("review_candidates") or []
+    return [
+        dict(row)
+        for row in rows
+        if isinstance(row, dict) and row.get("research_lane_eligible") is True
+    ]
+
+
+def _attach_shadow_candidates(
+    response: StandardAgentResponse,
+    research_candidates: list[dict[str, Any]],
+) -> None:
+    if not isinstance(response.data, dict):
+        return
+    response.data["research_candidates"] = research_candidates
+    response.data["research_candidate_count"] = len(research_candidates)
+    response.data["shadow_lane_eligible"] = bool(research_candidates)
+
+
 def _enrich_database_orders_with_verified_broker_legs(
     database_sync: dict[str, Any],
     open_orders: list[dict[str, Any]],
@@ -208,6 +230,7 @@ async def run_scanner_preselection_flow(
             )
 
         scan_payload = scanner_payload(scan_response)
+        research_candidates = _research_shadow_candidates(scan_payload)
         candidates = scan_payload.get("candidates", [])
         if not candidates:
             response = no_scanner_candidates_response(
@@ -218,6 +241,7 @@ async def run_scanner_preselection_flow(
             if isinstance(response.data, dict):
                 response.data["preselection_only"] = True
                 response.data["database_sync"] = database_sync
+            _attach_shadow_candidates(response, research_candidates)
             return response
 
         selected_tickers, ticker_to_scanner_candidate = (
@@ -241,6 +265,7 @@ async def run_scanner_preselection_flow(
             if isinstance(response.data, dict):
                 response.data["preselection_only"] = True
                 response.data["database_sync"] = database_sync
+            _attach_shadow_candidates(response, research_candidates)
             return response
 
         ranked = rank_discovery_candidates(
@@ -281,6 +306,9 @@ async def run_scanner_preselection_flow(
             "preselection_only": True,
             "scanner_metadata": scan_payload.get("metadata", {}),
             "scanner_count": len(candidates),
+            "research_candidates": research_candidates,
+            "research_candidate_count": len(research_candidates),
+            "shadow_lane_eligible": bool(research_candidates),
             "deep_analysis_count": len(valid_results),
             "top_10_symbols": selected_tickers,
             "allocation_plan": allocation_report.get("allocation_plan"),
@@ -358,6 +386,7 @@ async def run_scanner_preselection_flow(
                 "exposure_gate_rejected_count": (
                     exposure_gate.get("summary") or {}
                 ).get("rejected_count", 0),
+                "research_candidate_count": len(research_candidates),
             },
         )
     except StockGuardError as exc:

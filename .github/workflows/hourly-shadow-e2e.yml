@@ -1,0 +1,304 @@
+name: Hourly Shadow E2E
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "app/routes/shadow_trading.py"
+      - "app/services/shadow_trading_service.py"
+      - "app/services/shadow_observation_mapper.py"
+      - "app/shadow_database_client.py"
+      - "scripts/run_hourly_shadow_lane.py"
+      - ".github/workflows/hourly-shadow-e2e.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  broker-isolated-shadow-lifecycle:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      SHADOW_DATABASE_API_KEY: shadow-e2e-database-key
+      SHADOW_PERFORMANCE_API_KEY: shadow-e2e-performance-key
+
+    steps:
+      - name: Checkout Manager_Agent
+        uses: actions/checkout@v6
+        with:
+          path: Manager_Agent
+
+      - name: Checkout Database_Agent Shadow ledger
+        uses: actions/checkout@v6
+        with:
+          repository: athipan1/Database_Agent
+          ref: main
+          path: Database_Agent
+          fetch-depth: 1
+
+      - name: Checkout Performance_Agent Shadow floor
+        uses: actions/checkout@v6
+        with:
+          repository: athipan1/Performance_Agent
+          ref: main
+          path: Performance_Agent
+          fetch-depth: 1
+
+      - name: Build isolated Shadow services
+        run: |
+          set -euo pipefail
+          docker build -t shadow-e2e-database:latest Database_Agent
+          docker build -t shadow-e2e-performance:latest Performance_Agent
+          docker build -t shadow-e2e-manager:latest Manager_Agent
+          docker network create hourly-shadow-e2e
+
+      - name: Start Database and Performance only
+        run: |
+          set -euo pipefail
+          docker run -d \
+            --name shadow-database \
+            --network hourly-shadow-e2e \
+            --network-alias database-agent \
+            -p 8004:8004 \
+            -e TRADING_MODE=PAPER \
+            -e DATABASE_DEV_MODE=true \
+            -e USE_SQLITE=1 \
+            -e DATABASE_AGENT_API_KEY="${SHADOW_DATABASE_API_KEY}" \
+            shadow-e2e-database:latest
+
+          docker run -d \
+            --name shadow-performance \
+            --network hourly-shadow-e2e \
+            --network-alias performance-agent \
+            -p 8013:8013 \
+            -e PERFORMANCE_AGENT_API_KEY="${SHADOW_PERFORMANCE_API_KEY}" \
+            -e PERFORMANCE_AGENT_AUTH_ENABLED=true \
+            -e PERFORMANCE_AGENT_DATABASE_REQUIRED=false \
+            shadow-e2e-performance:latest
+
+      - name: Start Manager with no Risk or Execution service
+        run: |
+          set -euo pipefail
+          docker run -d \
+            --name shadow-manager \
+            --network hourly-shadow-e2e \
+            --network-alias manager-agent \
+            -p 8000:80 \
+            -e TRADING_ENABLED=false \
+            -e TRADING_MODE=PAPER \
+            -e BROKER_MODE=SIMULATOR \
+            -e DRY_RUN=true \
+            -e ALLOW_LIVE_TRADING=false \
+            -e DATABASE_AGENT_URL=http://database-agent:8004 \
+            -e DATABASE_AGENT_API_KEY="${SHADOW_DATABASE_API_KEY}" \
+            -e PERFORMANCE_AGENT_ENABLED=false \
+            -e MARKET_REGIME_AGENT_ENABLED=false \
+            -e BACKTEST_AGENT_ENABLED=false \
+            shadow-e2e-manager:latest
+
+      - name: Verify isolated services are ready
+        run: |
+          set -euo pipefail
+          # Manager /health intentionally requires Risk_Agent. This E2E proves the
+          # Shadow lane works while Risk/Execution do not exist, so use /ready to
+          # prove the Manager API process is accepting orchestration requests.
+          for target in \
+            "Database|http://localhost:8004/health|shadow-database" \
+            "Performance|http://localhost:8013/health|shadow-performance" \
+            "Manager|http://localhost:8000/ready|shadow-manager"; do
+            IFS='|' read -r name url container <<< "${target}"
+            ready=false
+            for attempt in $(seq 1 60); do
+              if curl -fsS "${url}" >/dev/null; then
+                echo "${name} is ready."
+                ready=true
+                break
+              fi
+              sleep 2
+            done
+            if [ "${ready}" != "true" ]; then
+              echo "${name} did not become ready."
+              docker logs "${container}" || true
+              exit 1
+            fi
+          done
+
+      - name: Build deterministic research candidate fixture
+        working-directory: Manager_Agent
+        run: |
+          mkdir -p reports
+          cat > reports/shadow-scanner-fixture.json <<'JSON'
+          {
+            "response": {
+              "data": {
+                "research_candidates": [
+                  {
+                    "symbol": "AAPL",
+                    "confidence_score": 0.66,
+                    "status": "review",
+                    "workflow_status": "evidence_review",
+                    "opportunity_score": 0.65,
+                    "preferred_strategy_hint": "trend_following",
+                    "strategy_affinity": {
+                      "trend_following": 0.82,
+                      "breakout": 0.61,
+                      "mean_reversion": 0.25
+                    },
+                    "execution_context": {
+                      "current_price": 100.00,
+                      "bid": 99.99,
+                      "ask": 100.01,
+                      "spread_bps": 2.0,
+                      "atr_pct": 0.02,
+                      "relative_volume": 1.25,
+                      "quote_status": "fresh",
+                      "market_session": "regular"
+                    },
+                    "evidence_quality": {
+                      "coverage_ratio": 1.0,
+                      "atr_available": true,
+                      "relative_volume_available": true,
+                      "spread_available": true,
+                      "quote_timestamp_available": true,
+                      "liquid_spread_sane": true,
+                      "spread_structurally_valid": true
+                    }
+                  }
+                ]
+              }
+            }
+          }
+          JSON
+
+      - name: Run Hourly Shadow lifecycle and replay
+        working-directory: Manager_Agent
+        env:
+          PERFORMANCE_AGENT_API_KEY: ${{ env.SHADOW_PERFORMANCE_API_KEY }}
+          SHADOW_COST_BUFFER_BPS: "2.0"
+        run: |
+          set -euo pipefail
+          python scripts/run_hourly_shadow_lane.py \
+            --scanner-report reports/shadow-scanner-fixture.json \
+            --output reports/hourly-shadow-e2e.json \
+            --manager-url http://localhost:8000 \
+            --performance-url http://localhost:8013 \
+            --account-id shadow-e2e-account \
+            --cycle-id shadow-e2e-cycle \
+            --max-marks 1
+
+      - name: Verify Shadow safety invariants and Database replay count
+        working-directory: Manager_Agent
+        env:
+          DATABASE_AGENT_API_KEY: ${{ env.SHADOW_DATABASE_API_KEY }}
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          import os
+          import urllib.request
+          from pathlib import Path
+
+          report = json.loads(Path("reports/hourly-shadow-e2e.json").read_text())
+          assert report["status"] == "success", report
+          assert report["risk_call_count"] == 0, report
+          assert report["execution_call_count"] == 0, report
+          assert report["broker_order_count"] == 0, report
+          replay = report["replay_verification"]
+          assert replay["replay_added_events"] is False, replay
+          assert replay["replay_new_event_ids"] == [], replay
+          assert replay["closed_observation_count_unchanged"] is True, replay
+          assert report["closed_observation_count"] == 1, report
+
+          performance = report["performance"]["data"]
+          assert performance["observation_count"] == 1, performance
+          assert performance["minimum_observations_for_paper_review"] >= 100, performance
+          assert performance["expectancy_eligible_for_promotion"] is False, performance
+          assert performance["promotion_net_expectancy_pct"] is None, performance
+          assert performance["paper_review_ready"] is False, performance
+          assert performance["broker_order_authorized"] is False, performance
+
+          def get_json(path):
+              request = urllib.request.Request(
+                  "http://localhost:8004" + path,
+                  headers={
+                      "X-API-KEY": os.environ["DATABASE_AGENT_API_KEY"],
+                      "X-Correlation-ID": "shadow-e2e-verifier",
+                  },
+              )
+              with urllib.request.urlopen(request, timeout=30) as response:
+                  return json.loads(response.read().decode("utf-8"))
+
+          ledger = get_json(
+              "/shadow/observations?account_id=shadow-e2e-account&limit=1000"
+          )["data"]
+          event_types = sorted(row["event_type"] for row in ledger)
+          assert len(ledger) == 4, ledger
+          assert event_types == sorted([
+              "signal_decision",
+              "entry_simulated",
+              "mark",
+              "exit_simulated",
+          ]), event_types
+
+          outcomes = get_json(
+              "/shadow/outcomes?account_id=shadow-e2e-account&limit=1000"
+          )["data"]
+          assert outcomes["closed_observation_count"] == 1, outcomes
+          assert len(outcomes["outcomes"]) == 1, outcomes
+
+          summary = {
+              "status": "success",
+              "risk_call_count": 0,
+              "execution_call_count": 0,
+              "broker_order_count": 0,
+              "risk_service_started": False,
+              "execution_service_started": False,
+              "ledger_event_count_after_replay": len(ledger),
+              "replay_added_events": False,
+              "closed_observation_count": outcomes["closed_observation_count"],
+              "minimum_observations_for_paper_review": performance[
+                  "minimum_observations_for_paper_review"
+              ],
+              "paper_review_ready": performance["paper_review_ready"],
+          }
+          Path("reports/hourly-shadow-e2e-summary.json").write_text(
+              json.dumps(summary, indent=2), encoding="utf-8"
+          )
+          print(json.dumps(summary, indent=2))
+          PY
+
+      - name: Prove Risk and Execution containers were never started
+        run: |
+          set -euo pipefail
+          if docker ps -a --format '{{.Names}}' | grep -Eq 'risk|execution'; then
+            docker ps -a
+            echo "Unexpected Risk or Execution container exists in Shadow E2E."
+            exit 1
+          fi
+          echo "No Risk or Execution container was started."
+
+      - name: Upload Hourly Shadow evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: hourly-shadow-e2e-evidence
+          path: Manager_Agent/reports/
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Show service logs on failure
+        if: failure()
+        run: |
+          docker logs shadow-manager || true
+          docker logs shadow-database || true
+          docker logs shadow-performance || true
+
+      - name: Stop isolated Shadow services
+        if: always()
+        run: |
+          docker rm -f shadow-manager shadow-database shadow-performance || true
+          docker network rm hourly-shadow-e2e || true

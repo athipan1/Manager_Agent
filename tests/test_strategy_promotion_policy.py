@@ -1,7 +1,10 @@
 from fastapi.testclient import TestClient
+from pydantic import ValidationError
 
 from app.main_modular import app
 from app.strategy_promotion_policy import (
+    MINIMUM_SHADOW_OBSERVATIONS_FOR_PAPER,
+    StrategyPromotionPolicy,
     StrategyPromotionRequest,
     evaluate_strategy_promotion,
 )
@@ -12,7 +15,7 @@ def _request(current, target, **evidence_overrides):
         "pre_holdout_passed": True,
         "final_holdout_passed": True,
         "final_holdout_rejected": False,
-        "shadow_observations": 50,
+        "shadow_observations": 120,
         "paper_observations": 120,
         "net_expectancy_r": 0.20,
         "profit_factor": 1.40,
@@ -28,7 +31,7 @@ def _request(current, target, **evidence_overrides):
     evidence.update(evidence_overrides)
     return StrategyPromotionRequest.model_validate(
         {
-            "strategy_id": "trend-v6",
+            "strategy_id": "trend-v7",
             "current_stage": current,
             "requested_stage": target,
             "evidence": evidence,
@@ -71,9 +74,9 @@ def test_final_holdout_rejection_blocks_transition():
     assert "final_holdout_passed" in decision.failed_gates
 
 
-def test_shadow_to_paper_requires_shadow_sample_and_positive_expectancy():
+def test_shadow_to_paper_requires_100_closed_observations_and_positive_expectancy():
     sample_blocked = evaluate_strategy_promotion(
-        _request("shadow", "paper", shadow_observations=10)
+        _request("shadow", "paper", shadow_observations=99)
     )
     expectancy_blocked = evaluate_strategy_promotion(
         _request("shadow", "paper", net_expectancy_r=0.0)
@@ -85,6 +88,17 @@ def test_shadow_to_paper_requires_shadow_sample_and_positive_expectancy():
     assert expectancy_blocked.allowed is False
     assert "positive_shadow_expectancy" in expectancy_blocked.failed_gates
     assert passed.allowed is True
+
+
+def test_shadow_policy_floor_cannot_be_lowered_below_100():
+    assert MINIMUM_SHADOW_OBSERVATIONS_FOR_PAPER == 100
+    assert StrategyPromotionPolicy().min_shadow_observations == 100
+    try:
+        StrategyPromotionPolicy(min_shadow_observations=99)
+    except ValidationError:
+        pass
+    else:
+        raise AssertionError("Manager accepted a shadow sample floor below 100")
 
 
 def test_paper_proven_requires_profit_execution_and_safety_evidence():
