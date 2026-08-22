@@ -42,11 +42,11 @@ jobs:
         with:
           path: Manager_Agent
 
-      - name: Checkout Scanner_Agent evidence revision
+      - name: Checkout Scanner_Agent main
         uses: actions/checkout@v6
         with:
           repository: athipan1/Scanner_Agent
-          ref: ${{ github.event_name == 'pull_request' && 'agent/scanner-opportunity-evidence-v2' || 'main' }}
+          ref: main
           path: Scanner_Agent
           fetch-depth: 1
 
@@ -103,6 +103,7 @@ jobs:
           SCANNER_AGENT_URL: http://localhost:8003
           SCANNER_REQUIRE_REAL_MARKET_DATA: "true"
           SCANNER_MIN_DATA_COVERAGE: "0.80"
+          SCANNER_OPPORTUNITY_PROFILE_REQUIRED: "true"
           SCANNER_SCREENER: america
           SCANNER_EXCHANGE: NASDAQ
           AGENT_CLIENT_TIMEOUT: "60"
@@ -139,46 +140,53 @@ jobs:
                   raise RuntimeError(f"{name} returned malformed REVIEW rows: {review}")
 
               if candidates:
-                  if int(quality_gate.get("passed_count") or 0) < len(candidates):
+                  quality_passed = quality_gate.get("passed_count")
+                  if quality_passed is not None and quality_passed < len(candidates):
                       raise RuntimeError(
-                          f"{name} quality gate pass count mismatch: {quality_gate}"
+                          f"{name} quality gate pass count cannot be below final candidates: "
+                          f"quality={quality_gate} final={len(candidates)}"
                       )
-                  if (
-                      opportunity_gate
-                      and int(opportunity_gate.get("passed_count") or 0) != len(candidates)
-                  ):
+                  if opportunity_gate:
+                      if opportunity_gate.get("passed_count") != len(candidates):
+                          raise RuntimeError(
+                              f"{name} opportunity gate pass count mismatch: "
+                              f"{opportunity_gate}"
+                          )
+                  elif quality_passed != len(candidates):
                       raise RuntimeError(
-                          f"{name} opportunity gate pass count mismatch: {opportunity_gate}"
+                          f"{name} legacy quality gate pass count mismatch: {quality_gate}"
                       )
                   print(
-                      f"{name}: PASS candidates={len(candidates)} review={len(review)} "
-                      f"quality={quality_gate.get('decision')} "
-                      f"opportunity={opportunity_gate.get('decision')} "
-                      f"correlation_id={response.correlation_id}"
+                      f"{name}: PASS candidates={len(candidates)} "
+                      f"review={len(review)} correlation_id={response.correlation_id}"
                   )
                   return
 
               if review:
                   quality_review = quality_gate.get("decision") == "REVIEW"
                   opportunity_review = opportunity_gate.get("decision") == "REVIEW"
-                  if not (quality_review or opportunity_review):
+                  if not quality_review and not opportunity_review:
                       raise RuntimeError(
-                          f"{name} review candidates lack a REVIEW gate summary: "
-                          f"quality={quality_gate}, opportunity={opportunity_gate}"
+                          f"{name} expected REVIEW from data-quality or opportunity gate: "
+                          f"quality={quality_gate} opportunity={opportunity_gate}"
                       )
-                  codes = sorted(
+                  reason_codes = sorted(
                       set(quality_gate.get("review_reason_codes") or [])
                       | set(opportunity_gate.get("review_reason_codes") or [])
                   )
+                  sources = []
+                  if quality_review:
+                      sources.append("data_quality")
+                  if opportunity_review:
+                      sources.append("opportunity")
                   print(
-                      f"{name}: REVIEW candidates={len(review)} codes={codes} "
-                      f"quality={quality_gate.get('decision')} "
-                      f"opportunity={opportunity_gate.get('decision')}"
+                      f"{name}: fail-safe REVIEW candidates={len(review)} "
+                      f"sources={sources} codes={reason_codes}"
                   )
                   return
 
               raise RuntimeError(
-                  f"{name} scan returned neither quality-passed nor REVIEW candidates"
+                  f"{name} scan returned neither passed nor REVIEW candidates"
               )
 
           async def main():
