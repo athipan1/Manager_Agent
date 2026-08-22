@@ -94,6 +94,7 @@ jobs:
           SCANNER_AGENT_URL: http://localhost:8003
           SCANNER_REQUIRE_REAL_MARKET_DATA: "true"
           SCANNER_MIN_DATA_COVERAGE: "0.80"
+          SCANNER_OPPORTUNITY_PROFILE_REQUIRED: "true"
           SCANNER_SCREENER: america
           SCANNER_EXCHANGE: NASDAQ
           AGENT_CLIENT_TIMEOUT: "60"
@@ -122,37 +123,61 @@ jobs:
               data = to_dict(response.data)
               candidates = data.get("candidates") or []
               review = data.get("review_candidates") or []
-              gate = (data.get("metadata") or {}).get("scanner_data_quality_gate") or {}
+              metadata = data.get("metadata") or {}
+              quality_gate = metadata.get("scanner_data_quality_gate") or {}
+              opportunity_gate = metadata.get("scanner_opportunity_gate") or {}
+
+              if any(row.get("decision") != "REVIEW" for row in review):
+                  raise RuntimeError(f"{name} returned malformed REVIEW rows: {review}")
 
               if candidates:
-                  if gate.get("passed_count") != len(candidates):
+                  quality_passed = quality_gate.get("passed_count")
+                  if quality_passed is not None and quality_passed < len(candidates):
                       raise RuntimeError(
-                          f"{name} quality gate pass count mismatch: {gate}"
+                          f"{name} quality gate pass count cannot be below final candidates: "
+                          f"quality={quality_gate} final={len(candidates)}"
                       )
-                  if any(row.get("decision") != "REVIEW" for row in review):
-                      raise RuntimeError(f"{name} returned malformed REVIEW rows: {review}")
+                  if opportunity_gate:
+                      if opportunity_gate.get("passed_count") != len(candidates):
+                          raise RuntimeError(
+                              f"{name} opportunity gate pass count mismatch: "
+                              f"{opportunity_gate}"
+                          )
+                  elif quality_passed != len(candidates):
+                      raise RuntimeError(
+                          f"{name} legacy quality gate pass count mismatch: {quality_gate}"
+                      )
                   print(
                       f"{name}: PASS candidates={len(candidates)} "
                       f"review={len(review)} correlation_id={response.correlation_id}"
                   )
                   return
 
-              # During the cross-repo rollout Scanner main may still predate
-              # scanner-data-bundle.v1. Manager must fail safe by moving those
-              # candidates to REVIEW instead of passing them downstream.
               if review:
-                  if gate.get("decision") != "REVIEW":
-                      raise RuntimeError(f"{name} expected REVIEW gate summary: {gate}")
-                  if any(row.get("decision") != "REVIEW" for row in review):
-                      raise RuntimeError(f"{name} malformed REVIEW rows: {review}")
+                  quality_review = quality_gate.get("decision") == "REVIEW"
+                  opportunity_review = opportunity_gate.get("decision") == "REVIEW"
+                  if not quality_review and not opportunity_review:
+                      raise RuntimeError(
+                          f"{name} expected REVIEW from data-quality or opportunity gate: "
+                          f"quality={quality_gate} opportunity={opportunity_gate}"
+                      )
+                  reason_codes = sorted(
+                      set(quality_gate.get("review_reason_codes") or [])
+                      | set(opportunity_gate.get("review_reason_codes") or [])
+                  )
+                  sources = []
+                  if quality_review:
+                      sources.append("data_quality")
+                  if opportunity_review:
+                      sources.append("opportunity")
                   print(
-                      f"{name}: rollout-safe REVIEW candidates={len(review)} "
-                      f"codes={gate.get('review_reason_codes')}"
+                      f"{name}: fail-safe REVIEW candidates={len(review)} "
+                      f"sources={sources} codes={reason_codes}"
                   )
                   return
 
               raise RuntimeError(
-                  f"{name} scan returned neither quality-passed nor REVIEW candidates"
+                  f"{name} scan returned neither passed nor REVIEW candidates"
               )
 
           async def main():
