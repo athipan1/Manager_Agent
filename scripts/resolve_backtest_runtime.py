@@ -13,7 +13,11 @@ from typing import Mapping
 
 API_MINIMUM_BARS = 100
 DEFAULT_MINIMUM_BARS = 252
-SCHEMA_VERSION = "backtest-runtime-contract.v1"
+SCHEMA_VERSION = "backtest-runtime-contract.v2"
+HOURLY_BACKTEST_MODE = "nested_promotion"
+STRATEGY_BUCKET_POLICY_ENABLED = "true"
+STRATEGY_BUCKET_REPORT_PATH = "reports/hourly-pre-backtest-discovery.json"
+MARKET_CONTEXT_PATH = "reports/hourly-position-review.json"
 
 
 class BacktestRuntimeContractError(RuntimeError):
@@ -70,6 +74,19 @@ def resolve_minimum_bars(environ: Mapping[str, str]) -> dict[str, object]:
     }
 
 
+def _hourly_policy_contract() -> dict[str, object]:
+    """Return immutable production-safe policy settings for Manager hourly runs."""
+
+    return {
+        "backtest_mode": HOURLY_BACKTEST_MODE,
+        "legacy_fixed_allowed": False,
+        "strategy_bucket_aware_enabled": True,
+        "strategy_bucket_report_path": STRATEGY_BUCKET_REPORT_PATH,
+        "market_context_path": MARKET_CONTEXT_PATH,
+        "automatic_strategy_fallback_allowed": False,
+    }
+
+
 def write_runtime_contract(
     *,
     github_env_path: Path,
@@ -81,11 +98,20 @@ def write_runtime_contract(
         raise BacktestRuntimeContractError("GITHUB_ENV path is required.")
 
     contract = resolve_minimum_bars(env)
+    contract.update(_hourly_policy_contract())
     contract["timestamp"] = datetime.now(timezone.utc).isoformat()
 
     github_env_path.parent.mkdir(parents=True, exist_ok=True)
     with github_env_path.open("a", encoding="utf-8") as handle:
         handle.write(f"BACKTEST_MINIMUM_BARS={contract['resolved']}\n")
+        handle.write(f"BACKTEST_MODE={HOURLY_BACKTEST_MODE}\n")
+        handle.write(
+            f"BACKTEST_STRATEGY_BUCKET_AWARE_ENABLED={STRATEGY_BUCKET_POLICY_ENABLED}\n"
+        )
+        handle.write(
+            f"BACKTEST_STRATEGY_BUCKET_REPORT_PATH={STRATEGY_BUCKET_REPORT_PATH}\n"
+        )
+        handle.write(f"BACKTEST_MARKET_CONTEXT_PATH={MARKET_CONTEXT_PATH}\n")
 
     report_path.parent.mkdir(parents=True, exist_ok=True)
     report_path.write_text(
@@ -130,9 +156,11 @@ def main() -> int:
         return 1
 
     print(
-        "Resolved Backtest minimum bars: "
-        f"requested={contract['requested_raw']!r}, "
-        f"resolved={contract['resolved']}, reason={contract['reason']}"
+        "Resolved Backtest runtime: "
+        f"requested_bars={contract['requested_raw']!r}, "
+        f"resolved_bars={contract['resolved']}, "
+        f"mode={contract['backtest_mode']}, "
+        "strategy_bucket_aware=true"
     )
     return 0
 
