@@ -41,12 +41,30 @@ def _aggregate_codes(rows: list[Any], field: str) -> dict[str, int]:
     return dict(sorted(counter.items()))
 
 
+def _evaluation_reason_counts(gate: dict[str, Any]) -> dict[str, int]:
+    counter: Counter[str] = Counter()
+    for row in _list(gate.get("evaluations")):
+        if not isinstance(row, dict) or row.get("allowed") is True:
+            continue
+        code = str(row.get("reason_code") or "").strip()
+        if code:
+            counter[code] += 1
+    if not counter:
+        for code in _list(gate.get("review_reason_codes")):
+            text = str(code or "").strip()
+            if text:
+                counter[text] += 1
+    return dict(sorted(counter.items()))
+
+
 def _active_bottlenecks(
     *,
     attempted: int,
     analyzed: int,
-    scanner_candidates: int,
+    quality_input: int,
     data_quality_passed: int,
+    opportunity_passed: int,
+    research_candidates: int,
     deep_analysis: int,
     classified: int,
     selected_before_investability: int,
@@ -59,6 +77,9 @@ def _active_bottlenecks(
 ) -> list[dict[str, Any]]:
     issues: list[dict[str, Any]] = []
     scanner_success = _ratio(analyzed, attempted)
+    data_quality_gate = _dict(scanner_metadata.get("scanner_data_quality_gate"))
+    opportunity_gate = _dict(scanner_metadata.get("scanner_opportunity_gate"))
+
     if attempted > 0 and scanner_success < 0.8:
         issues.append(
             {
@@ -74,21 +95,35 @@ def _active_bottlenecks(
             }
         )
 
-    if scanner_candidates > 0 and data_quality_passed < scanner_candidates:
+    if quality_input > 0 and data_quality_passed < quality_input:
         issues.append(
             {
-                "stage": "scanner_data_quality_gate",
+                "stage": "scanner_analysis_data_quality_gate",
                 "severity": "medium",
-                "observed": _ratio(data_quality_passed, scanner_candidates),
+                "observed": _ratio(data_quality_passed, quality_input),
                 "target": 1.0,
-                "lost_count": max(0, scanner_candidates - data_quality_passed),
-                "reason_codes": _list(
-                    _dict(scanner_metadata.get("scanner_data_quality_gate")).get(
-                        "review_reason_codes"
-                    )
-                ),
+                "lost_count": max(0, quality_input - data_quality_passed),
+                "reason_codes": _evaluation_reason_counts(data_quality_gate),
+                "coverage_scope_counts": _dict(data_quality_gate.get("coverage_scope_counts")),
                 "recommended_action": (
-                    "Fill missing Scanner evidence instead of forwarding incomplete candidates."
+                    "Repair the missing analysis-ready evidence named by the gate; do not lower the 0.80 threshold."
+                ),
+            }
+        )
+
+    if data_quality_passed > opportunity_passed:
+        controlled_shadow = research_candidates > 0
+        issues.append(
+            {
+                "stage": "scanner_production_opportunity_gate",
+                "severity": "informational" if controlled_shadow else "medium",
+                "observed": _ratio(opportunity_passed, data_quality_passed),
+                "target": "production only when live execution evidence is valid",
+                "lost_count": max(0, data_quality_passed - opportunity_passed),
+                "research_candidate_count": research_candidates,
+                "reason_codes": _evaluation_reason_counts(opportunity_gate),
+                "recommended_action": (
+                    "Keep Production fail-closed. Off-session or non-production candidates should continue only through the broker-isolated Shadow lane."
                 ),
             }
         )
@@ -179,6 +214,7 @@ def build_profitability_funnel(report: dict[str, Any]) -> dict[str, Any]:
     data = _dict(response.get("data"))
     scanner_metadata = _dict(data.get("scanner_metadata"))
     data_quality_gate = _dict(scanner_metadata.get("scanner_data_quality_gate"))
+    opportunity_gate = _dict(scanner_metadata.get("scanner_opportunity_gate"))
     bucket_selection = _dict(data.get("bucket_selection"))
     bucket_summary = _dict(bucket_selection.get("summary"))
     allocation_plan = _dict(data.get("allocation_plan"))
@@ -195,10 +231,25 @@ def build_profitability_funnel(report: dict[str, Any]) -> dict[str, Any]:
     requested = _int(_dict(report.get("request")).get("max_universe"))
     attempted = _int(scanner_metadata.get("attempted_count"), requested)
     analyzed = _int(scanner_metadata.get("analyzed_count"))
-    scanner_candidates = _int(data.get("scanner_count"), len(_list(data.get("top_10_symbols"))))
+    production_candidates = _int(
+        data.get("scanner_count"),
+        len(_list(data.get("top_10_symbols"))),
+    )
+    research_candidates = _int(
+        data.get("research_candidate_count"),
+        len(_list(data.get("research_candidates"))),
+    )
+    quality_input = _int(
+        data_quality_gate.get("original_count"),
+        production_candidates + _int(data_quality_gate.get("review_count")),
+    )
     data_quality_passed = _int(
         data_quality_gate.get("passed_count"),
-        scanner_candidates,
+        production_candidates,
+    )
+    opportunity_passed = _int(
+        opportunity_gate.get("passed_count"),
+        production_candidates,
     )
     deep_analysis = _int(data.get("deep_analysis_count"))
     ranked_count = len(ranked_candidates)
@@ -226,9 +277,11 @@ def build_profitability_funnel(report: dict[str, Any]) -> dict[str, Any]:
         {"name": "universe_requested", "count": requested},
         {"name": "scanner_attempted", "count": attempted},
         {"name": "scanner_analyzed", "count": analyzed, "conversion_from_previous": _ratio(analyzed, attempted)},
-        {"name": "scanner_top_candidates", "count": scanner_candidates, "conversion_from_analyzed": _ratio(scanner_candidates, analyzed)},
-        {"name": "scanner_data_quality_passed", "count": data_quality_passed, "conversion_from_top": _ratio(data_quality_passed, scanner_candidates)},
-        {"name": "deep_analysis_success", "count": deep_analysis, "conversion_from_quality": _ratio(deep_analysis, data_quality_passed)},
+        {"name": "scanner_gate_input", "count": quality_input, "conversion_from_analyzed": _ratio(quality_input, analyzed)},
+        {"name": "scanner_analysis_ready", "count": data_quality_passed, "conversion_from_gate_input": _ratio(data_quality_passed, quality_input)},
+        {"name": "scanner_production_ready", "count": opportunity_passed, "conversion_from_analysis_ready": _ratio(opportunity_passed, data_quality_passed)},
+        {"name": "scanner_research_shadow", "count": research_candidates, "execution_authorized": False},
+        {"name": "deep_analysis_success", "count": deep_analysis, "conversion_from_production": _ratio(deep_analysis, production_candidates)},
         {"name": "ranked_candidates", "count": ranked_count},
         {"name": "classified_evidence_eligible", "count": classified, "conversion_from_ranked": _ratio(classified, ranked_count)},
         {"name": "selected_before_investability", "count": selected_before_investability},
@@ -240,8 +293,10 @@ def build_profitability_funnel(report: dict[str, Any]) -> dict[str, Any]:
     bottlenecks = _active_bottlenecks(
         attempted=attempted,
         analyzed=analyzed,
-        scanner_candidates=scanner_candidates,
+        quality_input=quality_input,
         data_quality_passed=data_quality_passed,
+        opportunity_passed=opportunity_passed,
+        research_candidates=research_candidates,
         deep_analysis=deep_analysis,
         classified=classified,
         selected_before_investability=selected_before_investability,
@@ -254,7 +309,7 @@ def build_profitability_funnel(report: dict[str, Any]) -> dict[str, Any]:
     )
 
     return {
-        "schema_version": "profitability-funnel.v1",
+        "schema_version": "profitability-funnel.v2",
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "portfolio_cycle_id": data.get("report_id"),
         "source_status": report.get("status"),
@@ -268,6 +323,15 @@ def build_profitability_funnel(report: dict[str, Any]) -> dict[str, Any]:
                 scanner_metadata.get("error_categories")
             ),
             "data_quality_gate_decision": data_quality_gate.get("decision"),
+            "data_quality_threshold": data_quality_gate.get("min_coverage_ratio"),
+            "data_quality_threshold_relaxed": bool(data_quality_gate.get("threshold_relaxed", False)),
+            "data_quality_coverage_scope_counts": _dict(data_quality_gate.get("coverage_scope_counts")),
+            "data_quality_rejection_reasons": _evaluation_reason_counts(data_quality_gate),
+            "opportunity_gate_decision": opportunity_gate.get("decision"),
+            "opportunity_rejection_reasons": _evaluation_reason_counts(opportunity_gate),
+            "production_candidate_count": production_candidates,
+            "research_candidate_count": research_candidates,
+            "shadow_execution_authorized": False,
             "quarantine_count": _int(bucket_summary.get("quarantine_count")),
             "investability_rejection_codes": _aggregate_codes(
                 _list(investability_gate.get("rejected")),
@@ -278,8 +342,11 @@ def build_profitability_funnel(report: dict[str, Any]) -> dict[str, Any]:
         "primary_bottleneck": bottlenecks[0] if bottlenecks else None,
         "active_bottlenecks": bottlenecks,
         "safety": {
+            "scanner_data_quality_threshold_relaxed": False,
+            "production_opportunity_threshold_relaxed": False,
             "risk_thresholds_relaxed": False,
             "investability_thresholds_relaxed": False,
+            "shadow_broker_order_authorized": False,
             "purpose": "diagnostic_only",
         },
     }
@@ -306,8 +373,15 @@ def render_markdown(funnel: dict[str, Any]) -> str:
             f"- Scanner success rate: `{health.get('scanner_success_rate', 0):.1%}`",
             f"- Provider pressure: `{health.get('scanner_provider_pressure_detected')}`",
             f"- Data quality decision: `{health.get('data_quality_gate_decision') or '-'}`",
+            f"- Data quality threshold relaxed: `{health.get('data_quality_threshold_relaxed')}`",
+            f"- Production candidates: `{health.get('production_candidate_count', 0)}`",
+            f"- Shadow research candidates: `{health.get('research_candidate_count', 0)}`",
             f"- Quarantine count: `{health.get('quarantine_count', 0)}`",
             f"- Backtest symbols: `{', '.join(health.get('backtest_symbols') or []) or '<none>'}`",
+            "",
+            "## Gate reasons",
+            f"- Data quality: `{json.dumps(health.get('data_quality_rejection_reasons') or {}, sort_keys=True)}`",
+            f"- Production opportunity: `{json.dumps(health.get('opportunity_rejection_reasons') or {}, sort_keys=True)}`",
             "",
             "## Bottlenecks",
         ]
@@ -327,7 +401,7 @@ def render_markdown(funnel: dict[str, Any]) -> str:
     lines.extend(
         [
             "",
-            "Safety: this report is diagnostic only; it does not relax Risk or Investability thresholds.",
+            "Safety: this report is diagnostic only; it does not relax Scanner, Risk or Investability thresholds and never authorizes Shadow broker orders.",
             "",
         ]
     )
@@ -358,6 +432,8 @@ def main() -> None:
     print(
         "Profitability funnel audit complete: "
         f"primary_bottleneck={primary.get('stage', 'none')}, "
+        f"production_candidates={_dict(funnel.get('health')).get('production_candidate_count', 0)}, "
+        f"research_candidates={_dict(funnel.get('health')).get('research_candidate_count', 0)}, "
         f"backtest_symbols={len(_list(_dict(funnel.get('health')).get('backtest_symbols')))}"
     )
 
