@@ -16,7 +16,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     env:
-      COMPOSE_FILE: docker-compose.yml:docker-compose.risk.yml:docker-compose.alpha.yml:docker-compose.hourly-simulator.yml
+      COMPOSE_FILE: docker-compose.yml:docker-compose.hourly-simulator.yml
       DATABASE_AGENT_API_KEY: ${{ secrets.DATABASE_AGENT_API_KEY }}
       EXECUTION_API_KEY: ${{ secrets.EXECUTION_API_KEY }}
       PORTFOLIO_AGENT_API_KEY: ${{ secrets.PORTFOLIO_AGENT_API_KEY }}
