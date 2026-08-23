@@ -1,0 +1,181 @@
+name: One-Time Hourly Paper Shadow Validation
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - ".github/workflows/one-time-hourly-paper-shadow-validation.yml"
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  paper-cycle:
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    uses: ./.github/workflows/hourly-auto-trading.yml
+    with:
+      dry_run: false
+      broker_mode: ALPACA
+      max_universe: "1000"
+      top_n: "10"
+      min_final_score: "0.55"
+      operator_confirmation: EXECUTE_ALPACA_PAPER
+      emergency_halt_drill: true
+    secrets: inherit
+
+  audit:
+    if: always() && github.event.pull_request.head.repo.full_name == github.repository
+    needs: paper-cycle
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      PAPER_CYCLE_RESULT: ${{ needs.paper-cycle.result }}
+      RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+      ISSUE_NUMBER: "407"
+    steps:
+      - name: Checkout Manager_Agent
+        uses: actions/checkout@v6
+
+      - name: Download Hourly Paper evidence
+        id: download
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          name: hourly-auto-trading-report
+          path: evidence/raw
+
+      - name: Summarize Production NO_TRADE and Shadow evidence
+        if: always()
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          root = Path("evidence/raw")
+
+          def load_named(name):
+              matches = list(root.rglob(name)) if root.exists() else []
+              if not matches:
+                  return {}, None
+              try:
+                  return json.loads(matches[0].read_text(encoding="utf-8")), str(matches[0])
+              except Exception:
+                  return {}, str(matches[0])
+
+          shadow, shadow_path = load_named("hourly-shadow-lane.json")
+          scanner, scanner_path = load_named("hourly-pre-backtest-discovery.json")
+
+          backtest_symbols = scanner.get("backtest_symbols") or []
+          if not isinstance(backtest_symbols, list):
+              backtest_symbols = [str(backtest_symbols)] if backtest_symbols else []
+
+          candidate_selected = scanner.get("candidate_selected")
+          if isinstance(candidate_selected, str):
+              candidate_selected = candidate_selected.strip().lower() == "true"
+
+          response = scanner.get("response") or {}
+          data = response.get("data") if isinstance(response, dict) else {}
+          data = data if isinstance(data, dict) else {}
+          research_candidates = data.get("research_candidates") or []
+          production_candidates = data.get("production_candidates") or []
+
+          no_trade_hits = []
+          json_files = list(root.rglob("*.json")) if root.exists() else []
+          for path in json_files:
+              try:
+                  text = path.read_text(encoding="utf-8", errors="replace")
+              except Exception:
+                  continue
+              if "NO_TRADE" in text.upper():
+                  no_trade_hits.append(str(path))
+
+          replay = shadow.get("replay_verification") or {}
+          performance = shadow.get("performance") or {}
+          performance_data = performance.get("data") if isinstance(performance, dict) else {}
+          performance_data = performance_data if isinstance(performance_data, dict) else {}
+
+          scanner_present = bool(scanner_path)
+          no_production_handoff = scanner_present and not backtest_symbols
+          no_trade_verified = bool(no_trade_hits) or (
+              no_production_handoff and candidate_selected is False
+          )
+
+          summary = {
+              "paper_cycle_result": os.getenv("PAPER_CYCLE_RESULT"),
+              "run_url": os.getenv("RUN_URL"),
+              "artifact_downloaded": root.exists(),
+              "scanner_report_present": scanner_present,
+              "scanner_report_path": scanner_path,
+              "candidate_selected": candidate_selected,
+              "backtest_symbols": backtest_symbols,
+              "production_candidate_count": len(production_candidates) if isinstance(production_candidates, list) else None,
+              "scanner_research_candidate_count": len(research_candidates) if isinstance(research_candidates, list) else None,
+              "no_production_handoff": no_production_handoff,
+              "no_trade_evidence_files": no_trade_hits,
+              "no_trade_verified": no_trade_verified,
+              "shadow_report_present": bool(shadow_path),
+              "shadow_report_path": shadow_path,
+              "shadow_status": shadow.get("status"),
+              "shadow_research_candidate_count": shadow.get("research_candidate_count"),
+              "closed_observation_count": shadow.get("closed_observation_count"),
+              "risk_call_count": shadow.get("risk_call_count"),
+              "execution_call_count": shadow.get("execution_call_count"),
+              "broker_order_count": shadow.get("broker_order_count"),
+              "replay_added_events": replay.get("replay_added_events"),
+              "replay_new_event_ids": replay.get("replay_new_event_ids"),
+              "performance_observation_count": performance_data.get("observation_count"),
+              "minimum_observations_for_paper_review": performance_data.get("minimum_observations_for_paper_review"),
+              "paper_review_ready": performance_data.get("paper_review_ready"),
+              "evidence_json_count": len(json_files),
+          }
+
+          Path("evidence").mkdir(parents=True, exist_ok=True)
+          Path("evidence/one-time-hourly-paper-shadow-summary.json").write_text(
+              json.dumps(summary, indent=2, ensure_ascii=False), encoding="utf-8"
+          )
+
+          lines = [
+              "## One-Time Hourly Paper Shadow Validation",
+              "",
+              f"- Paper cycle: **{summary['paper_cycle_result']}**",
+              f"- Run: {summary['run_url']}",
+              f"- Scanner report: `{summary['scanner_report_present']}`",
+              f"- Candidate selected: `{summary['candidate_selected']}`",
+              f"- Backtest symbols: `{summary['backtest_symbols']}`",
+              f"- NO_TRADE verified: `{summary['no_trade_verified']}`",
+              f"- Shadow report: `{summary['shadow_report_present']}`",
+              f"- Shadow status: `{summary['shadow_status']}`",
+              f"- Shadow research candidates: `{summary['shadow_research_candidate_count']}`",
+              f"- Closed Shadow observations: `{summary['closed_observation_count']}`",
+              f"- Risk calls from Shadow: `{summary['risk_call_count']}`",
+              f"- Execution calls from Shadow: `{summary['execution_call_count']}`",
+              f"- Broker orders from Shadow: `{summary['broker_order_count']}`",
+              f"- Replay added events: `{summary['replay_added_events']}`",
+              f"- Shadow paper-review floor: `{summary['minimum_observations_for_paper_review']}`",
+              "",
+              "```json",
+              json.dumps(summary, indent=2, ensure_ascii=False),
+              "```",
+          ]
+          Path("evidence/one-time-hourly-paper-shadow-summary.md").write_text(
+              "\n".join(lines) + "\n", encoding="utf-8"
+          )
+          print(json.dumps(summary, indent=2, ensure_ascii=False))
+          PY
+
+      - name: Comment validation result on command issue
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh issue comment "${ISSUE_NUMBER}" --body-file evidence/one-time-hourly-paper-shadow-summary.md
+
+      - name: Upload one-time validation evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: one-time-hourly-paper-shadow-validation
+          path: evidence/
+          if-no-files-found: warn
+          retention-days: 30
