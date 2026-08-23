@@ -6,6 +6,9 @@ import pytest
 from scripts.resolve_backtest_runtime import (
     API_MINIMUM_BARS,
     DEFAULT_MINIMUM_BARS,
+    HOURLY_BACKTEST_MODE,
+    MARKET_CONTEXT_PATH,
+    STRATEGY_BUCKET_REPORT_PATH,
     resolve_minimum_bars,
     write_runtime_contract,
 )
@@ -49,18 +52,62 @@ def test_write_runtime_contract_sets_github_env_and_audit_report(tmp_path):
     contract = write_runtime_contract(
         github_env_path=github_env,
         report_path=report,
-        environ={"BACKTEST_MINIMUM_BARS_REQUESTED": "3"},
+        environ={
+            "BACKTEST_MINIMUM_BARS_REQUESTED": "3",
+            "BACKTEST_MODE": "legacy_fixed",
+            "BACKTEST_STRATEGY_BUCKET_AWARE_ENABLED": "false",
+        },
     )
 
     assert github_env.read_text(encoding="utf-8") == (
         f"BACKTEST_MINIMUM_BARS={DEFAULT_MINIMUM_BARS}\n"
+        f"BACKTEST_MODE={HOURLY_BACKTEST_MODE}\n"
+        "BACKTEST_STRATEGY_BUCKET_AWARE_ENABLED=true\n"
+        f"BACKTEST_STRATEGY_BUCKET_REPORT_PATH={STRATEGY_BUCKET_REPORT_PATH}\n"
+        f"BACKTEST_MARKET_CONTEXT_PATH={MARKET_CONTEXT_PATH}\n"
     )
     persisted = json.loads(report.read_text(encoding="utf-8"))
     assert persisted["resolved"] == DEFAULT_MINIMUM_BARS
     assert persisted["requested"] == 3
     assert persisted["reason"] == "below_api_contract_minimum"
     assert persisted["timestamp"]
-    assert contract["schema_version"] == "backtest-runtime-contract.v1"
+    assert contract["schema_version"] == "backtest-runtime-contract.v2"
+    assert persisted["backtest_mode"] == "nested_promotion"
+    assert persisted["legacy_fixed_allowed"] is False
+    assert persisted["strategy_bucket_aware_enabled"] is True
+    assert persisted["strategy_bucket_report_path"] == (
+        "reports/hourly-pre-backtest-discovery.json"
+    )
+    assert persisted["market_context_path"] == "reports/hourly-position-review.json"
+    assert persisted["automatic_strategy_fallback_allowed"] is False
+
+
+def test_hourly_runtime_overrides_unsafe_legacy_operator_drift(tmp_path):
+    github_env = tmp_path / "github-env"
+    report = tmp_path / "runtime.json"
+
+    write_runtime_contract(
+        github_env_path=github_env,
+        report_path=report,
+        environ={
+            "BACKTEST_MINIMUM_BARS_REQUESTED": "252",
+            "BACKTEST_MODE": "legacy_fixed",
+            "BACKTEST_STRATEGY_BUCKET_AWARE_ENABLED": "false",
+            "BACKTEST_STRATEGY_BUCKET_REPORT_PATH": "wrong.json",
+            "BACKTEST_MARKET_CONTEXT_PATH": "wrong-market.json",
+        },
+    )
+
+    rendered = github_env.read_text(encoding="utf-8")
+    assert "BACKTEST_MODE=nested_promotion\n" in rendered
+    assert "BACKTEST_STRATEGY_BUCKET_AWARE_ENABLED=true\n" in rendered
+    assert (
+        "BACKTEST_STRATEGY_BUCKET_REPORT_PATH="
+        "reports/hourly-pre-backtest-discovery.json\n"
+    ) in rendered
+    assert "BACKTEST_MARKET_CONTEXT_PATH=reports/hourly-position-review.json\n" in rendered
+    assert "legacy_fixed" not in rendered
+    assert "wrong.json" not in rendered
 
 
 def test_hourly_workflow_resolves_repository_value_before_preflight():
