@@ -49,6 +49,9 @@ class ScannerResponseData(BaseModel):
     metadata: Dict[str, Any] = Field(default_factory=dict)
     errors: Dict[str, Any] = Field(default_factory=dict)
     review_candidates: List[Dict[str, Any]] = Field(default_factory=list)
+    production_candidates: List[Any] = Field(default_factory=list)
+    research_candidates: List[Any] = Field(default_factory=list)
+    lane_summary: Dict[str, Any] = Field(default_factory=dict)
 
     @model_validator(mode="before")
     @classmethod
