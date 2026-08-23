@@ -101,12 +101,12 @@ def _coverage_contract(
 ) -> Tuple[Optional[float], str, Dict[str, Any]]:
     """Resolve the correct pre-analysis coverage scope without relaxing its threshold.
 
-    Technical Scanner candidates now expose ``data_quality.analysis`` containing
-    only evidence required to justify downstream Technical/Fundamental work. The
-    legacy full-enrichment ratio also includes sector/backtest/fundamental extras and
-    remains diagnostic, but optional downstream enrichment must not masquerade as a
-    Technical data gap. Fundamental discovery bundles keep the legacy evidence
-    aggregation until they publish a dedicated scope.
+    Technical Scanner candidates expose ``data_quality.analysis`` containing only
+    evidence required to justify downstream Technical/Fundamental work. The legacy
+    full-enrichment ratio also includes sector/backtest/fundamental extras and remains
+    diagnostic, but optional downstream enrichment must not masquerade as a Technical
+    data gap. Fundamental discovery bundles keep the legacy evidence aggregation until
+    they publish a dedicated scope.
     """
 
     quality = _to_dict(bundle.get("data_quality"))
@@ -182,6 +182,9 @@ def _review_result(
         "required_components": list(scoped_quality.get("required_components") or []),
         "missing_components": list(scoped_quality.get("missing_components") or []),
         "partial_components": list(scoped_quality.get("partial_components") or []),
+        "required_fields": list(scoped_quality.get("required_fields") or []),
+        "available_fields": list(scoped_quality.get("available_fields") or []),
+        "missing_fields": list(scoped_quality.get("missing_fields") or []),
         "market_missing_fields": list(quality.get("market_missing_fields") or []),
         "market_provider_errors": list(quality.get("market_provider_errors") or []),
     }
@@ -266,12 +269,14 @@ def evaluate_scanner_candidate_data_quality(
         )
 
     if coverage_ratio < threshold:
+        missing_fields = list(scoped_quality.get("missing_fields") or [])
+        detail = f" Missing fields: {', '.join(missing_fields)}." if missing_fields else ""
         return _review_result(
             symbol=symbol,
             reason_code="SCANNER_DATA_COVERAGE_BELOW_THRESHOLD",
             reason=(
                 f"Scanner candidate {coverage_scope} coverage {coverage_ratio:.4f} is below "
-                f"the required {threshold:.4f}."
+                f"the required {threshold:.4f}.{detail}"
             ),
             schema_version=schema_version,
             status=scoped_status,
@@ -299,6 +304,9 @@ def evaluate_scanner_candidate_data_quality(
         "required_components": list(scoped_quality.get("required_components") or []),
         "missing_components": list(scoped_quality.get("missing_components") or []),
         "partial_components": list(scoped_quality.get("partial_components") or []),
+        "required_fields": list(scoped_quality.get("required_fields") or []),
+        "available_fields": list(scoped_quality.get("available_fields") or []),
+        "missing_fields": list(scoped_quality.get("missing_fields") or []),
         "market_missing_fields": list(quality.get("market_missing_fields") or []),
         "market_provider_errors": list(quality.get("market_provider_errors") or []),
     }
