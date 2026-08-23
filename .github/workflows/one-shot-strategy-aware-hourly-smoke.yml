@@ -12,6 +12,133 @@ permissions:
   issues: read
 
 jobs:
+  simulator-reconcile-diagnostic:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      COMPOSE_FILE: docker-compose.yml:docker-compose.risk.yml:docker-compose.alpha.yml:docker-compose.hourly-simulator.yml
+      DATABASE_AGENT_API_KEY: ${{ secrets.DATABASE_AGENT_API_KEY }}
+      EXECUTION_API_KEY: ${{ secrets.EXECUTION_API_KEY }}
+      PORTFOLIO_AGENT_API_KEY: ${{ secrets.PORTFOLIO_AGENT_API_KEY }}
+      PROFIT_AGENT_API_KEY: ${{ secrets.PROFIT_AGENT_API_KEY }}
+      BROKER_MODE: SIMULATOR
+      TRADING_MODE: PAPER
+      TRADING_ENABLED: "true"
+      DRY_RUN: "true"
+      ALLOW_LIVE_TRADING: "false"
+    steps:
+      - name: Checkout Manager_Agent
+        uses: actions/checkout@v6
+        with:
+          path: Manager_Agent
+
+      - name: Checkout Execution_Agent
+        uses: actions/checkout@v6
+        with:
+          repository: athipan1/Execution_Agent
+          ref: main
+          path: Execution_Agent
+          fetch-depth: 1
+
+      - name: Checkout Database_Agent
+        uses: actions/checkout@v6
+        with:
+          repository: athipan1/Database_Agent
+          ref: main
+          path: Database_Agent
+          fetch-depth: 1
+
+      - name: Checkout Risk_Agent
+        uses: actions/checkout@v6
+        with:
+          repository: athipan1/Risk_Agent
+          ref: main
+          path: Risk_Agent
+          fetch-depth: 1
+
+      - name: Checkout Portfolio_Agent
+        uses: actions/checkout@v6
+        with:
+          repository: athipan1/Portfolio_Agent
+          ref: main
+          path: Portfolio_Agent
+          fetch-depth: 1
+
+      - name: Checkout Profit_Agent
+        uses: actions/checkout@v6
+        with:
+          repository: athipan1/Profit_Agent
+          ref: main
+          path: Profit_Agent
+          fetch-depth: 1
+
+      - name: Start simulator reconciliation services
+        working-directory: Manager_Agent
+        run: docker compose up --build -d database-agent execution-agent
+
+      - name: Wait for services
+        working-directory: Manager_Agent
+        run: |
+          for i in {1..60}; do
+            if curl -fsS http://localhost:8004/health >/dev/null && curl -fsS http://localhost:8006/health >/dev/null; then
+              exit 0
+            fi
+            sleep 2
+          done
+          docker compose ps
+          docker compose logs --tail=160 database-agent execution-agent || true
+          exit 1
+
+      - name: Capture simulator reconciliation contract
+        working-directory: Manager_Agent
+        run: |
+          mkdir -p reports
+          http_code=$(curl -sS -o reports/simulator-reconcile.json -w '%{http_code}' \
+            -X POST \
+            -H "X-API-KEY: ${EXECUTION_API_KEY}" \
+            'http://localhost:8006/broker/reconcile?account_id=1&push_to_database=true')
+          echo "reconcile_http_status=${http_code}"
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          path = Path('reports/simulator-reconcile.json')
+          payload = json.loads(path.read_text())
+          data = payload.get('data', payload) if isinstance(payload, dict) else {}
+          db = data.get('database_sync') or {}
+          print(json.dumps({
+              'top_status': payload.get('status') if isinstance(payload, dict) else None,
+              'ok': data.get('ok'),
+              'database_sync_status': db.get('status'),
+              'database_sync_http_status': db.get('http_status'),
+              'database_sync_endpoint': db.get('endpoint'),
+              'database_sync_response': db.get('response'),
+              'database_sync_error': db.get('error'),
+              'broker': (data.get('broker_state') or {}).get('broker'),
+              'paper': (data.get('broker_state') or {}).get('paper'),
+          }, indent=2, default=str))
+          if payload.get('status') != 'success' or data.get('ok') is not True or db.get('status') != 'success':
+              raise SystemExit('Simulator reconcile contract did not prove database sync success')
+          PY
+
+      - name: Show logs on failure
+        if: failure()
+        working-directory: Manager_Agent
+        run: docker compose logs --tail=220 database-agent execution-agent || true
+
+      - name: Upload diagnostic
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: simulator-reconcile-diagnostic
+          path: Manager_Agent/reports/simulator-reconcile.json
+          if-no-files-found: warn
+          retention-days: 7
+
+      - name: Stop diagnostic stack
+        if: always()
+        working-directory: Manager_Agent
+        run: docker compose down -v
+
   strategy-aware-hourly-smoke:
     uses: ./.github/workflows/hourly-auto-trading.yml
     with:
