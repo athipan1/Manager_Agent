@@ -12,6 +12,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
 
+try:
+    from scripts.run_profitability_funnel_audit import run_audit
+except ModuleNotFoundError:  # pragma: no cover - direct script execution
+    from run_profitability_funnel_audit import run_audit
+
 
 class ScannerPreselectionRequestError(RuntimeError):
     """Raised when Manager preselection cannot complete within its budget."""
@@ -117,15 +122,7 @@ def _request_json(
 
 
 def _is_controlled_no_trade_response(response: Dict[str, Any]) -> bool:
-    """Return True only when Scanner explicitly produced a safe NO_TRADE result.
-
-    Scanner opportunity gating can intentionally filter every production candidate
-    when the US regular session is closed or quotes are stale. That is a controlled
-    trading outcome, not a workflow failure. The Manager response still uses the
-    legacy ``status=error`` no-candidate envelope, so the hourly coordinator must
-    distinguish the explicit fail-closed gate evidence from a genuine dependency
-    or Scanner failure.
-    """
+    """Return True only when Scanner explicitly produced a safe NO_TRADE result."""
 
     data = response.get("data")
     if not isinstance(data, dict):
@@ -190,6 +187,37 @@ def _write_report(path: Path, report: Dict[str, Any]) -> None:
     )
 
 
+def _funnel_paths(report_path: Path) -> tuple[Path, Path]:
+    return (
+        report_path.parent / "hourly-profitability-funnel.json",
+        report_path.parent / "hourly-profitability-funnel.md",
+    )
+
+
+def _write_profitability_funnel(report_path: Path) -> None:
+    """Emit diagnostic funnel artifacts without gaining trading authority.
+
+    Funnel generation is observational. A reporting bug must never mutate or
+    authorize trading state, but it is surfaced loudly in logs for CI/operations.
+    """
+
+    output_path, markdown_path = _funnel_paths(report_path)
+    try:
+        run_audit(
+            discovery_path=report_path,
+            upstream_report_path=None,
+            output_path=output_path,
+            markdown_path=markdown_path,
+            source_run_id=os.getenv("GITHUB_RUN_ID") or None,
+            source_run_conclusion=None,
+        )
+    except Exception as exc:  # pragma: no cover - last-resort diagnostic isolation
+        print(
+            f"Profitability funnel diagnostic failed: {type(exc).__name__}: {exc}",
+            file=sys.stderr,
+        )
+
+
 def _write_github_outputs(
     path: Path | None,
     *,
@@ -199,10 +227,12 @@ def _write_github_outputs(
 ) -> None:
     if not path:
         return
+    funnel_path, _ = _funnel_paths(report_path)
     with path.open("a", encoding="utf-8") as stream:
         stream.write(f"backtest_symbols={','.join(symbols)}\n")
         stream.write(f"preselection_status={status}\n")
         stream.write(f"preselection_report={report_path}\n")
+        stream.write(f"profitability_funnel_report={funnel_path}\n")
 
 
 def main() -> None:
@@ -218,16 +248,12 @@ def main() -> None:
     parser.add_argument(
         "--attempt-timeout",
         type=int,
-        default=int(
-            os.getenv("SCANNER_PRESELECTION_ATTEMPT_TIMEOUT_SECONDS", "900")
-        ),
+        default=int(os.getenv("SCANNER_PRESELECTION_ATTEMPT_TIMEOUT_SECONDS", "900")),
     )
     parser.add_argument(
         "--deadline",
         type=int,
-        default=int(
-            os.getenv("SCANNER_PRESELECTION_DEADLINE_SECONDS", "1200")
-        ),
+        default=int(os.getenv("SCANNER_PRESELECTION_DEADLINE_SECONDS", "1200")),
     )
     parser.add_argument(
         "--max-attempts",
@@ -237,9 +263,7 @@ def main() -> None:
     parser.add_argument(
         "--retry-delay",
         type=float,
-        default=float(
-            os.getenv("SCANNER_PRESELECTION_RETRY_DELAY_SECONDS", "5")
-        ),
+        default=float(os.getenv("SCANNER_PRESELECTION_RETRY_DELAY_SECONDS", "5")),
     )
     args = parser.parse_args()
 
@@ -287,6 +311,7 @@ def main() -> None:
         report["attempts_used"] = getattr(exc, "attempts_used", 0)
         report["request_errors"] = getattr(exc, "errors", [])
         _write_report(args.output, report)
+        _write_profitability_funnel(args.output)
         _write_github_outputs(
             args.github_output,
             symbols=[],
@@ -307,6 +332,7 @@ def main() -> None:
         }
     )
     _write_report(args.output, report)
+    _write_profitability_funnel(args.output)
     _write_github_outputs(
         args.github_output,
         symbols=symbols,
