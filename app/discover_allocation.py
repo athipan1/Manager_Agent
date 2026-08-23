@@ -11,6 +11,7 @@ from .portfolio_allocation import (
     build_strategy_allocation_plan,
     classify_strategy_bucket_decision,
 )
+from .services.candidate_score_service import build_candidate_score_v1
 from .strategy_bucket_classifier import (
     AUTO_CLASSIFY_THRESHOLD,
     CLASSIFIER_VERSION,
@@ -105,12 +106,22 @@ def _candidate_row(item: Mapping[str, Any]) -> Dict[str, Any]:
             else None
         ),
         "score_breakdown": item.get("score_breakdown"),
+        "candidate_score_v1": item.get("candidate_score_v1"),
     }
 
 
 def enrich_ranked_candidates_with_buckets(
     ranked: List[Dict[str, Any]],
 ) -> List[Dict[str, Any]]:
+    """Attach classification plus observational candidate-score.v1 evidence.
+
+    The new 10-point score is deliberately non-binding. Existing production
+    selection continues to use final_opportunity_score, classifier evidence,
+    Investability, Backtest, Risk and Execution gates. The score is persisted in
+    score_breakdown so Shadow/Performance can measure whether it adds expectancy
+    before any future promotion decision.
+    """
+
     enriched: List[Dict[str, Any]] = []
     for item in ranked:
         classification = _classification(item)
@@ -118,6 +129,11 @@ def enrich_ranked_candidates_with_buckets(
         evidence_summary = dict(
             classification.get("evidence_summary") or {}
         )
+        candidate_score = build_candidate_score_v1(
+            item.get("analysis") or {},
+            item.get("scanner_candidate") or {},
+        )
+
         next_item = dict(item)
         next_item["strategy_bucket"] = bucket
         next_item["bucket_confidence"] = float(
@@ -150,6 +166,7 @@ def enrich_ranked_candidates_with_buckets(
             evidence_summary.get("source_conflicts") or []
         )
         next_item["strategy_bucket_classification"] = classification
+        next_item["candidate_score_v1"] = candidate_score
 
         score_breakdown = dict(next_item.get("score_breakdown") or {})
         score_breakdown["strategy_bucket"] = bucket
@@ -171,7 +188,19 @@ def enrich_ranked_candidates_with_buckets(
         score_breakdown["evidence_statuses"] = next_item[
             "evidence_statuses"
         ]
+        score_breakdown["candidate_score_v1"] = candidate_score
         next_item["score_breakdown"] = score_breakdown
+
+        # build_discover_allocation_report is called before signal persistence.
+        # Copy the observational score back to the original ranked item so the
+        # existing Database_Agent audit metadata records it without changing the
+        # legacy ranking value or production selection threshold.
+        if isinstance(item, dict):
+            item["candidate_score_v1"] = candidate_score
+            original_breakdown = dict(item.get("score_breakdown") or {})
+            original_breakdown["candidate_score_v1"] = candidate_score
+            item["score_breakdown"] = original_breakdown
+
         enriched.append(next_item)
     return enriched
 
