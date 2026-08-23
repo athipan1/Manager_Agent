@@ -122,6 +122,14 @@ class ScannerResponseData(BaseModel):
             if not symbol or symbol in existing_research_symbols:
                 continue
             row["symbol"] = symbol
+            row["decision"] = "REVIEW"
+            row["allowed"] = False
+            row["reason_code"] = "SCANNER_NATIVE_RESEARCH_SHADOW"
+            row["reason"] = (
+                "Scanner native research candidate is Shadow-only and cannot "
+                "proceed to automated entry."
+            )
+            row["workflow_failure"] = False
             row["research_lane_eligible"] = True
             row["controlled_no_trade"] = True
             row["broker_order_authorized"] = False
