@@ -116,8 +116,44 @@ def _request_json(
     )
 
 
+def _is_controlled_no_trade_response(response: Dict[str, Any]) -> bool:
+    """Return True only when Scanner explicitly produced a safe NO_TRADE result.
+
+    Scanner opportunity gating can intentionally filter every production candidate
+    when the US regular session is closed or quotes are stale. That is a controlled
+    trading outcome, not a workflow failure. The Manager response still uses the
+    legacy ``status=error`` no-candidate envelope, so the hourly coordinator must
+    distinguish the explicit fail-closed gate evidence from a genuine dependency
+    or Scanner failure.
+    """
+
+    data = response.get("data")
+    if not isinstance(data, dict):
+        return False
+    scanner_data = data.get("scanner_data")
+    if not isinstance(scanner_data, dict):
+        return False
+    metadata = scanner_data.get("metadata")
+    if not isinstance(metadata, dict):
+        return False
+    gate = metadata.get("scanner_opportunity_gate")
+    if not isinstance(gate, dict):
+        return False
+
+    try:
+        workflow_failures = int(gate.get("workflow_failure_count", 0))
+        controlled_no_trade = int(gate.get("controlled_no_trade_count", 0))
+        passed = int(gate.get("passed_count", 0))
+    except (TypeError, ValueError):
+        return False
+
+    return workflow_failures == 0 and controlled_no_trade > 0 and passed == 0
+
+
 def extract_backtest_symbols(response: Dict[str, Any]) -> List[str]:
     if response.get("status") != "success":
+        if _is_controlled_no_trade_response(response):
+            return []
         raise ValueError(f"Scanner preselection failed: {response}")
     data = response.get("data")
     if not isinstance(data, dict):
@@ -242,6 +278,7 @@ def main() -> None:
             max_attempts=args.max_attempts,
             retry_delay_seconds=args.retry_delay,
         )
+        controlled_no_trade = _is_controlled_no_trade_response(response)
         symbols = extract_backtest_symbols(response)
     except Exception as exc:
         report["status"] = "error"
@@ -262,6 +299,8 @@ def main() -> None:
     report.update(
         {
             "status": "success",
+            "outcome": "NO_TRADE" if not symbols else "CANDIDATES",
+            "controlled_no_trade": controlled_no_trade,
             "attempts_used": attempts_used,
             "response": response,
             "backtest_symbols": symbols,
@@ -277,6 +316,7 @@ def main() -> None:
     print(
         "Scanner preselection complete: "
         f"attempts={attempts_used}, "
+        f"outcome={report['outcome']}, "
         f"symbols={','.join(symbols) if symbols else '<none>'}"
     )
 
