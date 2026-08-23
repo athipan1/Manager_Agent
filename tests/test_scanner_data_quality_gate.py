@@ -112,15 +112,18 @@ def test_complete_candidate_above_threshold_passes():
 def test_analysis_ready_scope_prevents_optional_enrichment_from_blocking_deep_analysis():
     candidate = _technical_candidate(coverage=0.6667, status="partial")
     quality = candidate["metadata"]["details"]["data_bundle"]["data_quality"]
-    quality["missing_components"] = ["sector_rotation", "backtest"]
+    quality["missing_components"] = ["market_rank", "sector_rotation", "backtest"]
     quality["analysis"] = {
         "status": "complete",
         "coverage_ratio": 1.0,
         "coverage_scope": "analysis_ready",
-        "required_components": ["technical", "market_rank"],
-        "complete_components": ["technical", "market_rank"],
+        "required_components": ["technical"],
+        "complete_components": ["technical"],
         "partial_components": [],
         "missing_components": [],
+        "required_fields": ["close", "rsi", "macd", "sma50", "sma200", "atr"],
+        "available_fields": ["close", "rsi", "macd", "sma50", "sma200", "atr"],
+        "missing_fields": [],
     }
 
     result = evaluate_scanner_candidate_data_quality(
@@ -133,20 +136,52 @@ def test_analysis_ready_scope_prevents_optional_enrichment_from_blocking_deep_an
     assert result["coverage_ratio"] == 1.0
     assert result["coverage_scope"] == "analysis_ready"
     assert result["legacy_full_coverage_ratio"] == 0.6667
+    assert result["required_components"] == ["technical"]
+    assert result["missing_fields"] == []
     assert result["min_coverage_ratio"] == 0.80
 
 
-def test_real_analysis_gap_at_75_percent_still_moves_to_review():
+def test_one_missing_technical_field_at_8333_still_passes_80_percent_gate():
     candidate = _technical_candidate(coverage=1.0, status="complete")
     quality = candidate["metadata"]["details"]["data_bundle"]["data_quality"]
     quality["analysis"] = {
         "status": "partial",
-        "coverage_ratio": 0.75,
+        "coverage_ratio": 0.8333,
         "coverage_scope": "analysis_ready",
-        "required_components": ["technical", "market_rank"],
-        "complete_components": ["market_rank"],
+        "required_components": ["technical"],
+        "complete_components": [],
         "partial_components": ["technical"],
         "missing_components": [],
+        "required_fields": ["close", "rsi", "macd", "sma50", "sma200", "atr"],
+        "available_fields": ["close", "rsi", "macd", "sma50", "sma200"],
+        "missing_fields": ["atr"],
+    }
+
+    result = evaluate_scanner_candidate_data_quality(
+        candidate,
+        min_coverage_ratio=0.80,
+    )
+
+    assert result["decision"] == "PASS"
+    assert result["allowed"] is True
+    assert result["coverage_ratio"] == 0.8333
+    assert result["missing_fields"] == ["atr"]
+
+
+def test_real_analysis_gap_below_80_percent_moves_to_review_with_field_names():
+    candidate = _technical_candidate(coverage=1.0, status="complete")
+    quality = candidate["metadata"]["details"]["data_bundle"]["data_quality"]
+    quality["analysis"] = {
+        "status": "partial",
+        "coverage_ratio": 0.6667,
+        "coverage_scope": "analysis_ready",
+        "required_components": ["technical"],
+        "complete_components": [],
+        "partial_components": ["technical"],
+        "missing_components": [],
+        "required_fields": ["close", "rsi", "macd", "sma50", "sma200", "atr"],
+        "available_fields": ["close", "rsi", "macd", "sma50"],
+        "missing_fields": ["sma200", "atr"],
     }
 
     result = evaluate_scanner_candidate_data_quality(
@@ -156,9 +191,11 @@ def test_real_analysis_gap_at_75_percent_still_moves_to_review():
 
     assert result["decision"] == "REVIEW"
     assert result["allowed"] is False
-    assert result["coverage_ratio"] == 0.75
+    assert result["coverage_ratio"] == 0.6667
     assert result["coverage_scope"] == "analysis_ready"
     assert result["partial_components"] == ["technical"]
+    assert result["missing_fields"] == ["sma200", "atr"]
+    assert "sma200, atr" in result["reason"]
     assert result["reason_code"] == "SCANNER_DATA_COVERAGE_BELOW_THRESHOLD"
 
 
