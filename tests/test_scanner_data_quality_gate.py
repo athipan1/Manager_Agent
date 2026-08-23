@@ -109,6 +109,59 @@ def test_complete_candidate_above_threshold_passes():
     assert result["coverage_ratio"] == 0.95
 
 
+def test_analysis_ready_scope_prevents_optional_enrichment_from_blocking_deep_analysis():
+    candidate = _technical_candidate(coverage=0.6667, status="partial")
+    quality = candidate["metadata"]["details"]["data_bundle"]["data_quality"]
+    quality["missing_components"] = ["sector_rotation", "backtest"]
+    quality["analysis"] = {
+        "status": "complete",
+        "coverage_ratio": 1.0,
+        "coverage_scope": "analysis_ready",
+        "required_components": ["technical", "market_rank"],
+        "complete_components": ["technical", "market_rank"],
+        "partial_components": [],
+        "missing_components": [],
+    }
+
+    result = evaluate_scanner_candidate_data_quality(
+        candidate,
+        min_coverage_ratio=0.80,
+    )
+
+    assert result["decision"] == "PASS"
+    assert result["allowed"] is True
+    assert result["coverage_ratio"] == 1.0
+    assert result["coverage_scope"] == "analysis_ready"
+    assert result["legacy_full_coverage_ratio"] == 0.6667
+    assert result["min_coverage_ratio"] == 0.80
+
+
+def test_real_analysis_gap_at_75_percent_still_moves_to_review():
+    candidate = _technical_candidate(coverage=1.0, status="complete")
+    quality = candidate["metadata"]["details"]["data_bundle"]["data_quality"]
+    quality["analysis"] = {
+        "status": "partial",
+        "coverage_ratio": 0.75,
+        "coverage_scope": "analysis_ready",
+        "required_components": ["technical", "market_rank"],
+        "complete_components": ["market_rank"],
+        "partial_components": ["technical"],
+        "missing_components": [],
+    }
+
+    result = evaluate_scanner_candidate_data_quality(
+        candidate,
+        min_coverage_ratio=0.80,
+    )
+
+    assert result["decision"] == "REVIEW"
+    assert result["allowed"] is False
+    assert result["coverage_ratio"] == 0.75
+    assert result["coverage_scope"] == "analysis_ready"
+    assert result["partial_components"] == ["technical"]
+    assert result["reason_code"] == "SCANNER_DATA_COVERAGE_BELOW_THRESHOLD"
+
+
 def test_partial_candidate_below_threshold_moves_to_review():
     result = evaluate_scanner_candidate_data_quality(
         _technical_candidate(coverage=0.79, status="partial"),
@@ -149,6 +202,7 @@ def test_fundamental_bundle_derives_effective_coverage_from_available_evidence()
     )
     assert result["decision"] == "PASS"
     assert result["allowed"] is True
+    assert result["coverage_scope"] == "derived_fundamental"
 
 
 def test_scanner_client_gate_filters_review_candidates_and_preserves_diagnostics(monkeypatch):
@@ -172,6 +226,8 @@ def test_scanner_client_gate_filters_review_candidates_and_preserves_diagnostics
     assert summary["passed_count"] == 1
     assert summary["review_count"] == 1
     assert summary["decision"] == "PARTIAL"
+    assert summary["threshold_relaxed"] is False
+    assert summary["coverage_scope_counts"] == {"legacy_full_enrichment": 2}
 
 
 def test_only_quality_passed_candidates_enter_scanner_prefetch_cache(monkeypatch):
