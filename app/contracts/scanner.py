@@ -49,6 +49,9 @@ class ScannerResponseData(BaseModel):
     metadata: Dict[str, Any] = Field(default_factory=dict)
     errors: Dict[str, Any] = Field(default_factory=dict)
     review_candidates: List[Dict[str, Any]] = Field(default_factory=list)
+    production_candidates: List[Any] = Field(default_factory=list)
+    research_candidates: List[Any] = Field(default_factory=list)
+    lane_summary: Dict[str, Any] = Field(default_factory=dict)
 
     @model_validator(mode="before")
     @classmethod
@@ -64,6 +67,15 @@ class ScannerResponseData(BaseModel):
                     + ", ".join(missing_fields)
                 )
         return data
+
+    @staticmethod
+    def _candidate_dict(candidate: Any) -> Dict[str, Any]:
+        if isinstance(candidate, dict):
+            return dict(candidate)
+        if hasattr(candidate, "model_dump"):
+            dumped = candidate.model_dump(mode="json")
+            return dict(dumped) if isinstance(dumped, dict) else {}
+        return {}
 
     @model_validator(mode="after")
     def normalize_candidates(self):
@@ -92,4 +104,38 @@ class ScannerResponseData(BaseModel):
                 continue
             normalized.append(candidate)
         self.candidates = normalized
+
+        # Scanner_Agent has a dedicated research_candidates lane. Older Manager
+        # versions silently dropped that field and the hourly Shadow workflow only
+        # consumed review_candidates, which could reduce Shadow observations to zero.
+        # Preserve the native lane and mirror it into controlled REVIEW rows without
+        # granting any Risk/Execution authority. This is idempotent across repeated
+        # Pydantic model_validate/model_dump round trips in scanner_client.py.
+        existing_research_symbols = {
+            str(row.get("symbol") or row.get("ticker") or "").strip().upper()
+            for row in self.review_candidates
+            if isinstance(row, dict) and row.get("research_lane_eligible") is True
+        }
+        for candidate in self.research_candidates:
+            row = self._candidate_dict(candidate)
+            symbol = str(row.get("symbol") or row.get("ticker") or "").strip().upper()
+            if not symbol or symbol in existing_research_symbols:
+                continue
+            row["symbol"] = symbol
+            row["decision"] = "REVIEW"
+            row["allowed"] = False
+            row["reason_code"] = "SCANNER_NATIVE_RESEARCH_SHADOW"
+            row["reason"] = (
+                "Scanner native research candidate is Shadow-only and cannot "
+                "proceed to automated entry."
+            )
+            row["workflow_failure"] = False
+            row["research_lane_eligible"] = True
+            row["controlled_no_trade"] = True
+            row["broker_order_authorized"] = False
+            row["risk_approval_allowed"] = False
+            row["execution_agent_allowed"] = False
+            row["lane_source"] = "scanner_native_research"
+            self.review_candidates.append(row)
+            existing_research_symbols.add(symbol)
         return self
