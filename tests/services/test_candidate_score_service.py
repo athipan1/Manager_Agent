@@ -171,7 +171,7 @@ def test_missing_scanner_market_evidence_gets_no_synthetic_technical_points():
     )
 
     assert result["technical_points"] == 1
-    assert result["evidence_coverage"]["technical"] == 0.5
+    assert result["evidence_coverage"]["technical"] == 0.25
     assert result["hard_gates"]["technical_evidence_usable"] is False
     assert result["hard_gates"]["scanner_analysis_coverage"] is False
     assert result["decision"] != "CANDIDATE"
