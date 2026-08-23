@@ -63,6 +63,10 @@ def test_scanner_response_preserves_native_research_lane_for_shadow():
     assert len(response.review_candidates) == 1
     shadow_row = response.review_candidates[0]
     assert shadow_row["symbol"] == "MSFT"
+    assert shadow_row["decision"] == "REVIEW"
+    assert shadow_row["allowed"] is False
+    assert shadow_row["reason_code"] == "SCANNER_NATIVE_RESEARCH_SHADOW"
+    assert shadow_row["workflow_failure"] is False
     assert shadow_row["research_lane_eligible"] is True
     assert shadow_row["controlled_no_trade"] is True
     assert shadow_row["broker_order_authorized"] is False
