@@ -1,0 +1,26 @@
+name: One-shot Strategy-Aware Hourly Smoke
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - .github/workflows/one-shot-strategy-aware-hourly-smoke.yml
+
+permissions:
+  contents: read
+  issues: read
+
+jobs:
+  strategy-aware-hourly-smoke:
+    uses: ./.github/workflows/hourly-auto-trading.yml
+    with:
+      dry_run: true
+      broker_mode: SIMULATOR
+      max_universe: "100"
+      top_n: "10"
+      min_final_score: "0.55"
+      operator_confirmation: ""
+      emergency_halt_drill: false
+      authorized_soak_schedule: false
+    secrets: inherit
