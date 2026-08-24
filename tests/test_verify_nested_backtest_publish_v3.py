@@ -9,7 +9,7 @@ import pytest
 from scripts import verify_backtest_publish as verifier
 
 
-def _nested_no_trade_report(*, profile: str = "nested_walk_forward_v3") -> dict:
+def _nested_no_trade_report(*, profile: str = "nested_walk_forward_v4") -> dict:
     return {
         "status": "success",
         "agent_type": "backtest-agent",
@@ -43,7 +43,7 @@ def _nested_no_trade_report(*, profile: str = "nested_walk_forward_v3") -> dict:
     }
 
 
-def test_nested_v3_main_verifies_in_place_without_legacy_rerun(
+def test_nested_v4_main_verifies_in_place_without_legacy_rerun(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
@@ -77,17 +77,17 @@ def test_nested_v3_main_verifies_in_place_without_legacy_rerun(
     assert coherence["console_data_sha256"] == coherence["persisted_data_sha256"]
     output = capsys.readouterr().out
     assert "verified in place" in output
-    assert "validation_profile=nested_walk_forward_v3" in output
+    assert "validation_profile=nested_walk_forward_v4" in output
     assert "evidence_coherent=true" in output
 
 
-def test_nested_v2_is_rejected_in_place_instead_of_falling_back_to_legacy(
+def test_nested_v3_is_rejected_in_place_instead_of_falling_back_to_legacy(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ):
     report_path = tmp_path / "hourly-backtest-result.json"
     report_path.write_text(
-        json.dumps(_nested_no_trade_report(profile="nested_walk_forward_v2")),
+        json.dumps(_nested_no_trade_report(profile="nested_walk_forward_v3")),
         encoding="utf-8",
     )
 
