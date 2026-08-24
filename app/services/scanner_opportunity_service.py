@@ -274,7 +274,10 @@ def evaluate_scanner_candidate_opportunity(
             live_spread_required=require_spread,
         )
 
-    if profile.get("fail_closed") is True or evidence_quality.get("spread_structurally_valid") is False:
+    # Explicit Scanner fail-closed evidence always wins. Structural bid/ask sanity,
+    # however, is not meaningful once the quote is known to be closed/stale; those
+    # states are controlled no-trade research states and must be classified first.
+    if profile.get("fail_closed") is True:
         return _review_result(
             symbol=symbol,
             reason_code="SCANNER_OPPORTUNITY_FAIL_CLOSED",
@@ -286,11 +289,12 @@ def evaluate_scanner_candidate_opportunity(
         )
 
     quote_status = str(context.get("quote_status") or "").strip().lower()
+    workflow_status = str(profile.get("workflow_status") or "").strip().lower()
     research_eligible = score >= RESEARCH_MIN_OPPORTUNITY_SCORE and status in {
         "qualified",
         "review",
     }
-    if quote_status == "market_closed" or str(profile.get("workflow_status") or "").lower() == "market_closed":
+    if quote_status == "market_closed" or workflow_status == "market_closed":
         return _review_result(
             symbol=symbol,
             reason_code="SCANNER_OPPORTUNITY_MARKET_CLOSED",
@@ -305,9 +309,7 @@ def evaluate_scanner_candidate_opportunity(
             research_lane_eligible=research_eligible,
         )
 
-    if quote_status in {"stale_quote", "missing_quote_timestamp"} or str(
-        profile.get("workflow_status") or ""
-    ).lower() == "stale_quote":
+    if quote_status in {"stale_quote", "missing_quote_timestamp"} or workflow_status == "stale_quote":
         return _review_result(
             symbol=symbol,
             reason_code="SCANNER_OPPORTUNITY_STALE_QUOTE",
@@ -320,6 +322,17 @@ def evaluate_scanner_candidate_opportunity(
             profile_required=require_profile,
             live_spread_required=require_spread,
             research_lane_eligible=research_eligible,
+        )
+
+    if evidence_quality.get("spread_structurally_valid") is False:
+        return _review_result(
+            symbol=symbol,
+            reason_code="SCANNER_OPPORTUNITY_FAIL_CLOSED",
+            reason="Scanner opportunity evidence has a structurally invalid executable quote.",
+            profile=profile,
+            min_score=threshold,
+            profile_required=require_profile,
+            live_spread_required=require_spread,
         )
 
     if evidence_quality.get("liquid_spread_sane") is False:
