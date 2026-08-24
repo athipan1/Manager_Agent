@@ -160,13 +160,18 @@ def _apply_scanner_data_quality_gate(
 
 def _apply_scanner_opportunity_gate(
     response: StandardAgentResponse,
+    *,
+    advisory_only: bool = False,
 ) -> StandardAgentResponse:
-    """Filter present Scanner opportunity evidence before downstream analysis.
+    """Evaluate Scanner execution evidence at the correct pipeline stage.
 
-    During the coordinated rollout a missing profile may pass only when
-    ``SCANNER_OPPORTUNITY_PROFILE_REQUIRED`` is false. Once a profile is present,
-    malformed, REVIEW, AVOID, weak-score, or incomplete execution evidence is
-    always moved to REVIEW. The gate never creates execution authority.
+    Explicit-symbol Scanner calls use the normal blocking gate. Broad fundamental
+    discovery is different: its candidates intentionally do not yet contain the
+    Technical/ATR/trend evidence required by the execution-aware score. In that
+    stage the same policy is recorded as diagnostics only and is deferred until
+    downstream Technical/Backtest/Risk analysis. This prevents an impossible
+    0.70 execution threshold from deleting otherwise valid discovery candidates
+    while preserving fail-closed behavior before broker mutation.
     """
 
     if response.status != "success":
@@ -174,15 +179,29 @@ def _apply_scanner_opportunity_gate(
 
     response_payload = response.model_dump(mode="json")
     data = _to_dict(response_payload.get("data"))
-    candidates = data.get("candidates") or []
+    candidates = list(data.get("candidates") or [])
     passed, opportunity_review, summary = partition_scanner_candidates_by_opportunity(
         candidates
     )
     prior_review = list(data.get("review_candidates") or [])
 
-    data["candidates"] = passed
-    data["count"] = len(passed)
-    data["review_candidates"] = [*prior_review, *opportunity_review]
+    summary = {
+        **summary,
+        "gate_mode": "advisory_discovery" if advisory_only else "blocking_execution",
+        "advisory_only": advisory_only,
+        "deferred_review_count": len(opportunity_review) if advisory_only else 0,
+        "effective_passed_count": len(candidates) if advisory_only else len(passed),
+    }
+
+    if advisory_only:
+        data["candidates"] = candidates
+        data["count"] = len(candidates)
+        data["review_candidates"] = prior_review
+    else:
+        data["candidates"] = passed
+        data["count"] = len(passed)
+        data["review_candidates"] = [*prior_review, *opportunity_review]
+
     data["metadata"] = {
         **_to_dict(data.get("metadata")),
         "scanner_opportunity_gate": summary,
@@ -193,7 +212,13 @@ def _apply_scanner_opportunity_gate(
         "scanner_opportunity_gate": summary,
     }
 
-    if opportunity_review:
+    if advisory_only:
+        report_logger.info(
+            "Scanner opportunity gate deferred %s/%s discovery candidates to downstream Technical/Backtest/Risk analysis",
+            len(opportunity_review),
+            summary["original_count"],
+        )
+    elif opportunity_review:
         report_logger.warning(
             "Scanner opportunity gate moved %s/%s quality-passed candidates to REVIEW: codes=%s",
             len(opportunity_review),
@@ -214,9 +239,14 @@ def _apply_scanner_opportunity_gate(
 
 def _apply_scanner_candidate_gates(
     response: StandardAgentResponse,
+    *,
+    opportunity_advisory_only: bool = False,
 ) -> StandardAgentResponse:
     response = _apply_scanner_data_quality_gate(response)
-    return _apply_scanner_opportunity_gate(response)
+    return _apply_scanner_opportunity_gate(
+        response,
+        advisory_only=opportunity_advisory_only,
+    )
 
 
 def get_scanner_prefetch(symbol: str) -> Optional[Dict[str, Any]]:
@@ -428,7 +458,10 @@ class ScannerAgentClient(ResilientAgentClient):
         )
         response = self.validate_standard_response(response_data)
         _validate_scanner_market_data_contract(response, correlation_id)
-        response = _apply_scanner_candidate_gates(response)
+        response = _apply_scanner_candidate_gates(
+            response,
+            opportunity_advisory_only=True,
+        )
         _cache_scanner_candidates(response)
         _store_discovery_response(cache_key, response)
         return response
