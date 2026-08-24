@@ -1,0 +1,14 @@
+services:
+  scanner-agent:
+    environment:
+      TRADING_MODE: PAPER
+      SCANNER_DEV_MODE: "true"
+      SCANNER_SIMULATED_MARKET_ENABLED: "true"
+
+  manager-agent:
+    environment:
+      TRADING_MODE: PAPER
+      BROKER_MODE: SIMULATOR
+      DRY_RUN: "true"
+      ALLOW_LIVE_TRADING: "false"
+      SCANNER_REQUIRE_REAL_MARKET_DATA: "true"
