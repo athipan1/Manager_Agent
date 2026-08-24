@@ -1,0 +1,362 @@
+name: Simulated Market Flag Smoke
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/simulated-market-flag-smoke.yml"
+      - "docker-compose.simulated-market-smoke.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  simulated-market-flag-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 55
+    env:
+      TRADING_ENABLED: "true"
+      TRADING_MODE: PAPER
+      BROKER_MODE: SIMULATOR
+      DRY_RUN: "true"
+      ALLOW_LIVE_TRADING: "false"
+      SCANNER_SIMULATED_MARKET_ENABLED: "true"
+      SCANNER_DEV_MODE: "true"
+      DEFAULT_ACCOUNT_ID: "1"
+      HOURLY_MAX_UNIVERSE: "25"
+      HOURLY_TOP_N: "5"
+      HOURLY_MIN_FINAL_SCORE: "0.55"
+      BACKTEST_ENABLED: "true"
+      BACKTEST_TIMEFRAME: "1d"
+      BACKTEST_MINIMUM_BARS_REQUESTED: "252"
+      BACKTEST_BAR_LIMIT: "10000"
+      BACKTEST_INITIAL_EQUITY: "100000"
+      SHADOW_MAX_MARKS: "2"
+      SHADOW_COST_BUFFER_BPS: "2.0"
+      DATABASE_AGENT_API_KEY: ${{ secrets.DATABASE_AGENT_API_KEY }}
+      EXECUTION_API_KEY: ${{ secrets.EXECUTION_API_KEY }}
+      PORTFOLIO_AGENT_API_KEY: ${{ secrets.PORTFOLIO_AGENT_API_KEY }}
+      PROFIT_AGENT_API_KEY: ${{ secrets.PROFIT_AGENT_API_KEY }}
+      RISK_ADMIN_TOKEN: ${{ secrets.RISK_ADMIN_TOKEN }}
+      MARKET_REGIME_API_KEY: ${{ secrets.MARKET_REGIME_API_KEY }}
+      ALPACA_API_KEY_ID: ${{ secrets.ALPACA_API_KEY_ID }}
+      ALPACA_SECRET_KEY: ${{ secrets.ALPACA_SECRET_KEY }}
+      ALPACA_API_URL: ${{ secrets.ALPACA_API_URL }}
+      PYTHONUNBUFFERED: "1"
+
+    steps:
+      - name: Checkout Manager_Agent PR
+        uses: actions/checkout@v6
+        with:
+          path: Manager_Agent
+
+      - name: Checkout Scanner_Agent main
+        uses: actions/checkout@v6
+        with:
+          repository: athipan1/Scanner_Agent
+          ref: main
+          path: Scanner_Agent
+          fetch-depth: 1
+
+      - name: Checkout Technical_Agent
+        uses: actions/checkout@v6
+        with:
+          repository: athipan1/Technical_Agent
+          ref: main
+          path: Technical_Agent
+          fetch-depth: 1
+
+      - name: Checkout Fundamental_Agent
+        uses: actions/checkout@v6
+        with:
+          repository: athipan1/Fundamental_Agent
+          ref: main
+          path: Fundamental_Agent
+          fetch-depth: 1
+
+      - name: Checkout Backtest_Agent
+        uses: actions/checkout@v6
+        with:
+          repository: athipan1/Backtest_Agent
+          ref: main
+          path: Backtest_Agent
+          fetch-depth: 1
+
+      - name: Checkout Execution_Agent
+        uses: actions/checkout@v6
+        with:
+          repository: athipan1/Execution_Agent
+          ref: main
+          path: Execution_Agent
+          fetch-depth: 1
+
+      - name: Checkout Risk_Agent
+        uses: actions/checkout@v6
+        with:
+          repository: athipan1/Risk_Agent
+          ref: main
+          path: Risk_Agent
+          fetch-depth: 1
+
+      - name: Checkout Portfolio_Agent
+        uses: actions/checkout@v6
+        with:
+          repository: athipan1/Portfolio_Agent
+          ref: main
+          path: Portfolio_Agent
+          fetch-depth: 1
+
+      - name: Checkout Profit_Agent
+        uses: actions/checkout@v6
+        with:
+          repository: athipan1/Profit_Agent
+          ref: main
+          path: Profit_Agent
+          fetch-depth: 1
+
+      - name: Checkout Performance_Agent
+        uses: actions/checkout@v6
+        with:
+          repository: athipan1/Performance_Agent
+          ref: main
+          path: Performance_Agent
+          fetch-depth: 1
+
+      - name: Checkout Market_Regime_Agent
+        uses: actions/checkout@v6
+        with:
+          repository: athipan1/Market_Regime_Agent
+          ref: main
+          path: Market_Regime_Agent
+          fetch-depth: 1
+
+      - name: Checkout Database_Agent
+        uses: actions/checkout@v6
+        with:
+          repository: athipan1/Database_Agent
+          ref: main
+          path: Database_Agent
+          fetch-depth: 1
+
+      - name: Checkout Learning_Agent
+        uses: actions/checkout@v6
+        with:
+          repository: athipan1/Learning_Agent
+          ref: main
+          path: Learning_Agent
+          fetch-depth: 1
+
+      - name: Check durable emergency halt
+        working-directory: Manager_Agent
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: python scripts/paper_trading_control.py assert-clear
+
+      - name: Resolve Backtest runtime contract
+        working-directory: Manager_Agent
+        run: |
+          python scripts/resolve_backtest_runtime.py \
+            --github-env "$GITHUB_ENV" \
+            --output reports/backtest-runtime-contract.json
+
+      - name: Validate Simulator dry-run preflight
+        id: preflight
+        working-directory: Manager_Agent
+        run: python scripts/hourly_paper_preflight.py
+
+      - name: Configure isolated Simulator runtime
+        working-directory: Manager_Agent
+        run: |
+          python scripts/configure_simulator_runtime.py
+          echo "COMPOSE_FILE=docker-compose.yml:docker-compose.risk.yml:docker-compose.alpha.yml:docker-compose.hourly-simulator.yml:docker-compose.simulated-market-smoke.yml" >> "$GITHUB_ENV"
+          echo "PORTFOLIO_CYCLE_ID=${{ steps.preflight.outputs.portfolio_cycle_id }}" >> "$GITHUB_ENV"
+          echo "EXECUTE_PAPER_PROTECTION_RECONCILIATION=false" >> "$GITHUB_ENV"
+
+      - name: Install Manager host-script dependencies
+        working-directory: Manager_Agent
+        run: python -m pip install --disable-pip-version-check -r requirements.prod.base.txt
+
+      - name: Validate compose model
+        working-directory: Manager_Agent
+        run: docker compose --profile backtest config --quiet
+
+      - name: Start downstream stack
+        working-directory: Manager_Agent
+        run: |
+          docker compose --profile backtest up --build -d \
+            scanner-agent technical-agent fundamental-agent risk-agent \
+            backtest-agent market-regime-agent portfolio-agent profit-agent \
+            performance-agent execution-agent manager-agent
+
+      - name: Wait for required services
+        working-directory: Manager_Agent
+        env:
+          MANAGER_AGENT_URL: http://localhost:8000
+          TECHNICAL_AGENT_URL: http://localhost:8002
+          FUNDAMENTAL_AGENT_URL: http://localhost:8001
+          MARKET_REGIME_AGENT_URL: http://localhost:8014
+          PORTFOLIO_AGENT_URL: http://localhost:8012
+          PROFIT_AGENT_URL: http://localhost:8011
+          PERFORMANCE_AGENT_URL: http://localhost:8013
+          EXECUTION_AGENT_URL: http://localhost:8006
+          DATABASE_AGENT_URL: http://localhost:8004
+        run: python scripts/hourly_portfolio_cycle.py wait
+
+      - name: Prove Scanner simulated market snapshot
+        working-directory: Manager_Agent
+        run: |
+          mkdir -p reports
+          docker compose exec -T scanner-agent python - <<'PY' > reports/simulated-market-aapl.json
+          import json
+          import os
+          from app.data_sources.market_data import get_market_snapshot
+
+          assert os.getenv("SCANNER_SIMULATED_MARKET_ENABLED", "").lower() == "true"
+          snapshot = get_market_snapshot("AAPL", "NASDAQ", include_execution_history=True)
+          proof = {
+              "symbol": snapshot.get("symbol"),
+              "quoteQualityStatus": snapshot.get("quoteQualityStatus"),
+              "usMarketSession": snapshot.get("usMarketSession"),
+              "usMarketOpen": snapshot.get("usMarketOpen"),
+              "alpacaQuoteAgeSeconds": snapshot.get("alpacaQuoteAgeSeconds"),
+              "alpacaSpreadBps": snapshot.get("alpacaSpreadBps"),
+              "historicalAtr14": snapshot.get("historicalAtr14"),
+              "historicalAtrPct": snapshot.get("historicalAtrPct"),
+              "averageVolume": snapshot.get("averageVolume"),
+              "simulatedMarket": snapshot.get("simulatedMarket"),
+              "provider_status": snapshot.get("provider_status"),
+              "market_data_sources": snapshot.get("market_data_sources"),
+          }
+          print(json.dumps(proof, indent=2, default=str))
+          assert proof["quoteQualityStatus"] == "fresh", proof
+          assert proof["usMarketSession"] == "regular", proof
+          assert proof["usMarketOpen"] is True, proof
+          assert proof["alpacaSpreadBps"] is not None, proof
+          assert proof["historicalAtr14"] is not None, proof
+          assert proof["averageVolume"] is not None, proof
+          assert (proof["simulatedMarket"] or {}).get("provider_calls_bypassed") is True, proof
+          assert (proof["simulatedMarket"] or {}).get("broker_orders_allowed") is False, proof
+          assert (proof["provider_status"] or {}).get("simulated_market") == "success", proof
+          PY
+          cat reports/simulated-market-aapl.json
+
+      - name: Run Scanner preselection
+        id: scanner_preselection
+        working-directory: Manager_Agent
+        env:
+          MAX_UNIVERSE: ${{ env.HOURLY_MAX_UNIVERSE }}
+          TOP_N: ${{ env.HOURLY_TOP_N }}
+          MIN_FINAL_SCORE: ${{ env.HOURLY_MIN_FINAL_SCORE }}
+          SCANNER_PRESELECTION_ATTEMPT_TIMEOUT_SECONDS: "600"
+          SCANNER_PRESELECTION_DEADLINE_SECONDS: "900"
+        run: |
+          python scripts/run_scanner_preselection.py \
+            --output reports/hourly-pre-backtest-discovery.json \
+            --github-output "$GITHUB_OUTPUT"
+
+      - name: Prove Manager strategy buckets
+        working-directory: Manager_Agent
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          report = json.loads(Path("reports/hourly-pre-backtest-discovery.json").read_text())
+          response = report.get("response") or {}
+          data = response.get("data") or {}
+          selected = data.get("pre_backtest_selected_positions") or []
+          research = data.get("research_candidates") or []
+          bucket_selection = data.get("bucket_selection") or {}
+          summary = {
+              "scanner_status": report.get("status"),
+              "selected_count": len(selected),
+              "research_count": len(research),
+              "bucket_selection_present": bool(bucket_selection),
+              "selected": [
+                  {"symbol": row.get("symbol"), "strategy_bucket": row.get("strategy_bucket")}
+                  for row in selected if isinstance(row, dict)
+              ],
+          }
+          Path("reports/simulated-market-strategy-buckets.json").write_text(
+              json.dumps(summary, indent=2), encoding="utf-8"
+          )
+          print(json.dumps(summary, indent=2))
+          assert report.get("status") == "success", summary
+          assert bucket_selection or selected == [], summary
+          assert all(row.get("strategy_bucket") for row in selected if isinstance(row, dict)), summary
+          PY
+
+      - name: Run isolated Shadow lane
+        id: shadow_research
+        working-directory: Manager_Agent
+        env:
+          MANAGER_AGENT_URL: http://localhost:8000
+          PERFORMANCE_AGENT_URL: http://localhost:8013
+          SHADOW_ACCOUNT_ID: "1"
+        run: |
+          python scripts/run_hourly_shadow_lane.py \
+            --scanner-report reports/hourly-pre-backtest-discovery.json \
+            --output reports/hourly-shadow-lane.json
+
+      - name: Run strategy-aware Nested Backtest
+        id: backtest
+        if: steps.scanner_preselection.outputs.backtest_symbols != ''
+        working-directory: Manager_Agent
+        env:
+          DATABASE_AGENT_URL: http://localhost:8004
+          PUBLISH_TO_DATABASE: "true"
+          BACKTEST_ACCOUNT_ID: "1"
+          BACKTEST_SYMBOLS: ${{ steps.scanner_preselection.outputs.backtest_symbols }}
+        run: |
+          python -m pip install --disable-pip-version-check -r ../Backtest_Agent/requirements.txt
+          python ../Backtest_Agent/scripts/run_hourly_backtest.py > reports/hourly-backtest-console.json
+          python scripts/verify_backtest_publish.py reports/hourly-backtest-result.json
+
+      - name: Assert Nested Backtest report
+        if: steps.scanner_preselection.outputs.backtest_symbols != ''
+        working-directory: Manager_Agent
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          path = Path("reports/hourly-backtest-result.json")
+          payload = json.loads(path.read_text())
+          text = json.dumps(payload).lower()
+          assert "nested" in text, payload
+          assert "strategy" in text, payload
+          print(json.dumps({"nested_backtest": True, "report": str(path)}, indent=2))
+          PY
+
+      - name: Record controlled no-candidate outcome
+        if: steps.scanner_preselection.outputs.backtest_symbols == ''
+        working-directory: Manager_Agent
+        run: |
+          echo '{"status":"NO_TRADE","reason":"scanner_or_manager_produced_no_backtest_candidates","nested_backtest_executed":false}' > reports/simulated-market-no-trade.json
+
+      - name: Assert no broker execution
+        working-directory: Manager_Agent
+        run: |
+          python - <<'PY'
+          import os
+          assert os.getenv("BROKER_MODE") == "SIMULATOR"
+          assert os.getenv("DRY_RUN") == "true"
+          assert os.getenv("ALLOW_LIVE_TRADING") == "false"
+          print("Broker mutation disabled: SIMULATOR + dry_run + live=false")
+          PY
+
+      - name: Upload smoke evidence
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: simulated-market-flag-smoke
+          if-no-files-found: warn
+          retention-days: 7
+          path: |
+            Manager_Agent/reports/*.json
+            Manager_Agent/reports/*.md
+
+      - name: Show diagnostics on failure
+        if: failure()
+        working-directory: Manager_Agent
+        run: |
+          docker compose ps || true
+          docker compose logs --no-color --tail=200 scanner-agent manager-agent database-agent backtest-agent || true
