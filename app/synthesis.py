@@ -1,4 +1,8 @@
-from typing import Tuple
+from __future__ import annotations
+
+import math
+from typing import Any, Tuple
+
 from .config_manager import config_manager
 
 REASON_MAPPING = {
@@ -11,8 +15,42 @@ REASON_MAPPING = {
         "buy": "Company shows strong fundamentals and is undervalued.",
         "sell": "Weak fundamentals or overvalued stock price.",
         "hold": "Solid fundamentals but the current price is fair; limited upside.",
-    }
+    },
 }
+
+
+def _bounded_number(value: Any, *, default: float, low: float, high: float) -> float:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return default
+    if not math.isfinite(number):
+        return default
+    return max(low, min(high, number))
+
+
+def _confidence(value: Any) -> float:
+    return _bounded_number(value, default=0.0, low=0.0, high=1.0)
+
+
+def _normalized_weights(raw_weights: Any) -> tuple[float, float]:
+    weights = raw_weights if isinstance(raw_weights, dict) else {}
+    tech_weight = _bounded_number(
+        weights.get("technical", 0.5),
+        default=0.5,
+        low=0.0,
+        high=1.0,
+    )
+    fund_weight = _bounded_number(
+        weights.get("fundamental", 0.5),
+        default=0.5,
+        low=0.0,
+        high=1.0,
+    )
+    total = tech_weight + fund_weight
+    if total <= 0:
+        return 0.5, 0.5
+    return tech_weight / total, fund_weight / total
 
 
 def get_weighted_verdict(
@@ -22,47 +60,54 @@ def get_weighted_verdict(
     fundamental_score: float,
     asset_symbol: str,
 ) -> str:
+    """Combine direction, confidence, configured weights and asset bias.
+
+    Previous behavior discarded both confidence scores after accepting them as
+    arguments, so a 0.51 BUY had exactly the same authority as a 0.99 BUY. The
+    confidence-aware score keeps weak signals near HOLD while preserving the
+    existing verdict thresholds. HOLD contributes zero directional pressure.
     """
-    Calculates a weighted verdict based on agent actions, their dynamically
-    configured weights, and any asset-specific biases.
-    """
-    # Fetch dynamic weights and biases from the config manager
-    agent_weights = config_manager.get("AGENT_WEIGHTS")
-    asset_biases = config_manager.get("ASSET_BIASES", {})
 
-    tech_weight = agent_weights.get("technical", 0.5)
-    fund_weight = agent_weights.get("fundamental", 0.5)
-    bias = asset_biases.get(asset_symbol, 0.0)
+    tech_weight, fund_weight = _normalized_weights(
+        config_manager.get("AGENT_WEIGHTS")
+    )
+    asset_biases = config_manager.get("ASSET_BIASES", {}) or {}
+    raw_bias = asset_biases.get(asset_symbol, 0.0) if isinstance(asset_biases, dict) else 0.0
+    bias = _bounded_number(raw_bias, default=0.0, low=-1.0, high=1.0)
 
-    action_map = {"buy": 1, "hold": 0, "sell": -1}
-    tech_val = action_map.get(technical_action, 0)
-    fund_val = action_map.get(fundamental_action, 0)
+    action_map = {"buy": 1.0, "hold": 0.0, "sell": -1.0}
+    tech_val = action_map.get(str(technical_action or "").lower(), 0.0)
+    fund_val = action_map.get(str(fundamental_action or "").lower(), 0.0)
 
-    # Calculate the base weighted score
-    base_weighted_score = (tech_val * tech_weight) + (fund_val * fund_weight)
+    base_weighted_score = (
+        tech_val * _confidence(technical_score) * tech_weight
+        + fund_val * _confidence(fundamental_score) * fund_weight
+    )
 
-    # Apply the asset-specific bias. The bias is a multiplier.
-    # A positive bias increases the magnitude of the score (pro-trend).
-    # A negative bias decreases the magnitude of the score (anti-trend).
-    weighted_score = base_weighted_score * (1 + bias)
+    # Bias is allowed to amplify or damp a signal but never invert its sign.
+    bias_multiplier = max(0.0, min(2.0, 1.0 + bias))
+    weighted_score = base_weighted_score * bias_multiplier
 
-    # Determine final verdict based on the weighted score.
-    # Thresholds are adjusted for a direct weighted average score.
     if weighted_score >= 0.8:
         return "strong_buy"
-    elif weighted_score >= 0.2:
+    if weighted_score >= 0.2:
         return "buy"
-    elif weighted_score > -0.2:
+    if weighted_score > -0.2:
         return "hold"
-    elif weighted_score > -0.8:
+    if weighted_score > -0.8:
         return "sell"
-    else:
-        return "strong_sell"
+    return "strong_sell"
+
 
 def get_reasons(technical_action: str, fundamental_action: str) -> Tuple[str, str]:
-    """
-    Generates descriptive reasons for the technical and fundamental actions.
-    """
-    tech_reason = REASON_MAPPING["technical"].get(technical_action, "No specific reason available.")
-    fund_reason = REASON_MAPPING["fundamental"].get(fundamental_action, "No specific reason available.")
+    """Generate descriptive reasons for technical and fundamental actions."""
+
+    tech_reason = REASON_MAPPING["technical"].get(
+        technical_action,
+        "No specific reason available.",
+    )
+    fund_reason = REASON_MAPPING["fundamental"].get(
+        fundamental_action,
+        "No specific reason available.",
+    )
     return tech_reason, fund_reason

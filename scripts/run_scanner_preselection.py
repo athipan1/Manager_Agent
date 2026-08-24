@@ -17,6 +17,16 @@ try:
 except ModuleNotFoundError:  # pragma: no cover - direct script execution
     from run_profitability_funnel_audit import run_audit
 
+try:
+    from app.services.research_backtest_selection_service import (
+        select_research_backtest_candidates,
+    )
+except ModuleNotFoundError:  # pragma: no cover - direct script execution
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+    from app.services.research_backtest_selection_service import (
+        select_research_backtest_candidates,
+    )
+
 
 class ScannerPreselectionRequestError(RuntimeError):
     """Raised when Manager preselection cannot complete within its budget."""
@@ -147,7 +157,30 @@ def _is_controlled_no_trade_response(response: Dict[str, Any]) -> bool:
     return workflow_failures == 0 and controlled_no_trade > 0 and passed == 0
 
 
+def _research_backtest_threshold(data: Dict[str, Any]) -> float:
+    bucket_selection = data.get("bucket_selection")
+    if isinstance(bucket_selection, dict):
+        summary = bucket_selection.get("summary")
+        if isinstance(summary, dict):
+            raw_value = summary.get("min_final_score")
+            try:
+                if raw_value not in (None, ""):
+                    return float(raw_value)
+            except (TypeError, ValueError):
+                pass
+    return float(os.getenv("MIN_FINAL_SCORE", "0.55"))
+
+
 def extract_backtest_symbols(response: Dict[str, Any]) -> List[str]:
+    """Extract broker-isolated exact Backtest symbols from Manager discovery.
+
+    Ranked candidates use a research-only eligibility policy. HOLD may reach
+    Backtest when classification/evidence/score gates pass, while SELL,
+    STRONG_SELL and Scanner fail-closed rows remain blocked. This does not grant
+    Risk or Execution authority. Older responses without ranked rows keep the
+    legacy production-selected-position fallback.
+    """
+
     if response.get("status") != "success":
         if _is_controlled_no_trade_response(response):
             return []
@@ -155,7 +188,18 @@ def extract_backtest_symbols(response: Dict[str, Any]) -> List[str]:
     data = response.get("data")
     if not isinstance(data, dict):
         raise ValueError("Scanner preselection response has no data object")
-    positions = data.get("pre_backtest_selected_positions") or []
+
+    ranked_rows = data.get("ranked_candidates") or []
+    if isinstance(ranked_rows, list) and ranked_rows:
+        research_selection = select_research_backtest_candidates(
+            ranked_rows,
+            min_final_score=_research_backtest_threshold(data),
+        )
+        data["research_backtest_selection"] = research_selection
+        positions = research_selection.get("selected") or []
+    else:
+        positions = data.get("pre_backtest_selected_positions") or []
+
     return list(
         dict.fromkeys(
             str(item.get("symbol") or item.get("ticker") or "").upper()
@@ -195,11 +239,7 @@ def _funnel_paths(report_path: Path) -> tuple[Path, Path]:
 
 
 def _write_profitability_funnel(report_path: Path) -> None:
-    """Emit diagnostic funnel artifacts without gaining trading authority.
-
-    Funnel generation is observational. A reporting bug must never mutate or
-    authorize trading state, but it is surfaced loudly in logs for CI/operations.
-    """
+    """Emit diagnostic funnel artifacts without gaining trading authority."""
 
     output_path, markdown_path = _funnel_paths(report_path)
     try:
