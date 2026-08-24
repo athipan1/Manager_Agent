@@ -37,7 +37,7 @@ from scripts.verify_backtest_evidence_coherence import (
 
 
 NESTED_WALK_FORWARD_MODE = "nested_walk_forward_multi_strategy_selection"
-NESTED_WALK_FORWARD_PROFILE = "nested_walk_forward_v3"
+NESTED_WALK_FORWARD_PROFILE = "nested_walk_forward_v4"
 NESTED_SELECTION_METHOD = "nested_train_select_test_evaluate"
 
 WALK_FORWARD_MODE = _legacy.WALK_FORWARD_MODE
@@ -210,7 +210,7 @@ def _verify_nested_coherence(report_path: Path, report: Dict[str, Any]) -> None:
 
 
 def _verify_nested_report_in_place(report_path: Path) -> bool:
-    """Verify a nested v3 report without invoking any legacy selection runner."""
+    """Verify a nested v4 report without invoking any legacy selection runner."""
 
     report = json.loads(report_path.read_text(encoding="utf-8"))
     data = unwrap_backtest_report(report)

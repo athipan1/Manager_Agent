@@ -13,7 +13,7 @@ from scripts.verify_backtest_evidence_coherence import (
 def _nested_data() -> dict:
     return {
         "mode": NESTED_MODE,
-        "validation_profile": "nested_walk_forward_v3",
+        "validation_profile": "nested_walk_forward_v4",
         "selection_method": "nested_train_select_test_evaluate",
         "items": [
             {
