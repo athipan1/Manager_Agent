@@ -190,15 +190,15 @@ jobs:
 
           path = Path("Scanner_Agent/app/data_sources/market_data.py")
           text = path.read_text(encoding="utf-8")
-          marker = "    quote_quality = classify_quote_quality(\n"
+          marker = "    field_sources: Dict[str, str] = {}\n\n    if _alpaca_configured():\n"
           if marker not in text:
-              raise SystemExit("Scanner market-data insertion point changed")
-          if "SIMULATED_MARKET_SMOKE_V1" in text:
+              raise SystemExit("Scanner market-data early insertion point changed")
+          if "SIMULATED_MARKET_SMOKE_V" in text:
               raise SystemExit("Unexpected pre-existing simulated-market patch")
 
-          block = '''    # SIMULATED_MARKET_SMOKE_V1: ephemeral CI-only fixture injected by Manager_Agent PR smoke.\n    # It preserves provider-backed price/history where available and replaces only\n    # live US execution microstructure so a closed clock cannot hide downstream bugs.\n    if _is_us_equity_exchange(exchange, snapshot.get("exchange")):\n        simulated_price = _positive_price(\n            snapshot.get("currentPrice"),\n            snapshot.get("regularMarketPrice"),\n            snapshot.get("previousClose"),\n        ) or 100.0\n        simulated_spread_bps = 8.0\n        half_spread = simulated_price * simulated_spread_bps / 20_000.0\n        simulated_bid = max(0.01, simulated_price - half_spread)\n        simulated_ask = max(simulated_bid, simulated_price + half_spread)\n        snapshot.update(\n            {\n                "currentPrice": simulated_price,\n                "alpacaBidPrice": round(simulated_bid, 6),\n                "alpacaAskPrice": round(simulated_ask, 6),\n                "alpacaMidpoint": round(simulated_price, 6),\n                "alpacaSpread": round(simulated_ask - simulated_bid, 6),\n                "alpacaSpreadBps": simulated_spread_bps,\n                "alpacaBidSize": 500.0,\n                "alpacaAskSize": 500.0,\n                "alpacaQuoteTimestamp": observed_at.isoformat(),\n                "marketState": "REGULAR",\n                "simulatedMarket": {\n                    "enabled": True,\n                    "fixture": "open_us_regular_session",\n                    "broker_orders_allowed": False,\n                },\n            }\n        )\n        if snapshot.get("averageVolume") is None:\n            snapshot["averageVolume"] = 2_500_000.0\n        if snapshot.get("regularMarketVolume") is None:\n            snapshot["regularMarketVolume"] = 1_250_000.0\n        if snapshot.get("historicalAtr14") is None:\n            snapshot["historicalAtr14"] = round(simulated_price * 0.02, 8)\n        if snapshot.get("historicalAtrPct") is None:\n            snapshot["historicalAtrPct"] = 0.02\n        field_sources["currentPrice"] = "simulated_market_smoke"\n        field_sources["averageVolume"] = field_sources.get("averageVolume", "simulated_market_smoke")\n        sources.append("simulated_market_smoke")\n        provider_status["simulated_market"] = "success"\n\n'''
-          path.write_text(text.replace(marker, block + marker, 1), encoding="utf-8")
-          print("Injected ephemeral Scanner simulated-market fixture")
+          block = '''    field_sources: Dict[str, str] = {}\n\n    # SIMULATED_MARKET_SMOKE_V2: ephemeral CI-only open-market fixture.\n    # Short-circuit before Alpaca/yfinance so provider latency, closed clocks,\n    # credentials, or transient provider failures cannot hide downstream bugs.\n    # This code exists only in the temporary Manager smoke workspace.\n    if _is_us_equity_exchange(exchange):\n        simulated_price = 100.0 + float(sum(ord(ch) for ch in clean_symbol) % 100)\n        simulated_spread_bps = 8.0\n        half_spread = simulated_price * simulated_spread_bps / 20_000.0\n        simulated_bid = round(max(0.01, simulated_price - half_spread), 6)\n        simulated_ask = round(max(simulated_bid, simulated_price + half_spread), 6)\n        snapshot.update(\n            {\n                "exchange": str(exchange).upper(),\n                "currentPrice": simulated_price,\n                "regularMarketPrice": simulated_price,\n                "previousClose": round(simulated_price * 0.99, 6),\n                "marketState": "REGULAR",\n                "averageVolume": 2_500_000.0,\n                "regularMarketVolume": 1_250_000.0,\n                "historicalAverageVolume20d": 2_500_000.0,\n                "historicalAtr14": round(simulated_price * 0.02, 8),\n                "historicalAtrPct": 0.02,\n                "historyBarCount": 45,\n                "marketCap": 100_000_000_000.0,\n                "sector": "Technology",\n                "industry": "Software - Infrastructure",\n                "trailingPE": 25.0,\n                "forwardPE": 22.0,\n                "pegRatio": 1.5,\n                "priceToBook": 6.0,\n                "revenueGrowth": 0.15,\n                "earningsGrowth": 0.18,\n                "returnOnEquity": 0.25,\n                "returnOnAssets": 0.12,\n                "debtToEquity": 50.0,\n                "profitMargins": 0.20,\n                "freeCashflow": 5_000_000_000.0,\n                "alpacaBidPrice": simulated_bid,\n                "alpacaAskPrice": simulated_ask,\n                "alpacaMidpoint": simulated_price,\n                "alpacaSpread": round(simulated_ask - simulated_bid, 6),\n                "alpacaSpreadBps": simulated_spread_bps,\n                "alpacaBidSize": 500.0,\n                "alpacaAskSize": 500.0,\n                "alpacaQuoteTimestamp": observed_at.isoformat(),\n                "simulatedMarket": {\n                    "enabled": True,\n                    "fixture": "open_us_regular_session_v2",\n                    "broker_orders_allowed": False,\n                },\n            }\n        )\n        quote_quality = classify_quote_quality(\n            requested_exchange=exchange,\n            provider_exchange=exchange,\n            market_state="REGULAR",\n            quote_timestamp=observed_at,\n            observed_at=observed_at,\n        )\n        snapshot["quote_quality"] = quote_quality\n        snapshot["quoteQualityStatus"] = quote_quality["status"]\n        snapshot["alpacaQuoteAgeSeconds"] = quote_quality["quote_age_seconds"]\n        snapshot["usMarketSession"] = quote_quality["market_session"]\n        snapshot["usMarketOpen"] = quote_quality["market_open"]\n        valuation_metric_count = sum(\n            snapshot.get(key) is not None for key in _CORE_VALUATION_KEYS\n        )\n        excluded_provenance_keys = {\n            "symbol",\n            "yf_symbol",\n            "requested_exchange",\n            "fetched_at",\n            "simulatedMarket",\n        }\n        simulated_sources = {\n            key: "simulated_market_smoke_v2"\n            for key in snapshot\n            if key not in excluded_provenance_keys\n        }\n        snapshot.update(\n            {\n                "valuation_metric_count": valuation_metric_count,\n                "valuation_data_complete": valuation_metric_count == len(_CORE_VALUATION_KEYS),\n                "market_data_sources": ["simulated_market_smoke_v2"],\n                "provider_status": {"simulated_market": "success"},\n                "provider_errors": [],\n                "field_sources": simulated_sources,\n            }\n        )\n        snapshot["data_quality"] = _build_data_quality(snapshot)\n        return snapshot\n\n    if _alpaca_configured():\n'''
+          path.write_text(text.replace(marker, block, 1), encoding="utf-8")
+          print("Injected ephemeral Scanner simulated-market fixture V2 before providers")
           PY
 
       - name: Install Manager host-script dependencies
@@ -231,11 +231,30 @@ jobs:
           DATABASE_AGENT_URL: http://localhost:8004
         run: python scripts/hourly_portfolio_cycle.py wait
 
+      - name: Verify Scanner runtime uses ephemeral fixture
+        working-directory: Manager_Agent
+        run: |
+          docker compose exec -T scanner-agent python - <<'PY'
+          import inspect
+          import app.data_sources.market_data as market_data
+
+          source = inspect.getsource(market_data.get_market_snapshot)
+          signature = str(inspect.signature(market_data.get_market_snapshot))
+          print(f"module={market_data.__file__}")
+          print(f"signature={signature}")
+          assert "SIMULATED_MARKET_SMOKE_V2" in source, "V2 fixture missing from runtime container"
+          assert "include_execution_history" in signature, "Scanner runtime contract is stale"
+          print("Runtime source proof passed: container is running the patched Scanner checkout")
+          PY
+
       - name: Prove simulated market is open and execution-quality evidence is sane
         working-directory: Manager_Agent
         run: |
           mkdir -p reports
-          docker compose exec -T scanner-agent python - <<'PY' > reports/simulated-market-aapl.json
+          set +e
+          docker compose exec -T scanner-agent python - <<'PY' \
+            > reports/simulated-market-aapl.json \
+            2> reports/simulated-market-aapl.stderr
           import json
           from app.data_sources.market_data import get_market_snapshot
 
@@ -252,6 +271,9 @@ jobs:
               "historicalAtrPct": snapshot.get("historicalAtrPct"),
               "averageVolume": snapshot.get("averageVolume"),
               "regularMarketVolume": snapshot.get("regularMarketVolume"),
+              "provider_status": snapshot.get("provider_status"),
+              "provider_errors": snapshot.get("provider_errors"),
+              "data_quality": snapshot.get("data_quality"),
               "simulatedMarket": snapshot.get("simulatedMarket"),
               "market_data_sources": snapshot.get("market_data_sources"),
           }
@@ -262,9 +284,17 @@ jobs:
           assert proof["alpacaSpreadBps"] == 8.0, proof
           assert proof["historicalAtr14"] is not None, proof
           assert proof["averageVolume"] is not None, proof
+          assert proof["provider_status"] == {"simulated_market": "success"}, proof
+          assert proof["provider_errors"] == [], proof
           assert (proof["simulatedMarket"] or {}).get("broker_orders_allowed") is False, proof
           PY
-          cat reports/simulated-market-aapl.json
+          status=$?
+          set -e
+          echo "--- simulated market stderr ---"
+          cat reports/simulated-market-aapl.stderr || true
+          echo "--- simulated market proof ---"
+          cat reports/simulated-market-aapl.json || true
+          exit "$status"
 
       - name: Run Scanner preselection on simulated open market
         id: scanner_preselection
