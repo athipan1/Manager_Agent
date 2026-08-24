@@ -1,0 +1,99 @@
+name: Scanner Simulated Runtime Diagnostic
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/scanner-simulated-runtime-diagnostic.yml"
+      - ".github/workflows/simulated-market-flag-smoke.yml"
+      - "docker-compose.simulated-market-smoke.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  scanner-simulated-runtime-diagnostic:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout Scanner_Agent main
+        uses: actions/checkout@v6
+        with:
+          repository: athipan1/Scanner_Agent
+          ref: main
+          path: Scanner_Agent
+          fetch-depth: 1
+
+      - name: Record Scanner source identity
+        run: |
+          mkdir -p reports
+          {
+            echo "scanner_head=$(git -C Scanner_Agent rev-parse HEAD)"
+            grep -n "SCANNER_SIMULATED_MARKET_ENABLED" Scanner_Agent/app/data_sources/market_data.py || true
+            grep -n "def get_market_snapshot" Scanner_Agent/app/data_sources/market_data.py || true
+          } | tee reports/scanner-source-identity.txt
+
+      - name: Build Scanner image from checked-out source
+        run: docker build --pull -t scanner-simulated-runtime-diagnostic Scanner_Agent
+
+      - name: Prove simulated snapshot directly in Scanner image
+        run: |
+          set -o pipefail
+          docker run --rm -i \
+            -e TRADING_MODE=PAPER \
+            -e SCANNER_DEV_MODE=true \
+            -e SCANNER_SIMULATED_MARKET_ENABLED=true \
+            scanner-simulated-runtime-diagnostic \
+            python - <<'PY' 2>&1 | tee reports/scanner-runtime-diagnostic.txt
+          import inspect
+          import json
+          import os
+          import traceback
+          from app import config
+          from app.data_sources import market_data
+
+          print("module_file=", market_data.__file__)
+          print("signature=", inspect.signature(market_data.get_market_snapshot))
+          print("env.SCANNER_SIMULATED_MARKET_ENABLED=", repr(os.getenv("SCANNER_SIMULATED_MARKET_ENABLED")))
+          print("env.SCANNER_DEV_MODE=", repr(os.getenv("SCANNER_DEV_MODE")))
+          print("env.TRADING_MODE=", repr(os.getenv("TRADING_MODE")))
+          print("settings.SCANNER_DEV_MODE=", repr(config.settings.SCANNER_DEV_MODE))
+          print("settings.TRADING_MODE=", repr(config.settings.TRADING_MODE))
+          print("simulated_requested=", market_data._simulated_market_requested())
+
+          try:
+              snapshot = market_data.get_market_snapshot(
+                  "AAPL", "NASDAQ", include_execution_history=True
+              )
+          except Exception:
+              traceback.print_exc()
+              raise
+
+          proof = {
+              "symbol": snapshot.get("symbol"),
+              "quoteQualityStatus": snapshot.get("quoteQualityStatus"),
+              "usMarketSession": snapshot.get("usMarketSession"),
+              "usMarketOpen": snapshot.get("usMarketOpen"),
+              "alpacaQuoteAgeSeconds": snapshot.get("alpacaQuoteAgeSeconds"),
+              "alpacaSpreadBps": snapshot.get("alpacaSpreadBps"),
+              "historicalAtr14": snapshot.get("historicalAtr14"),
+              "averageVolume": snapshot.get("averageVolume"),
+              "simulatedMarket": snapshot.get("simulatedMarket"),
+              "provider_status": snapshot.get("provider_status"),
+          }
+          print(json.dumps(proof, indent=2, default=str))
+          assert proof["quoteQualityStatus"] == "fresh", proof
+          assert proof["usMarketSession"] == "regular", proof
+          assert proof["usMarketOpen"] is True, proof
+          assert (proof["simulatedMarket"] or {}).get("provider_calls_bypassed") is True, proof
+          assert (proof["simulatedMarket"] or {}).get("broker_orders_allowed") is False, proof
+          assert (proof["provider_status"] or {}).get("simulated_market") == "success", proof
+          PY
+
+      - name: Upload diagnostic evidence
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: scanner-simulated-runtime-diagnostic
+          retention-days: 7
+          if-no-files-found: warn
+          path: reports/*
