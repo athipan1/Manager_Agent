@@ -61,3 +61,16 @@ jobs:
       run: |
         cat pytest-results.txt
         exit 1
+
+  hourly-paper-verification:
+    uses: ./.github/workflows/hourly-auto-trading.yml
+    with:
+      dry_run: true
+      broker_mode: ALPACA
+      max_universe: "1000"
+      top_n: "10"
+      min_final_score: "0.55"
+      operator_confirmation: ""
+      emergency_halt_drill: false
+      authorized_soak_schedule: false
+    secrets: inherit
