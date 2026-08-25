@@ -1,4 +1,5 @@
 from app.services.research_backtest_selection_service import (
+    RESEARCH_RERANKER_VERSION,
     select_research_backtest_candidates,
 )
 
@@ -12,7 +13,32 @@ def _row(
     confidence: float = 0.80,
     evidence_gate_passed: bool = True,
     fail_closed: bool = False,
+    candidate_score: float | None = None,
+    hard_gates_passed: int = 0,
+    reward_risk: float | None = None,
 ):
+    candidate_score_v1 = None
+    if candidate_score is not None:
+        gates = {
+            f"gate_{index}": index < hard_gates_passed
+            for index in range(6)
+        }
+        candidate_score_v1 = {
+            "score_version": "candidate-score.v1",
+            "score": candidate_score,
+            "max_score": 10,
+            "hard_gates": gates,
+            "criteria": {
+                "opportunity": {
+                    "reward_risk": reward_risk,
+                }
+            },
+            "evidence_coverage": {
+                "fundamental": 1.0,
+                "technical": 1.0,
+                "scanner_analysis": 1.0,
+            },
+        }
     return {
         "symbol": symbol,
         "strategy_bucket": bucket,
@@ -20,7 +46,11 @@ def _row(
         "bucket_classification_status": "classified",
         "evidence_gate_passed": evidence_gate_passed,
         "final_verdict": verdict,
-        "score_breakdown": {"final_opportunity_score": score},
+        "score_breakdown": {
+            "final_opportunity_score": score,
+            "candidate_score_v1": candidate_score_v1,
+        },
+        "candidate_score_v1": candidate_score_v1,
         "scanner_candidate": {
             "metadata": {
                 "details": {
@@ -78,7 +108,7 @@ def test_research_selector_keeps_score_classification_and_evidence_gates():
     assert [row["symbol"] for row in selection["selected"]] == ["PASS"]
 
 
-def test_research_selector_respects_bucket_limits_and_score_order():
+def test_legacy_rows_keep_final_score_order_when_candidate_score_is_missing():
     rows = [
         _row("VALUE1", score=0.70),
         _row("VALUE2", score=0.80),
@@ -88,3 +118,63 @@ def test_research_selector_respects_bucket_limits_and_score_order():
     selection = select_research_backtest_candidates(rows, min_final_score=0.58)
 
     assert [row["symbol"] for row in selection["selected"]] == ["VALUE3", "VALUE2"]
+
+
+def test_candidate_score_reranks_scarce_backtest_slots_before_final_score():
+    rows = [
+        _row(
+            "HIGH_FINAL_LOW_EVIDENCE",
+            score=0.90,
+            candidate_score=5,
+            hard_gates_passed=2,
+            reward_risk=0.8,
+        ),
+        _row(
+            "LOWER_FINAL_HIGH_EVIDENCE",
+            score=0.62,
+            candidate_score=8,
+            hard_gates_passed=5,
+            reward_risk=2.4,
+        ),
+        _row(
+            "MID_FINAL_GOOD_EVIDENCE",
+            score=0.70,
+            candidate_score=7,
+            hard_gates_passed=4,
+            reward_risk=2.0,
+        ),
+    ]
+
+    selection = select_research_backtest_candidates(rows, min_final_score=0.58)
+
+    assert [row["symbol"] for row in selection["selected"]] == [
+        "LOWER_FINAL_HIGH_EVIDENCE",
+        "MID_FINAL_GOOD_EVIDENCE",
+    ]
+    assert selection["reranker_version"] == RESEARCH_RERANKER_VERSION
+    assert selection["reranker_policy"]["candidate_score_is_ordering_only"] is True
+    assert selection["reranker_policy"]["production_binding"] is False
+    assert selection["reranker_policy"]["thresholds_relaxed"] is False
+
+
+def test_reranker_evidence_is_persisted_for_audit():
+    selection = select_research_backtest_candidates(
+        [
+            _row(
+                "AUDIT",
+                score=0.65,
+                candidate_score=8,
+                hard_gates_passed=4,
+                reward_risk=2.2,
+            )
+        ],
+        min_final_score=0.58,
+    )
+
+    evidence = selection["selected"][0]["research_reranker"]
+    assert evidence["reranker_version"] == RESEARCH_RERANKER_VERSION
+    assert evidence["candidate_score"] == 8
+    assert evidence["candidate_hard_gates_passed"] == 4
+    assert evidence["reward_risk"] == 2.2
+    assert evidence["ordering_only"] is True
+    assert evidence["production_binding"] is False
