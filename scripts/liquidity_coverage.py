@@ -206,11 +206,16 @@ def runtime_report_metadata(
     ``Hourly Auto Trading`` uses ``TRADING_MODE=PAPER`` while older artifacts used
     ``ALPACA_PAPER``. Treat both as Alpaca Paper only when the broker is ALPACA.
     A known dry-run keeps the Paper identity but never advertises broker mutation.
+    Legacy ``ALPACA_PAPER`` callers predate the dry-run field, so absence there
+    preserves the historical non-dry-run meaning while modern ``PAPER`` callers
+    must provide an explicit false value before mutation can be advertised.
     """
 
     normalized_mode = str(mode or "").strip().upper()
     normalized_broker_mode = str(broker_mode or "").strip().upper()
     parsed_dry_run = _optional_bool(dry_run)
+    if parsed_dry_run is None and normalized_mode == "ALPACA_PAPER":
+        parsed_dry_run = False
     paper_configured = (
         normalized_mode in {"PAPER", "ALPACA_PAPER"}
         and normalized_broker_mode == "ALPACA"
