@@ -1,10 +1,17 @@
 from __future__ import annotations
 
+import json
+import os
+import urllib.error
+import urllib.request
+from pathlib import Path
 from typing import Any, Iterable, Mapping
 
 COMPATIBILITY_GATE_SCHEMA = "manager-research-strategy-compatibility.v1"
 EXPECTED_BACKTEST_CONTRACT_SCHEMA = "strategy-bucket-compatibility.v1"
 DEFAULT_MIN_COMPATIBLE_STRATEGIES = 2
+DEFAULT_MARKET_CONTEXT_PATH = Path("reports/hourly-position-review.json")
+DEFAULT_BACKTEST_READY_URL = "http://localhost:8016/ready"
 
 
 def _mapping(value: Any) -> Mapping[str, Any]:
@@ -49,6 +56,78 @@ def _market_regime_allow_list(market_context: Any) -> tuple[list[str], dict[str,
         "allowed_strategies": allowed,
         "gate_version": gate.get("gate_version"),
     }
+
+
+def _runtime_minimum() -> int:
+    raw = str(
+        os.getenv(
+            "BACKTEST_RESEARCH_MIN_COMPATIBLE_STRATEGIES",
+            str(DEFAULT_MIN_COMPATIBLE_STRATEGIES),
+        )
+    ).strip()
+    try:
+        value = int(raw)
+    except ValueError:
+        return DEFAULT_MIN_COMPATIBLE_STRATEGIES
+    return max(1, min(value, 25))
+
+
+def load_runtime_market_context() -> tuple[dict[str, Any], dict[str, Any]]:
+    configured = str(os.getenv("BACKTEST_MARKET_CONTEXT_PATH") or "").strip()
+    path = Path(configured) if configured else DEFAULT_MARKET_CONTEXT_PATH
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return {}, {"status": "unavailable", "source": str(path), "reason": "missing_file"}
+    except (OSError, json.JSONDecodeError) as exc:
+        return {}, {
+            "status": "unavailable",
+            "source": str(path),
+            "reason": type(exc).__name__,
+        }
+    if not isinstance(payload, dict):
+        return {}, {"status": "unavailable", "source": str(path), "reason": "invalid_root"}
+    return payload, {"status": "loaded", "source": str(path), "reason": None}
+
+
+def load_runtime_backtest_contract() -> tuple[dict[str, Any], dict[str, Any]]:
+    url = str(os.getenv("BACKTEST_READINESS_URL") or DEFAULT_BACKTEST_READY_URL).strip()
+    try:
+        timeout = float(os.getenv("BACKTEST_COMPATIBILITY_PREFLIGHT_TIMEOUT_SECONDS", "3"))
+    except ValueError:
+        timeout = 3.0
+    timeout = max(0.25, min(timeout, 10.0))
+    request = urllib.request.Request(
+        url,
+        headers={"Accept": "application/json"},
+        method="GET",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+    except (
+        TimeoutError,
+        urllib.error.HTTPError,
+        urllib.error.URLError,
+        ConnectionResetError,
+        json.JSONDecodeError,
+    ) as exc:
+        return {}, {
+            "status": "unavailable",
+            "source": url,
+            "reason": type(exc).__name__,
+        }
+    if not isinstance(payload, dict):
+        return {}, {"status": "unavailable", "source": url, "reason": "invalid_root"}
+    data = _mapping(payload.get("data"))
+    contract = data.get("strategy_bucket_compatibility")
+    if not isinstance(contract, Mapping):
+        return {}, {
+            "status": "unavailable",
+            "source": url,
+            "reason": "compatibility_contract_missing",
+        }
+    return dict(contract), {"status": "loaded", "source": url, "reason": None}
 
 
 def preflight_research_strategy_compatibility(
@@ -98,9 +177,6 @@ def preflight_research_strategy_compatibility(
             unknown_symbols.append(symbol)
             keep = True
         elif not market_policy_applied:
-            # Backtest does not apply its Market Regime candidate override when
-            # the trusted market context is not tradeable, so the bucket's full
-            # balanced-v1 candidate set remains the exact-run source.
             compatible = list(bucket_allowed)
             if not compatible:
                 status = "unknown_bucket"
@@ -179,5 +255,49 @@ def preflight_research_strategy_compatibility(
             "backtest_thresholds_relaxed": False,
             "backtest_remains_authoritative": True,
         },
+    }
+    return retained, gate
+
+
+def preflight_runtime_research_strategy_compatibility(
+    ranked_rows: Iterable[Mapping[str, Any]],
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """Load runtime evidence and apply the compatibility preflight when possible."""
+
+    market_context, market_source = load_runtime_market_context()
+    # Avoid a network dependency when the exact Backtest Market Regime policy would
+    # not apply anyway. This keeps unit tests and non-hourly paths deterministic.
+    allowed, market = _market_regime_allow_list(market_context)
+    if not market.get("tradeable") or not allowed:
+        retained, gate = preflight_research_strategy_compatibility(
+            ranked_rows,
+            backtest_contract={},
+            market_context=market_context,
+            min_compatible_strategies=_runtime_minimum(),
+        )
+        gate["runtime_sources"] = {
+            "market_context": market_source,
+            "backtest_contract": {
+                "status": "not_requested",
+                "source": None,
+                "reason": "market_policy_not_applied",
+            },
+        }
+        # Contract is unnecessary when Backtest will not apply the regime override.
+        # Preserve every row rather than label them unknown because the bucket-only
+        # candidate set remains authoritative for the exact run.
+        gate["status"] = "not_applicable_market_policy"
+        return [dict(row) for row in ranked_rows if isinstance(row, Mapping)], gate
+
+    contract, contract_source = load_runtime_backtest_contract()
+    retained, gate = preflight_research_strategy_compatibility(
+        ranked_rows,
+        backtest_contract=contract,
+        market_context=market_context,
+        min_compatible_strategies=_runtime_minimum(),
+    )
+    gate["runtime_sources"] = {
+        "market_context": market_source,
+        "backtest_contract": contract_source,
     }
     return retained, gate
