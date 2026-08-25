@@ -4,8 +4,11 @@ from decimal import Decimal
 from typing import Any, Dict, Iterable, Mapping
 
 from ..strategy_bucket_classifier import AUTO_CLASSIFY_THRESHOLD, KNOWN_BUCKETS
+from .research_strategy_compatibility_service import (
+    preflight_runtime_research_strategy_compatibility,
+)
 
-RESEARCH_BACKTEST_POLICY_VERSION = "manager-research-backtest-v2"
+RESEARCH_BACKTEST_POLICY_VERSION = "manager-research-backtest-v3"
 RESEARCH_RERANKER_VERSION = "manager-research-reranker-v2"
 RESEARCH_ALLOWED_VERDICTS = {"hold", "buy", "strong_buy"}
 DEFAULT_RESEARCH_BUCKET_LIMITS = {
@@ -141,13 +144,7 @@ def _bucket_confidence(row: Mapping[str, Any]) -> float:
 
 
 def _research_rank_key(row: Mapping[str, Any]) -> tuple[Any, ...]:
-    """Prefer evidence likely to survive later gates without making it binding.
-
-    Candidate-score.v1 is observational, but once it exists it is a better research
-    ordering signal than final_opportunity_score alone because it carries the same
-    fundamental, technical, relative-strength, volume and reward/risk evidence that
-    Manager audits before production. Missing scorecards preserve legacy ordering.
-    """
+    """Prefer evidence likely to survive later gates without making it binding."""
 
     score = _candidate_score_points(row)
     hard_passed, hard_total = _hard_gate_summary(row)
@@ -225,6 +222,14 @@ def _research_eligible(
     return not reasons, reasons
 
 
+def _compatibility_by_symbol(gate: Mapping[str, Any]) -> dict[str, Mapping[str, Any]]:
+    return {
+        str(item.get("symbol") or "").strip().upper(): item
+        for item in gate.get("evaluations") or []
+        if isinstance(item, Mapping) and str(item.get("symbol") or "").strip()
+    }
+
+
 def select_research_backtest_candidates(
     ranked_rows: Iterable[Mapping[str, Any]],
     *,
@@ -233,21 +238,35 @@ def select_research_backtest_candidates(
 ) -> Dict[str, Any]:
     """Select broker-isolated research candidates for exact Backtest.
 
-    HOLD remains research-eligible when the existing classification, evidence and
-    score gates pass. Within each bucket, candidate-score.v1 evidence reranks the
-    eligible set before scarce exact-Backtest slots are consumed. The 10-point score
-    is ordering-only here: it does not become a production gate and no Risk/Execution
-    authority is granted.
+    Existing classification/evidence/final-score gates stay intact. Runtime
+    compatibility evidence from Backtest_Agent may additionally exclude a row only
+    when the trusted Market Regime intersection is known to leave fewer than the
+    configured minimum number of balanced-v1 strategy families. Unknown evidence
+    is deferred to exact Backtest.
     """
 
     threshold = Decimal(str(min_final_score))
     limits = {**DEFAULT_RESEARCH_BUCKET_LIMITS, **dict(bucket_limits or {})}
-    rows = [dict(row) for row in ranked_rows if isinstance(row, Mapping)]
+    original_rows = [dict(row) for row in ranked_rows if isinstance(row, Mapping)]
+    rows, compatibility_gate = preflight_runtime_research_strategy_compatibility(
+        original_rows
+    )
+    compatibility = _compatibility_by_symbol(compatibility_gate)
+    rejected_for_compatibility = set(
+        str(symbol or "").strip().upper()
+        for symbol in compatibility_gate.get("rejected_symbols") or []
+        if str(symbol or "").strip()
+    )
+
     selected: list[Dict[str, Any]] = []
     evaluations: list[Dict[str, Any]] = []
 
-    for row in rows:
+    for row in original_rows:
         eligible, reasons = _research_eligible(row, threshold=threshold)
+        symbol = str(row.get("symbol") or row.get("ticker") or "").strip().upper()
+        if symbol in rejected_for_compatibility:
+            eligible = False
+            reasons = [*reasons, "insufficient_strategy_diversity"]
         evaluations.append(
             {
                 "symbol": row.get("symbol") or row.get("ticker"),
@@ -257,6 +276,7 @@ def select_research_backtest_candidates(
                 "eligible": eligible,
                 "reasons": reasons,
                 "reranker": _reranker_evidence(row),
+                "strategy_compatibility": compatibility.get(symbol),
             }
         )
 
@@ -283,6 +303,9 @@ def select_research_backtest_candidates(
                     "final_verdict": _verdict(row),
                     "final_opportunity_score": float(_final_score(row)),
                     "research_reranker": _reranker_evidence(row),
+                    "pre_backtest_strategy_compatibility": row.get(
+                        "pre_backtest_strategy_compatibility"
+                    ),
                     "selection_lane": "research_backtest",
                     "production_entry_authorized": False,
                     "risk_execution_authorized": False,
@@ -298,6 +321,7 @@ def select_research_backtest_candidates(
         "selected_count": len(selected),
         "selected": selected,
         "evaluations": evaluations,
+        "strategy_compatibility_gate": compatibility_gate,
         "reranker_policy": {
             "candidate_score_is_ordering_only": True,
             "legacy_fallback": "final_opportunity_score",
