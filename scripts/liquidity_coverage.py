@@ -181,24 +181,60 @@ def summarize_liquidity_coverage(
     }
 
 
-def runtime_report_metadata(mode: Any, broker_mode: Any) -> Dict[str, Any]:
-    """Return report mode metadata whose warning matches the actual run mode."""
+def _optional_bool(value: Any) -> Optional[bool]:
+    if value is None or value == "":
+        return None
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"1", "true", "yes", "on"}:
+            return True
+        if normalized in {"0", "false", "no", "off"}:
+            return False
+    return bool(value)
+
+
+def runtime_report_metadata(
+    mode: Any,
+    broker_mode: Any,
+    *,
+    dry_run: Any = None,
+) -> Dict[str, Any]:
+    """Return report mode metadata whose warning matches the actual run mode.
+
+    ``Hourly Auto Trading`` uses ``TRADING_MODE=PAPER`` while older artifacts used
+    ``ALPACA_PAPER``. Treat both as Alpaca Paper only when the broker is ALPACA.
+    A known dry-run keeps the Paper identity but never advertises broker mutation.
+    """
 
     normalized_mode = str(mode or "").strip().upper()
     normalized_broker_mode = str(broker_mode or "").strip().upper()
-    paper_enabled = (
-        normalized_mode == "ALPACA_PAPER"
+    parsed_dry_run = _optional_bool(dry_run)
+    paper_configured = (
+        normalized_mode in {"PAPER", "ALPACA_PAPER"}
         and normalized_broker_mode == "ALPACA"
     )
-    if paper_enabled:
+    if paper_configured:
+        canonical_mode = "PAPER" if normalized_mode == "PAPER" else "ALPACA_PAPER"
+        if parsed_dry_run is False:
+            return {
+                "mode": canonical_mode,
+                "broker_mode": "ALPACA",
+                "warning": (
+                    "Alpaca Paper execution mode is active; eligible orders may "
+                    "be submitted only to the Alpaca Paper endpoint."
+                ),
+                "broker_order_submission_possible": True,
+            }
         return {
-            "mode": "ALPACA_PAPER",
+            "mode": canonical_mode,
             "broker_mode": "ALPACA",
             "warning": (
-                "Alpaca Paper execution mode is active; eligible orders may "
-                "be submitted only to the Alpaca Paper endpoint."
+                "Alpaca Paper dry-run or unverified mutation state is active; "
+                "broker order submission is not authorized by this report."
             ),
-            "broker_order_submission_possible": True,
+            "broker_order_submission_possible": False,
         }
     return {
         "mode": "SIMULATOR",
@@ -215,9 +251,18 @@ def enrich_hourly_artifact(raw: Mapping[str, Any]) -> Dict[str, Any]:
     """Normalize mode warning and inject liquidity coverage into artifact JSON."""
 
     result = dict(raw)
+    runtime_block = _dict(result.get("runtime"))
+    report_mode = result.get("mode") or runtime_block.get("mode")
+    report_broker = result.get("broker_mode") or runtime_block.get("brokerMode")
+    dry_run = (
+        runtime_block.get("dryRun")
+        if "dryRun" in runtime_block
+        else result.get("dry_run")
+    )
     runtime = runtime_report_metadata(
-        result.get("mode"),
-        result.get("broker_mode"),
+        report_mode,
+        report_broker,
+        dry_run=dry_run,
     )
     result.update(runtime)
 
