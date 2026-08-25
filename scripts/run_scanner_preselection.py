@@ -7,10 +7,11 @@ import socket
 import sys
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Tuple
+from typing import Any, Callable, Dict, List, Tuple
 
 try:
     from scripts.run_profitability_funnel_audit import run_audit
@@ -26,6 +27,11 @@ except ModuleNotFoundError:  # pragma: no cover - direct script execution
     from app.services.research_backtest_selection_service import (
         select_research_backtest_candidates,
     )
+
+
+DEFAULT_NESTED_MINIMUM_BARS = 630
+DEFAULT_FINAL_HOLDOUT_BARS = 252
+DEFAULT_BACKTEST_HISTORY_DAYS = 5 * 365
 
 
 class ScannerPreselectionRequestError(RuntimeError):
@@ -171,14 +177,307 @@ def _research_backtest_threshold(data: Dict[str, Any]) -> float:
     return float(os.getenv("MIN_FINAL_SCORE", "0.55"))
 
 
+def _positive_int_env(name: str, default: int) -> int:
+    raw = str(os.getenv(name, str(default))).strip()
+    try:
+        value = int(raw)
+    except ValueError as exc:
+        raise ValueError(f"{name} must be an integer") from exc
+    if value <= 0:
+        raise ValueError(f"{name} must be greater than zero")
+    return value
+
+
+def _bool_env(name: str, default: bool) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in {"1", "true", "yes", "y", "on"}
+
+
+def _required_backtest_history_bars() -> int:
+    """Mirror the nested promotion history contract without weakening it.
+
+    Backtest_Agent requires BACKTEST_NESTED_MINIMUM_BARS research bars plus the
+    sealed final holdout. An explicit aggregate override is supported for future
+    contract versions, but it may never resolve to a non-positive value.
+    """
+
+    explicit = os.getenv("BACKTEST_HISTORY_REQUIRED_BARS")
+    if explicit not in (None, ""):
+        try:
+            value = int(str(explicit).strip())
+        except ValueError as exc:
+            raise ValueError("BACKTEST_HISTORY_REQUIRED_BARS must be an integer") from exc
+        if value <= 0:
+            raise ValueError("BACKTEST_HISTORY_REQUIRED_BARS must be greater than zero")
+        return value
+
+    research_bars = _positive_int_env(
+        "BACKTEST_NESTED_MINIMUM_BARS",
+        DEFAULT_NESTED_MINIMUM_BARS,
+    )
+    if not _bool_env("BACKTEST_FINAL_HOLDOUT_ENABLED", True):
+        # Production nested promotion itself will reject this configuration. Do
+        # not pretend a shorter history window is production compatible here.
+        raise ValueError(
+            "BACKTEST_FINAL_HOLDOUT_ENABLED must remain true for nested promotion"
+        )
+    holdout_bars = _positive_int_env(
+        "BACKTEST_FINAL_HOLDOUT_BARS",
+        DEFAULT_FINAL_HOLDOUT_BARS,
+    )
+    return research_bars + holdout_bars
+
+
+def _alpaca_timeframe(value: str) -> str | None:
+    normalized = str(value or "1d").strip().lower()
+    return {
+        "1d": "1Day",
+        "1day": "1Day",
+        "day": "1Day",
+        "1h": "1Hour",
+        "1hour": "1Hour",
+        "60m": "1Hour",
+        "30m": "30Min",
+        "15m": "15Min",
+        "5m": "5Min",
+        "1m": "1Min",
+    }.get(normalized)
+
+
+def _backtest_date_range() -> tuple[str, str]:
+    end = datetime.now(timezone.utc)
+    start = end - timedelta(
+        days=_positive_int_env("BACKTEST_HISTORY_DAYS", DEFAULT_BACKTEST_HISTORY_DAYS)
+    )
+    return (
+        os.getenv("BACKTEST_START") or start.isoformat(),
+        os.getenv("BACKTEST_END") or end.isoformat(),
+    )
+
+
+def _fetch_alpaca_bar_count(symbol: str, required_bars: int) -> int | None:
+    """Return Alpaca bar count, or None when precheck evidence is unavailable.
+
+    Unknown evidence does not authorize a candidate. It simply preserves the
+    existing fail-closed Backtest decision so a transient data-provider problem
+    cannot create a false rejection or a false production approval.
+    """
+
+    api_key = str(os.getenv("ALPACA_API_KEY_ID") or "").strip()
+    secret = str(os.getenv("ALPACA_SECRET_KEY") or "").strip()
+    if not api_key or not secret:
+        return None
+
+    timeframe = _alpaca_timeframe(os.getenv("BACKTEST_TIMEFRAME", "1d"))
+    if timeframe is None:
+        return None
+
+    start, end = _backtest_date_range()
+    base_url = str(
+        os.getenv("ALPACA_DATA_API_URL") or "https://data.alpaca.markets"
+    ).rstrip("/")
+    feed = str(os.getenv("ALPACA_DATA_FEED") or "iex").strip()
+    total = 0
+    page_token: str | None = None
+    max_pages = 20
+
+    for _ in range(max_pages):
+        query = {
+            "timeframe": timeframe,
+            "start": start,
+            "end": end,
+            "limit": "10000",
+            "adjustment": "raw",
+            "feed": feed,
+            "sort": "asc",
+        }
+        if page_token:
+            query["page_token"] = page_token
+        url = (
+            f"{base_url}/v2/stocks/{urllib.parse.quote(symbol, safe='')}/bars?"
+            + urllib.parse.urlencode(query)
+        )
+        request = urllib.request.Request(
+            url,
+            headers={
+                "Accept": "application/json",
+                "APCA-API-KEY-ID": api_key,
+                "APCA-API-SECRET-KEY": secret,
+            },
+            method="GET",
+        )
+        try:
+            with urllib.request.urlopen(
+                request,
+                timeout=float(os.getenv("BACKTEST_HISTORY_PRECHECK_TIMEOUT_SECONDS", "20")),
+            ) as response:
+                payload = json.loads(response.read().decode("utf-8"))
+        except (
+            TimeoutError,
+            socket.timeout,
+            urllib.error.HTTPError,
+            urllib.error.URLError,
+            ConnectionResetError,
+            json.JSONDecodeError,
+        ):
+            return None
+
+        bars = payload.get("bars") if isinstance(payload, dict) else None
+        if not isinstance(bars, list):
+            return None
+        total += len(bars)
+        if total >= required_bars:
+            return total
+        page_token = str(payload.get("next_page_token") or "").strip() or None
+        if not page_token:
+            return total
+
+    return total
+
+
+def _symbol_from_row(row: Any) -> str:
+    if not isinstance(row, dict):
+        return ""
+    return str(row.get("symbol") or row.get("ticker") or "").strip().upper()
+
+
+def _history_gate_research_selection(
+    data: Dict[str, Any],
+    *,
+    fetch_bar_count: Callable[[str, int], int | None] | None = None,
+) -> tuple[Dict[str, Any], Dict[str, Any]]:
+    """Re-run the existing research selector after known history failures.
+
+    This preserves all bucket, score, evidence, verdict and fail-closed rules.
+    Only candidates proven to have fewer bars than Backtest_Agent requires are
+    removed, allowing the same selector to backfill from the next ranked row.
+    """
+
+    ranked_rows = data.get("ranked_candidates") or []
+    if not isinstance(ranked_rows, list) or not ranked_rows:
+        return {}, {
+            "status": "not_applicable",
+            "reason": "ranked_candidates_unavailable",
+            "required_bars": _required_backtest_history_bars(),
+            "evaluations": [],
+            "rejected_symbols": [],
+            "unknown_symbols": [],
+        }
+
+    threshold = _research_backtest_threshold(data)
+    baseline = select_research_backtest_candidates(
+        ranked_rows,
+        min_final_score=threshold,
+    )
+    eligible_symbols = [
+        str(row.get("symbol") or "").strip().upper()
+        for row in baseline.get("evaluations") or []
+        if isinstance(row, dict)
+        and row.get("eligible") is True
+        and str(row.get("symbol") or "").strip()
+    ]
+    eligible_symbols = list(dict.fromkeys(eligible_symbols))
+    required_bars = _required_backtest_history_bars()
+    fetcher = fetch_bar_count or _fetch_alpaca_bar_count
+    evaluations: List[Dict[str, Any]] = []
+    rejected_symbols: List[str] = []
+    unknown_symbols: List[str] = []
+    evidence_by_symbol: Dict[str, Dict[str, Any]] = {}
+
+    for symbol in eligible_symbols:
+        observed = fetcher(symbol, required_bars)
+        if observed is None:
+            evidence = {
+                "symbol": symbol,
+                "status": "unknown",
+                "bars_observed": None,
+                "bars_required": required_bars,
+                "history_eligible": None,
+                "decision": "defer_to_exact_backtest",
+            }
+            unknown_symbols.append(symbol)
+        elif observed < required_bars:
+            evidence = {
+                "symbol": symbol,
+                "status": "insufficient_history",
+                "bars_observed": int(observed),
+                "bars_required": required_bars,
+                "history_eligible": False,
+                "decision": "exclude_and_backfill",
+            }
+            rejected_symbols.append(symbol)
+        else:
+            evidence = {
+                "symbol": symbol,
+                "status": "passed",
+                "bars_observed": int(observed),
+                "bars_required": required_bars,
+                "history_eligible": True,
+                "decision": "eligible_for_exact_backtest",
+            }
+        evidence_by_symbol[symbol] = evidence
+        evaluations.append(evidence)
+
+    blocked = set(rejected_symbols)
+    filtered_rows = [
+        row
+        for row in ranked_rows
+        if _symbol_from_row(row) not in blocked
+    ]
+    selection = select_research_backtest_candidates(
+        filtered_rows,
+        min_final_score=threshold,
+    )
+    for item in selection.get("selected") or []:
+        if not isinstance(item, dict):
+            continue
+        symbol = _symbol_from_row(item)
+        evidence = evidence_by_symbol.get(symbol)
+        if evidence:
+            item["pre_backtest_history_eligible"] = evidence["history_eligible"]
+            item["history_bars_observed"] = evidence["bars_observed"]
+            item["history_bars_required"] = evidence["bars_required"]
+            item["history_precheck_status"] = evidence["status"]
+
+    gate = {
+        "schema_version": "pre-backtest-history-gate.v1",
+        "status": "completed",
+        "required_bars": required_bars,
+        "research_minimum_bars": _positive_int_env(
+            "BACKTEST_NESTED_MINIMUM_BARS", DEFAULT_NESTED_MINIMUM_BARS
+        ),
+        "sealed_holdout_bars": _positive_int_env(
+            "BACKTEST_FINAL_HOLDOUT_BARS", DEFAULT_FINAL_HOLDOUT_BARS
+        ),
+        "timeframe": os.getenv("BACKTEST_TIMEFRAME", "1d"),
+        "eligible_research_symbols_checked": len(eligible_symbols),
+        "rejected_symbols": rejected_symbols,
+        "unknown_symbols": unknown_symbols,
+        "backfilled_selection_count": len(selection.get("selected") or []),
+        "evaluations": evaluations,
+        "safety": {
+            "production_authority_granted": False,
+            "risk_execution_authority_granted": False,
+            "unknown_history_deferred_to_exact_backtest": True,
+            "backtest_thresholds_relaxed": False,
+        },
+    }
+    selection["pre_backtest_history_gate"] = gate
+    return selection, gate
+
+
 def extract_backtest_symbols(response: Dict[str, Any]) -> List[str]:
     """Extract broker-isolated exact Backtest symbols from Manager discovery.
 
     Ranked candidates use a research-only eligibility policy. HOLD may reach
     Backtest when classification/evidence/score gates pass, while SELL,
-    STRONG_SELL and Scanner fail-closed rows remain blocked. This does not grant
-    Risk or Execution authority. Older responses without ranked rows keep the
-    legacy production-selected-position fallback.
+    STRONG_SELL and Scanner fail-closed rows remain blocked. Candidates proven
+    to lack the nested promotion history contract are removed before exact
+    Backtest and the same research selector backfills from the next ranked row.
+    This never grants Risk or Execution authority. Older responses without ranked
+    rows keep the legacy production-selected-position fallback.
     """
 
     if response.get("status") != "success":
@@ -191,11 +490,9 @@ def extract_backtest_symbols(response: Dict[str, Any]) -> List[str]:
 
     ranked_rows = data.get("ranked_candidates") or []
     if isinstance(ranked_rows, list) and ranked_rows:
-        research_selection = select_research_backtest_candidates(
-            ranked_rows,
-            min_final_score=_research_backtest_threshold(data),
-        )
+        research_selection, history_gate = _history_gate_research_selection(data)
         data["research_backtest_selection"] = research_selection
+        data["pre_backtest_history_gate"] = history_gate
         positions = research_selection.get("selected") or []
     else:
         positions = data.get("pre_backtest_selected_positions") or []
@@ -361,6 +658,12 @@ def main() -> None:
         print(f"Scanner preselection failed: {exc}", file=sys.stderr)
         raise SystemExit(1) from exc
 
+    response_data = response.get("data") if isinstance(response, dict) else None
+    history_gate = (
+        response_data.get("pre_backtest_history_gate")
+        if isinstance(response_data, dict)
+        else None
+    )
     report.update(
         {
             "status": "success",
@@ -369,6 +672,7 @@ def main() -> None:
             "attempts_used": attempts_used,
             "response": response,
             "backtest_symbols": symbols,
+            "pre_backtest_history_gate": history_gate,
         }
     )
     _write_report(args.output, report)
@@ -379,11 +683,15 @@ def main() -> None:
         status="success",
         report_path=args.output,
     )
+    rejected = []
+    if isinstance(history_gate, dict):
+        rejected = history_gate.get("rejected_symbols") or []
     print(
         "Scanner preselection complete: "
         f"attempts={attempts_used}, "
         f"outcome={report['outcome']}, "
-        f"symbols={','.join(symbols) if symbols else '<none>'}"
+        f"symbols={','.join(symbols) if symbols else '<none>'}, "
+        f"history_rejected={','.join(rejected) if rejected else '<none>'}"
     )
 
 
