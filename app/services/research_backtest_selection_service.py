@@ -5,7 +5,8 @@ from typing import Any, Dict, Iterable, Mapping
 
 from ..strategy_bucket_classifier import AUTO_CLASSIFY_THRESHOLD, KNOWN_BUCKETS
 
-RESEARCH_BACKTEST_POLICY_VERSION = "manager-research-backtest-v1"
+RESEARCH_BACKTEST_POLICY_VERSION = "manager-research-backtest-v2"
+RESEARCH_RERANKER_VERSION = "manager-research-reranker-v2"
 RESEARCH_ALLOWED_VERDICTS = {"hold", "buy", "strong_buy"}
 DEFAULT_RESEARCH_BUCKET_LIMITS = {
     "core_dividend": 2,
@@ -20,6 +21,17 @@ def _decimal(value: Any) -> Decimal:
         return Decimal(str(value if value not in (None, "") else 0))
     except Exception:
         return Decimal("0")
+
+
+def _float(value: Any) -> float:
+    try:
+        return float(value if value not in (None, "") else 0.0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _mapping(value: Any) -> Mapping[str, Any]:
+    return value if isinstance(value, Mapping) else {}
 
 
 def _final_score(row: Mapping[str, Any]) -> Decimal:
@@ -61,6 +73,129 @@ def _scanner_opportunity_fail_closed(row: Mapping[str, Any]) -> bool:
     return bool(profile.get("fail_closed"))
 
 
+def _candidate_scorecard(row: Mapping[str, Any]) -> Mapping[str, Any]:
+    direct = row.get("candidate_score_v1")
+    if isinstance(direct, Mapping):
+        return direct
+    score_breakdown = _mapping(row.get("score_breakdown"))
+    nested = score_breakdown.get("candidate_score_v1")
+    return nested if isinstance(nested, Mapping) else {}
+
+
+def _candidate_score_points(row: Mapping[str, Any]) -> float | None:
+    scorecard = _candidate_scorecard(row)
+    if not scorecard:
+        return None
+    raw = scorecard.get("score")
+    if raw in (None, ""):
+        return None
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        return None
+    return max(0.0, min(value, 10.0))
+
+
+def _hard_gate_summary(row: Mapping[str, Any]) -> tuple[int, int]:
+    gates = _mapping(_candidate_scorecard(row).get("hard_gates"))
+    if not gates:
+        return 0, 0
+    total = len(gates)
+    passed = sum(value is True for value in gates.values())
+    return passed, total
+
+
+def _reward_risk(row: Mapping[str, Any]) -> float | None:
+    scorecard = _candidate_scorecard(row)
+    criteria = _mapping(scorecard.get("criteria"))
+    opportunity = _mapping(criteria.get("opportunity"))
+    raw = opportunity.get("reward_risk")
+    if raw in (None, ""):
+        return None
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        return None
+    return value if value >= 0 else None
+
+
+def _evidence_coverage(row: Mapping[str, Any]) -> float | None:
+    coverage = _mapping(_candidate_scorecard(row).get("evidence_coverage"))
+    values: list[float] = []
+    for key in ("fundamental", "technical", "scanner_analysis"):
+        raw = coverage.get(key)
+        if raw in (None, ""):
+            continue
+        try:
+            value = float(raw)
+        except (TypeError, ValueError):
+            continue
+        values.append(max(0.0, min(value, 1.0)))
+    if not values:
+        return None
+    return sum(values) / len(values)
+
+
+def _bucket_confidence(row: Mapping[str, Any]) -> float:
+    return max(0.0, min(_float(row.get("bucket_confidence")), 1.0))
+
+
+def _research_rank_key(row: Mapping[str, Any]) -> tuple[Any, ...]:
+    """Prefer evidence likely to survive later gates without making it binding.
+
+    Candidate-score.v1 is observational, but once it exists it is a better research
+    ordering signal than final_opportunity_score alone because it carries the same
+    fundamental, technical, relative-strength, volume and reward/risk evidence that
+    Manager audits before production. Missing scorecards preserve legacy ordering.
+    """
+
+    score = _candidate_score_points(row)
+    hard_passed, hard_total = _hard_gate_summary(row)
+    hard_ratio = hard_passed / hard_total if hard_total else 0.0
+    reward_risk = _reward_risk(row)
+    coverage = _evidence_coverage(row)
+    final_score = float(_final_score(row))
+
+    if score is None:
+        return (
+            0,
+            final_score,
+            _bucket_confidence(row),
+            0.0,
+            0.0,
+            0.0,
+        )
+    return (
+        1,
+        score,
+        hard_ratio,
+        reward_risk if reward_risk is not None else -1.0,
+        coverage if coverage is not None else -1.0,
+        final_score,
+        _bucket_confidence(row),
+    )
+
+
+def _reranker_evidence(row: Mapping[str, Any]) -> Dict[str, Any]:
+    score = _candidate_score_points(row)
+    hard_passed, hard_total = _hard_gate_summary(row)
+    return {
+        "reranker_version": RESEARCH_RERANKER_VERSION,
+        "candidate_score_available": score is not None,
+        "candidate_score": score,
+        "candidate_score_max": 10,
+        "candidate_hard_gates_passed": hard_passed,
+        "candidate_hard_gates_total": hard_total,
+        "reward_risk": _reward_risk(row),
+        "evidence_coverage": _evidence_coverage(row),
+        "final_opportunity_score": float(_final_score(row)),
+        "bucket_confidence": _bucket_confidence(row),
+        "ordering_only": True,
+        "production_binding": False,
+        "thresholds_relaxed": False,
+    }
+
+
 def _research_eligible(
     row: Mapping[str, Any],
     *,
@@ -98,10 +233,11 @@ def select_research_backtest_candidates(
 ) -> Dict[str, Any]:
     """Select broker-isolated research candidates for exact Backtest.
 
-    This selector intentionally differs from the production entry selector:
-    a HOLD verdict may proceed to historical Backtest when classification,
-    evidence and score gates pass. SELL/STRONG_SELL and explicit fail-closed
-    Scanner evidence remain blocked. The result has no Risk/Execution authority.
+    HOLD remains research-eligible when the existing classification, evidence and
+    score gates pass. Within each bucket, candidate-score.v1 evidence reranks the
+    eligible set before scarce exact-Backtest slots are consumed. The 10-point score
+    is ordering-only here: it does not become a production gate and no Risk/Execution
+    authority is granted.
     """
 
     threshold = Decimal(str(min_final_score))
@@ -120,6 +256,7 @@ def select_research_backtest_candidates(
                 "final_opportunity_score": float(_final_score(row)),
                 "eligible": eligible,
                 "reasons": reasons,
+                "reranker": _reranker_evidence(row),
             }
         )
 
@@ -130,7 +267,7 @@ def select_research_backtest_candidates(
             if str(row.get("strategy_bucket") or row.get("bucket") or "") == bucket
             and _research_eligible(row, threshold=threshold)[0]
         ]
-        eligible_rows.sort(key=_final_score, reverse=True)
+        eligible_rows.sort(key=_research_rank_key, reverse=True)
         limit = max(0, int(limits.get(bucket, 0)))
         for row in eligible_rows[:limit]:
             symbol = str(row.get("symbol") or row.get("ticker") or "").strip().upper()
@@ -145,6 +282,7 @@ def select_research_backtest_candidates(
                     "evidence_gate_passed": bool(row.get("evidence_gate_passed", True)),
                     "final_verdict": _verdict(row),
                     "final_opportunity_score": float(_final_score(row)),
+                    "research_reranker": _reranker_evidence(row),
                     "selection_lane": "research_backtest",
                     "production_entry_authorized": False,
                     "risk_execution_authorized": False,
@@ -153,12 +291,19 @@ def select_research_backtest_candidates(
 
     return {
         "policy_version": RESEARCH_BACKTEST_POLICY_VERSION,
+        "reranker_version": RESEARCH_RERANKER_VERSION,
         "min_final_score": float(threshold),
         "allowed_verdicts": sorted(RESEARCH_ALLOWED_VERDICTS),
         "auto_classify_threshold": AUTO_CLASSIFY_THRESHOLD,
         "selected_count": len(selected),
         "selected": selected,
         "evaluations": evaluations,
+        "reranker_policy": {
+            "candidate_score_is_ordering_only": True,
+            "legacy_fallback": "final_opportunity_score",
+            "production_binding": False,
+            "thresholds_relaxed": False,
+        },
         "production_entry_authorized": False,
         "risk_execution_authorized": False,
     }
