@@ -71,6 +71,11 @@ services:
       TRADING_MODE: PAPER
       APCA_API_KEY_ID: ${ALPACA_API_KEY_ID:?ALPACA_API_KEY_ID is required}
       APCA_API_SECRET_KEY: ${ALPACA_SECRET_KEY:?ALPACA_SECRET_KEY is required}
+      SCANNER_FUNDAMENTAL_CACHE_ENABLED: "true"
+      SCANNER_FUNDAMENTAL_CACHE_TTL_SECONDS: ${SCANNER_FUNDAMENTAL_CACHE_TTL_SECONDS:-21600}
+      SCANNER_FUNDAMENTAL_CACHE_DIR: /code/.cache/scanner/fundamentals
+    volumes:
+      - ./.cache/scanner/fundamentals:/code/.cache/scanner/fundamentals
 
   execution-agent:
     environment:
