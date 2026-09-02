@@ -1,0 +1,137 @@
+name: Hourly NO_CANDIDATE Diagnostic Funnel
+run-name: Diagnostic funnel · source run #${{ github.event.workflow_run.run_number || inputs.run_id }}
+
+on:
+  workflow_run:
+    workflows:
+      - Hourly Auto Trading
+    types:
+      - completed
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: "Hourly Auto Trading workflow run ID to inspect"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  build-diagnostic-funnel:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      SOURCE_RUN_ID: ${{ github.event.workflow_run.id || inputs.run_id }}
+      SOURCE_ARTIFACT_NAME: hourly-auto-trading-report
+      SOURCE_REPORT_NAME: hourly-pre-backtest-discovery.json
+      OUTPUT_JSON: reports/hourly-profitability-funnel.json
+      OUTPUT_MARKDOWN: reports/hourly-profitability-funnel.md
+    steps:
+      - name: Checkout Manager_Agent
+        uses: actions/checkout@v6
+
+      - name: Validate source run id
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! [[ "${SOURCE_RUN_ID}" =~ ^[0-9]+$ ]]; then
+            echo "Invalid source run id: ${SOURCE_RUN_ID}" >&2
+            exit 2
+          fi
+
+      - name: Download hourly trading audit artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf source-reports
+          mkdir -p source-reports
+          gh run download "${SOURCE_RUN_ID}" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --name "${SOURCE_ARTIFACT_NAME}" \
+            --dir source-reports
+
+      - name: Resolve Scanner preselection report
+        id: source_report
+        shell: bash
+        run: |
+          set -euo pipefail
+          report="$(find source-reports -type f -name "${SOURCE_REPORT_NAME}" -print -quit)"
+          if [ -z "${report}" ]; then
+            echo "Missing ${SOURCE_REPORT_NAME} in ${SOURCE_ARTIFACT_NAME} from run ${SOURCE_RUN_ID}." >&2
+            echo "Downloaded files:" >&2
+            find source-reports -maxdepth 4 -type f -print >&2 || true
+            exit 3
+          fi
+          echo "path=${report}" >> "${GITHUB_OUTPUT}"
+
+      - name: Build NO_CANDIDATE diagnostic funnel
+        shell: bash
+        run: |
+          set -euo pipefail
+          python scripts/build_profitability_funnel.py \
+            --input "${{ steps.source_report.outputs.path }}" \
+            --output "${OUTPUT_JSON}" \
+            --markdown "${OUTPUT_MARKDOWN}"
+
+      - name: Verify diagnostic safety contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          path = Path(os.environ["OUTPUT_JSON"])
+          payload = json.loads(path.read_text(encoding="utf-8"))
+
+          assert payload.get("schema_version") == "profitability-funnel.v2"
+          assert isinstance(payload.get("stages"), list)
+          assert isinstance(payload.get("active_bottlenecks"), list)
+
+          safety = payload.get("safety") or {}
+          assert safety.get("purpose") == "diagnostic_only"
+          assert safety.get("scanner_data_quality_threshold_relaxed") is False
+          assert safety.get("production_opportunity_threshold_relaxed") is False
+          assert safety.get("risk_thresholds_relaxed") is False
+          assert safety.get("investability_thresholds_relaxed") is False
+          assert safety.get("shadow_broker_order_authorized") is False
+
+          health = payload.get("health") or {}
+          primary = payload.get("primary_bottleneck") or {}
+          print(
+              "Diagnostic verified: "
+              f"production_candidates={health.get('production_candidate_count', 0)}, "
+              f"research_candidates={health.get('research_candidate_count', 0)}, "
+              f"primary_bottleneck={primary.get('stage', 'none')}"
+          )
+          PY
+
+      - name: Publish diagnostic to workflow summary
+        if: always()
+        shell: bash
+        run: |
+          if [ -f "${OUTPUT_MARKDOWN}" ]; then
+            cat "${OUTPUT_MARKDOWN}" >> "${GITHUB_STEP_SUMMARY}"
+          else
+            {
+              echo "# Hourly NO_CANDIDATE Diagnostic Funnel"
+              echo
+              echo "Diagnostic report was not generated. Inspect the failed step and source trading artifact."
+              echo
+              echo "Source run: \`${SOURCE_RUN_ID}\`"
+            } >> "${GITHUB_STEP_SUMMARY}"
+          fi
+
+      - name: Upload diagnostic funnel artifact
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: hourly-no-candidate-diagnostic-funnel
+          path: reports/
+          if-no-files-found: warn
+          retention-days: 30
