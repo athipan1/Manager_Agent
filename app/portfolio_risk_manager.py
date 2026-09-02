@@ -2,6 +2,10 @@ from typing import List, Dict, Any, Optional, Union
 from decimal import Decimal
 from .risk_manager import assess_trade
 from .models import Position
+from .services.strategy_aware_sizing_service import (
+    STRATEGY_AWARE_SIZING_POLICY_VERSION,
+    strategy_aware_size_multiplier_from_candidate,
+)
 from .stock_risk_context import build_stock_risk_context
 
 
@@ -137,6 +141,32 @@ def _symbol_session_context(base_context: Optional[Dict[str, Any]], symbol: str)
     return context
 
 
+def _strategy_aware_risk_cap(
+    result: Dict[str, Any],
+    base_max_position_pct: Decimal,
+) -> tuple[Decimal, float]:
+    multiplier = strategy_aware_size_multiplier_from_candidate(
+        result.get("scanner_candidate") or {}
+    )
+    return base_max_position_pct * Decimal(str(multiplier)), multiplier
+
+
+def _annotate_strategy_aware_sizing(
+    decision: Dict[str, Any],
+    *,
+    base_max_position_pct: Decimal,
+    effective_max_position_pct: Decimal,
+    multiplier: float,
+) -> Dict[str, Any]:
+    decision["scanner_opportunity_size_multiplier"] = multiplier
+    decision["base_max_position_pct"] = float(base_max_position_pct)
+    decision["effective_max_position_pct"] = float(effective_max_position_pct)
+    decision["scanner_opportunity_sizing_policy_version"] = (
+        STRATEGY_AWARE_SIZING_POLICY_VERSION
+    )
+    return decision
+
+
 def assess_portfolio_trades(analysis_results: List[Dict[str, Any]], cash_balance: Decimal, existing_positions: List[Position], per_request_risk_budget: Decimal, max_total_exposure: Decimal, risk_per_trade: Decimal, fixed_stop_loss_pct: Decimal, enable_technical_stop: bool, max_position_pct: Decimal, min_position_value: Decimal, open_orders_exposure: Decimal = Decimal("0"), margin_multiplier: Decimal = Decimal("1"), session_risk_context: Optional[Dict[str, Any]] = None, account_id: Optional[Union[int, str]] = None, correlation_id: Optional[str] = None) -> List[Dict[str, Any]]:
     portfolio_value = cash_balance + sum(_position_exposure(p) for p in existing_positions)
     manager = PortfolioRiskManager(portfolio_value=portfolio_value, existing_positions=existing_positions, per_request_risk_budget=per_request_risk_budget, max_total_exposure=max_total_exposure, min_position_value=min_position_value)
@@ -164,9 +194,57 @@ def assess_portfolio_trades(analysis_results: List[Dict[str, Any]], cash_balance
         current_position = next((p for p in existing_positions if _position_symbol(p) == str(ticker).upper()), None)
         entry_price_raw = _current_price_from_result(result)
         technical_stop_loss_raw = _technical_stop_from_result(result)
+        effective_max_position_pct, scanner_size_multiplier = _strategy_aware_risk_cap(
+            result,
+            max_position_pct,
+        )
         stock_context = build_stock_risk_context(ticker, existing_positions, result)
-        initial_buy_decision = assess_trade(portfolio_value=portfolio_value, risk_per_trade=risk_per_trade, fixed_stop_loss_pct=fixed_stop_loss_pct, enable_technical_stop=enable_technical_stop, max_position_pct=max_position_pct, symbol=ticker, action=result["final_verdict"], entry_price=entry_price_raw, technical_stop_loss=Decimal(str(technical_stop_loss_raw)) if technical_stop_loss_raw is not None else None, current_position_size=int(_position_quantity(current_position)), current_symbol_exposure=_position_exposure(current_position), current_total_exposure=manager.exposure_before_next_trade(), open_orders_exposure=open_orders_exposure, margin_multiplier=margin_multiplier, session_risk_context=_symbol_session_context(session_risk_context, ticker), stock_risk_context=stock_context, account_id=account_id, correlation_id=correlation_id)
+        stock_context["scanner_opportunity_size_multiplier"] = scanner_size_multiplier
+        stock_context["scanner_opportunity_sizing_policy_version"] = (
+            STRATEGY_AWARE_SIZING_POLICY_VERSION
+        )
+        stock_context["base_max_position_pct"] = float(max_position_pct)
+        stock_context["effective_max_position_pct"] = float(
+            effective_max_position_pct
+        )
+
+        if scanner_size_multiplier <= 0.0:
+            blocked_decision = {
+                "approved": False,
+                "reason": "Strategy-aware evidence is unsafe, unverified, or marked as threshold-relaxed; Risk_Agent was not called.",
+                "symbol": ticker,
+                "action": result["final_verdict"],
+                "entry_price": entry_price_raw,
+                "position_size": 0,
+                "quantity": 0,
+                "final_quantity": 0,
+                "risk_amount": Decimal("0"),
+                "status": "blocked_by_strategy_aware_safety",
+                "stock_risk_context": stock_context,
+            }
+            _annotate_strategy_aware_sizing(
+                blocked_decision,
+                base_max_position_pct=max_position_pct,
+                effective_max_position_pct=effective_max_position_pct,
+                multiplier=scanner_size_multiplier,
+            )
+            final_decisions.append(blocked_decision)
+            continue
+
+        initial_buy_decision = assess_trade(portfolio_value=portfolio_value, risk_per_trade=risk_per_trade, fixed_stop_loss_pct=fixed_stop_loss_pct, enable_technical_stop=enable_technical_stop, max_position_pct=effective_max_position_pct, symbol=ticker, action=result["final_verdict"], entry_price=entry_price_raw, technical_stop_loss=Decimal(str(technical_stop_loss_raw)) if technical_stop_loss_raw is not None else None, current_position_size=int(_position_quantity(current_position)), current_symbol_exposure=_position_exposure(current_position), current_total_exposure=manager.exposure_before_next_trade(), open_orders_exposure=open_orders_exposure, margin_multiplier=margin_multiplier, session_risk_context=_symbol_session_context(session_risk_context, ticker), stock_risk_context=stock_context, account_id=account_id, correlation_id=correlation_id)
+        _annotate_strategy_aware_sizing(
+            initial_buy_decision,
+            base_max_position_pct=max_position_pct,
+            effective_max_position_pct=effective_max_position_pct,
+            multiplier=scanner_size_multiplier,
+        )
         final_buy_decision = manager.evaluate_buy(initial_buy_decision)
+        _annotate_strategy_aware_sizing(
+            final_buy_decision,
+            base_max_position_pct=max_position_pct,
+            effective_max_position_pct=effective_max_position_pct,
+            multiplier=scanner_size_multiplier,
+        )
         final_decisions.append(final_buy_decision)
 
     return final_decisions

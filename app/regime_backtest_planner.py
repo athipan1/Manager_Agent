@@ -4,6 +4,10 @@ from copy import deepcopy
 from typing import Any, Dict, List
 
 from .market_regime_contract import evaluate_market_regime_gate
+from .services.strategy_aware_sizing_service import (
+    STRATEGY_AWARE_SIZING_POLICY_VERSION,
+    strategy_aware_size_multiplier,
+)
 
 
 DEFAULT_COMPARE_STRATEGIES = [
@@ -133,8 +137,8 @@ def build_regime_backtest_plan(
 
     Market_Regime_Agent owns the strategy allow-list. Optional Scanner opportunity
     evidence can only narrow that list; it can never add a strategy that Market
-    Regime disallowed. This function remains planning-only and never calls broker
-    or Execution_Agent.
+    Regime disallowed. Strategy-aware Scanner qualification may additionally reduce
+    size, but never increases the Market Regime or Risk budget.
     """
 
     gate = market_gate or evaluate_market_regime_gate({}, recommendation)
@@ -148,10 +152,14 @@ def build_regime_backtest_plan(
     exposure_cap = _clamp_ratio(
         _float_value(recommendation.get("exposure_cap"), 1.0)
     )
+    scanner_opportunity_size_multiplier = strategy_aware_size_multiplier(
+        opportunity_profile
+    )
     effective_size_multiplier = min(
         position_size_multiplier,
         risk_budget_multiplier,
         exposure_cap,
+        scanner_opportunity_size_multiplier,
     )
 
     base_max_position_pct = _float_value(backtest_payload.get("max_position_pct"), 0.10)
@@ -190,6 +198,8 @@ def build_regime_backtest_plan(
         "position_size_multiplier": position_size_multiplier,
         "risk_budget_multiplier": risk_budget_multiplier,
         "exposure_cap": exposure_cap,
+        "scanner_opportunity_size_multiplier": scanner_opportunity_size_multiplier,
+        "scanner_opportunity_sizing_policy_version": STRATEGY_AWARE_SIZING_POLICY_VERSION,
         "effective_size_multiplier": effective_size_multiplier,
         "allowed_strategies": compatible_strategies,
         "market_regime_allowed_strategies": regime_allowed_strategies,
