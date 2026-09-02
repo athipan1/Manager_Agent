@@ -15,6 +15,7 @@ DEFAULT_COMPARE_STRATEGIES = [
 
 NO_TRADE_STRATEGIES = {"no_trade", "cash", "cash_heavy"}
 DEFAULT_MIN_STRATEGY_AFFINITY = 0.60
+STRATEGY_AWARE_SIZING_POLICY_VERSION = "manager-strategy-aware-sizing.v1"
 
 
 def _float_value(value: Any, default: float) -> float:
@@ -28,6 +29,39 @@ def _float_value(value: Any, default: float) -> float:
 
 def _clamp_ratio(value: float) -> float:
     return max(0.0, min(value, 1.0))
+
+
+def _strategy_aware_size_multiplier(
+    opportunity_profile: Dict[str, Any] | None,
+) -> float:
+    """Cap position size for candidates admitted by strategy-aware evidence.
+
+    Generic Scanner-qualified candidates preserve their existing size. A candidate
+    that only becomes qualified through Scanner's strategy-aware path is allowed to
+    continue through Backtest/Risk, but starts at 0.25x or 0.50x depending on its
+    generic opportunity score. This converts marginal confidence into smaller risk
+    rather than silently granting a full-size position.
+    """
+
+    if not opportunity_profile:
+        return 1.0
+    if str(opportunity_profile.get("status") or "").strip().lower() != "qualified":
+        return 1.0
+
+    qualification = opportunity_profile.get("qualification_policy")
+    qualification = qualification if isinstance(qualification, dict) else {}
+    if str(qualification.get("mode") or "").strip().lower() != "strategy_aware":
+        return 1.0
+
+    generic_score = _float_value(
+        qualification.get("generic_score"),
+        _float_value(opportunity_profile.get("opportunity_score"), 0.0),
+    )
+    if generic_score < 0.60:
+        return 0.25
+    if generic_score < 0.70:
+        return 0.50
+    return 1.0
 
 
 def _strategy_value(strategy: Any) -> str:
@@ -133,8 +167,8 @@ def build_regime_backtest_plan(
 
     Market_Regime_Agent owns the strategy allow-list. Optional Scanner opportunity
     evidence can only narrow that list; it can never add a strategy that Market
-    Regime disallowed. This function remains planning-only and never calls broker
-    or Execution_Agent.
+    Regime disallowed. Strategy-aware Scanner qualification may additionally reduce
+    size, but never increases the Market Regime or Risk budget.
     """
 
     gate = market_gate or evaluate_market_regime_gate({}, recommendation)
@@ -148,10 +182,14 @@ def build_regime_backtest_plan(
     exposure_cap = _clamp_ratio(
         _float_value(recommendation.get("exposure_cap"), 1.0)
     )
+    scanner_opportunity_size_multiplier = _strategy_aware_size_multiplier(
+        opportunity_profile
+    )
     effective_size_multiplier = min(
         position_size_multiplier,
         risk_budget_multiplier,
         exposure_cap,
+        scanner_opportunity_size_multiplier,
     )
 
     base_max_position_pct = _float_value(backtest_payload.get("max_position_pct"), 0.10)
@@ -190,6 +228,8 @@ def build_regime_backtest_plan(
         "position_size_multiplier": position_size_multiplier,
         "risk_budget_multiplier": risk_budget_multiplier,
         "exposure_cap": exposure_cap,
+        "scanner_opportunity_size_multiplier": scanner_opportunity_size_multiplier,
+        "scanner_opportunity_sizing_policy_version": STRATEGY_AWARE_SIZING_POLICY_VERSION,
         "effective_size_multiplier": effective_size_multiplier,
         "allowed_strategies": compatible_strategies,
         "market_regime_allowed_strategies": regime_allowed_strategies,
