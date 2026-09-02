@@ -207,6 +207,30 @@ def assess_portfolio_trades(analysis_results: List[Dict[str, Any]], cash_balance
         stock_context["effective_max_position_pct"] = float(
             effective_max_position_pct
         )
+
+        if scanner_size_multiplier <= 0.0:
+            blocked_decision = {
+                "approved": False,
+                "reason": "Strategy-aware evidence is unsafe, unverified, or marked as threshold-relaxed; Risk_Agent was not called.",
+                "symbol": ticker,
+                "action": result["final_verdict"],
+                "entry_price": entry_price_raw,
+                "position_size": 0,
+                "quantity": 0,
+                "final_quantity": 0,
+                "risk_amount": Decimal("0"),
+                "status": "blocked_by_strategy_aware_safety",
+                "stock_risk_context": stock_context,
+            }
+            _annotate_strategy_aware_sizing(
+                blocked_decision,
+                base_max_position_pct=max_position_pct,
+                effective_max_position_pct=effective_max_position_pct,
+                multiplier=scanner_size_multiplier,
+            )
+            final_decisions.append(blocked_decision)
+            continue
+
         initial_buy_decision = assess_trade(portfolio_value=portfolio_value, risk_per_trade=risk_per_trade, fixed_stop_loss_pct=fixed_stop_loss_pct, enable_technical_stop=enable_technical_stop, max_position_pct=effective_max_position_pct, symbol=ticker, action=result["final_verdict"], entry_price=entry_price_raw, technical_stop_loss=Decimal(str(technical_stop_loss_raw)) if technical_stop_loss_raw is not None else None, current_position_size=int(_position_quantity(current_position)), current_symbol_exposure=_position_exposure(current_position), current_total_exposure=manager.exposure_before_next_trade(), open_orders_exposure=open_orders_exposure, margin_multiplier=margin_multiplier, session_risk_context=_symbol_session_context(session_risk_context, ticker), stock_risk_context=stock_context, account_id=account_id, correlation_id=correlation_id)
         _annotate_strategy_aware_sizing(
             initial_buy_decision,
