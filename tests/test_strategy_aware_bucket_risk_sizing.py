@@ -153,18 +153,18 @@ def test_generic_qualified_candidate_keeps_original_risk_cap(monkeypatch):
     assert captured["stock_risk_context"]["scanner_opportunity_size_multiplier"] == 1.0
 
 
-def test_unverified_hard_safety_never_receives_a_reduced_risk_cap(monkeypatch):
+def test_unverified_hard_safety_is_blocked_before_risk(monkeypatch):
     _install_selection_and_gate(monkeypatch)
     ranked = _ranked(0.65)
     profile = ranked[0]["scanner_candidate"]["metadata"]["data_bundle"]["opportunity_profile"]
     profile["qualification_policy"]["hard_execution_safe"] = False
-    captured = {}
+    calls = {"count": 0}
 
     def assess_trade(**kwargs):
-        captured.update(kwargs)
+        calls["count"] += 1
         return {"approved": True, "action": "buy", "position_size": 20}
 
-    bridge.build_bucket_risk_decisions(
+    result = bridge.build_bucket_risk_decisions(
         ranked=ranked,
         portfolio_value=Decimal("100000"),
         positions=[],
@@ -179,4 +179,11 @@ def test_unverified_hard_safety_never_receives_a_reduced_risk_cap(monkeypatch):
         margin_multiplier=Decimal("1"),
     )
 
-    assert captured["max_position_pct"] == Decimal("0.20")
+    assert calls["count"] == 0
+    decision = result["bucket_risk_decisions"]["value_rebound"][0]
+    assert decision["approved"] is False
+    assert decision["status"] == "blocked_by_strategy_aware_safety"
+    assert decision["scanner_opportunity_size_multiplier"] == 0.0
+    assert decision["effective_max_position_pct"] == 0.0
+    assert result["summary"]["risk_checks_attempted"] == 0
+    assert result["summary"]["strategy_aware_safety_blocked_count"] == 1
