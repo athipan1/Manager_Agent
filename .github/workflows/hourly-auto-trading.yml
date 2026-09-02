@@ -209,6 +209,15 @@ jobs:
         working-directory: Manager_Agent
         run: python scripts/hourly_paper_preflight.py
 
+      - name: Restore persistent Scanner fundamental cache
+        if: steps.preflight.outputs.paper_automation == 'true'
+        uses: actions/cache@v4
+        with:
+          path: Manager_Agent/.cache/scanner/fundamentals
+          key: scanner-fundamental-v1-${{ runner.os }}-${{ github.ref_name }}-${{ github.run_id }}
+          restore-keys: |
+            scanner-fundamental-v1-${{ runner.os }}-${{ github.ref_name }}-
+
       - name: Configure isolated runtime stack
         working-directory: Manager_Agent
         run: |

@@ -57,6 +57,22 @@ def _evaluation_reason_counts(gate: dict[str, Any]) -> dict[str, int]:
     return dict(sorted(counter.items()))
 
 
+def _top_reason_counts(*groups: dict[str, Any], limit: int = 10) -> list[dict[str, Any]]:
+    counter: Counter[str] = Counter()
+    for group in groups:
+        for code, raw_count in group.items():
+            text = str(code or "").strip()
+            if not text:
+                continue
+            count = _int(raw_count)
+            if count > 0:
+                counter[text] += count
+    return [
+        {"code": code, "count": count}
+        for code, count in counter.most_common(max(1, limit))
+    ]
+
+
 def _active_bottlenecks(
     *,
     attempted: int,
@@ -215,6 +231,8 @@ def build_profitability_funnel(report: dict[str, Any]) -> dict[str, Any]:
     scanner_metadata = _dict(data.get("scanner_metadata"))
     data_quality_gate = _dict(scanner_metadata.get("scanner_data_quality_gate"))
     opportunity_gate = _dict(scanner_metadata.get("scanner_opportunity_gate"))
+    fundamental_cache = _dict(scanner_metadata.get("fundamental_cache"))
+    provider_control = _dict(scanner_metadata.get("adaptive_provider_control"))
     bucket_selection = _dict(data.get("bucket_selection"))
     bucket_summary = _dict(bucket_selection.get("summary"))
     allocation_plan = _dict(data.get("allocation_plan"))
@@ -273,6 +291,27 @@ def build_profitability_funnel(report: dict[str, Any]) -> dict[str, Any]:
         len(_list(data.get("pre_backtest_selected_positions"))),
     )
 
+    scanner_error_reasons = _dict(scanner_metadata.get("error_categories"))
+    data_quality_reasons = _evaluation_reason_counts(data_quality_gate)
+    opportunity_reasons = _evaluation_reason_counts(opportunity_gate)
+    investability_reasons = _aggregate_codes(
+        _list(investability_gate.get("rejected")),
+        "rejection_codes",
+    )
+    top_rejection_reasons = _top_reason_counts(
+        scanner_error_reasons,
+        data_quality_reasons,
+        opportunity_reasons,
+        investability_reasons,
+    )
+
+    cache_hits = _int(fundamental_cache.get("hit_count"))
+    cache_misses = _int(fundamental_cache.get("miss_count"))
+    provider_requests_avoided = _int(
+        provider_control.get("provider_request_avoided_count")
+    )
+    provider_requests_saved = cache_hits + provider_requests_avoided
+
     stages = [
         {"name": "universe_requested", "count": requested},
         {"name": "scanner_attempted", "count": attempted},
@@ -319,24 +358,52 @@ def build_profitability_funnel(report: dict[str, Any]) -> dict[str, Any]:
             "scanner_provider_pressure_detected": bool(
                 scanner_metadata.get("provider_pressure_detected")
             ),
-            "scanner_error_categories": _dict(
-                scanner_metadata.get("error_categories")
-            ),
+            "scanner_error_categories": scanner_error_reasons,
+            "fundamental_cache": {
+                "enabled": bool(fundamental_cache.get("enabled")),
+                "schema_version": fundamental_cache.get("schema_version"),
+                "ttl_seconds": _int(fundamental_cache.get("ttl_seconds")),
+                "entry_count": _int(fundamental_cache.get("entry_count")),
+                "hit_count": cache_hits,
+                "miss_count": cache_misses,
+                "hit_rate": fundamental_cache.get("hit_rate", 0.0),
+                "provider_requests_saved_by_cache": cache_hits,
+                "provider_requests_avoided_by_circuit_breaker": provider_requests_avoided,
+                "provider_requests_saved_or_avoided": provider_requests_saved,
+                "production_execution_evidence_reused": bool(
+                    fundamental_cache.get("production_execution_evidence_reused", False)
+                ),
+            },
+            "provider_control": {
+                "provider_request_attempts": _int(
+                    provider_control.get("provider_request_attempts")
+                ),
+                "recovered_rate_limit_events": _int(
+                    provider_control.get("recovered_rate_limit_events")
+                ),
+                "unresolved_rate_limit_events": _int(
+                    provider_control.get("unresolved_rate_limit_events")
+                ),
+                "provider_circuit_opened": bool(
+                    provider_control.get("provider_circuit_opened")
+                ),
+                "trading_thresholds_relaxed": bool(
+                    provider_control.get("trading_thresholds_relaxed", False)
+                ),
+            },
+            "top_rejection_reasons": top_rejection_reasons,
             "data_quality_gate_decision": data_quality_gate.get("decision"),
             "data_quality_threshold": data_quality_gate.get("min_coverage_ratio"),
             "data_quality_threshold_relaxed": bool(data_quality_gate.get("threshold_relaxed", False)),
             "data_quality_coverage_scope_counts": _dict(data_quality_gate.get("coverage_scope_counts")),
-            "data_quality_rejection_reasons": _evaluation_reason_counts(data_quality_gate),
+            "data_quality_rejection_reasons": data_quality_reasons,
             "opportunity_gate_decision": opportunity_gate.get("decision"),
-            "opportunity_rejection_reasons": _evaluation_reason_counts(opportunity_gate),
+            "opportunity_rejection_reasons": opportunity_reasons,
             "production_candidate_count": production_candidates,
             "research_candidate_count": research_candidates,
             "shadow_execution_authorized": False,
             "quarantine_count": _int(bucket_summary.get("quarantine_count")),
-            "investability_rejection_codes": _aggregate_codes(
-                _list(investability_gate.get("rejected")),
-                "rejection_codes",
-            ),
+            "investability_rejection_codes": investability_reasons,
             "backtest_symbols": backtest_symbols,
         },
         "primary_bottleneck": bottlenecks[0] if bottlenecks else None,
@@ -366,6 +433,8 @@ def render_markdown(funnel: dict[str, Any]) -> str:
             lines.append(f"- {stage.get('name')}: `{stage.get('count', 0)}`")
 
     health = _dict(funnel.get("health"))
+    cache = _dict(health.get("fundamental_cache"))
+    provider = _dict(health.get("provider_control"))
     lines.extend(
         [
             "",
@@ -379,13 +448,35 @@ def render_markdown(funnel: dict[str, Any]) -> str:
             f"- Quarantine count: `{health.get('quarantine_count', 0)}`",
             f"- Backtest symbols: `{', '.join(health.get('backtest_symbols') or []) or '<none>'}`",
             "",
+            "## Fundamental cache",
+            f"- Enabled: `{cache.get('enabled', False)}`",
+            f"- Entries: `{cache.get('entry_count', 0)}`",
+            f"- Hits / misses: `{cache.get('hit_count', 0)} / {cache.get('miss_count', 0)}`",
+            f"- Hit rate: `{float(cache.get('hit_rate') or 0):.1%}`",
+            f"- TTL seconds: `{cache.get('ttl_seconds', 0)}`",
+            f"- Provider requests saved by cache: `{cache.get('provider_requests_saved_by_cache', 0)}`",
+            f"- Provider requests avoided by circuit breaker: `{cache.get('provider_requests_avoided_by_circuit_breaker', 0)}`",
+            f"- Recovered / unresolved rate limits: `{provider.get('recovered_rate_limit_events', 0)} / {provider.get('unresolved_rate_limit_events', 0)}`",
+            f"- Production execution evidence reused: `{cache.get('production_execution_evidence_reused', False)}`",
+            "",
             "## Gate reasons",
             f"- Data quality: `{json.dumps(health.get('data_quality_rejection_reasons') or {}, sort_keys=True)}`",
             f"- Production opportunity: `{json.dumps(health.get('opportunity_rejection_reasons') or {}, sort_keys=True)}`",
             "",
-            "## Bottlenecks",
+            "## Top rejection reasons",
         ]
     )
+    top_reasons = _list(health.get("top_rejection_reasons"))
+    if not top_reasons:
+        lines.append("- No rejection reason recorded.")
+    else:
+        for reason in top_reasons:
+            if isinstance(reason, dict):
+                lines.append(
+                    f"- `{reason.get('code')}`: `{reason.get('count', 0)}`"
+                )
+
+    lines.extend(["", "## Bottlenecks"])
     bottlenecks = _list(funnel.get("active_bottlenecks"))
     if not bottlenecks:
         lines.append("- No active funnel bottleneck detected.")
