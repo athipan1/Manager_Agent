@@ -1,0 +1,22 @@
+name: Hourly Paper Regular Session Proof
+
+on:
+  push:
+    branches:
+      - ops/hourly-cache-proof-20260902
+    paths:
+      - .github/workflows/hourly-paper-regular-proof.yml
+
+jobs:
+  hourly-paper:
+    uses: ./.github/workflows/hourly-auto-trading.yml
+    with:
+      dry_run: false
+      broker_mode: ALPACA
+      max_universe: "1000"
+      top_n: "10"
+      min_final_score: "0.55"
+      operator_confirmation: "EXECUTE_ALPACA_PAPER"
+      emergency_halt_drill: false
+      authorized_soak_schedule: false
+    secrets: inherit
