@@ -9,7 +9,7 @@ from typing import Any, Iterable, Mapping
 
 COMPATIBILITY_GATE_SCHEMA = "manager-research-strategy-compatibility.v1"
 EXPECTED_BACKTEST_CONTRACT_SCHEMA = "strategy-bucket-compatibility.v1"
-DEFAULT_MIN_COMPATIBLE_STRATEGIES = 2
+DEFAULT_MIN_COMPATIBLE_STRATEGIES = 1
 DEFAULT_MARKET_CONTEXT_PATH = Path("reports/hourly-position-review.json")
 DEFAULT_BACKTEST_READY_URL = "http://localhost:8016/ready"
 
@@ -137,12 +137,14 @@ def preflight_research_strategy_compatibility(
     market_context: Any,
     min_compatible_strategies: int = DEFAULT_MIN_COMPATIBLE_STRATEGIES,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
-    """Remove only rows proven to have too little strategy diversity.
+    """Remove only rows with no usable exact-Backtest strategy intersection.
 
-    Backtest_Agent owns the authoritative bucket mapping. Manager consumes the
-    exported readiness contract and intersects it with the same trusted market
-    regime allow-list that Backtest will apply later. Unknown/unavailable contract
-    evidence is deferred to exact Backtest rather than guessed.
+    Backtest_Agent owns the authoritative bucket mapping and later applies the
+    same per-symbol bucket plus Market Regime intersection to the actual balanced-v1
+    candidate set. Manager therefore needs only one trusted compatible family to
+    justify spending an exact Backtest slot. This is admission-only evidence: it
+    never authorizes production entry, Risk, Execution or broker mutation, and it
+    does not change any Backtest validation or promotion threshold.
     """
 
     minimum = max(1, int(min_compatible_strategies))
@@ -216,6 +218,9 @@ def preflight_research_strategy_compatibility(
             "compatible_strategy_count": len(compatible),
             "minimum_compatible_strategies": minimum,
             "decision": decision,
+            "admission_only": True,
+            "exact_backtest_required": True,
+            "compatible_strategy_families_are_allowlist": True,
             "production_authority_granted": False,
             "risk_execution_authority_granted": False,
             "backtest_thresholds_relaxed": False,
@@ -245,9 +250,18 @@ def preflight_research_strategy_compatibility(
         "minimum_compatible_strategies": minimum,
         "input_count": len(rows),
         "retained_count": len(retained),
+        "rejected_count": len(rejected_symbols),
         "rejected_symbols": rejected_symbols,
+        "unknown_count": len(unknown_symbols),
         "unknown_symbols": unknown_symbols,
         "evaluations": evaluations,
+        "admission_policy": {
+            "at_least_one_compatible_strategy_required": minimum == 1,
+            "exact_backtest_required": True,
+            "compatible_strategy_families_are_allowlist": True,
+            "production_binding": False,
+            "thresholds_relaxed": False,
+        },
         "safety": {
             "production_authority_granted": False,
             "risk_execution_authority_granted": False,
