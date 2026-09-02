@@ -6,11 +6,11 @@ def _recommendation(**overrides):
         "symbol": "SPY",
         "regime": "bull",
         "recommended_action": "trade",
-        "recommended_strategy": "mean_reversion",
+        "recommended_strategy": "trend_following",
         "position_size_multiplier": 1.0,
         "risk_budget_multiplier": 1.0,
         "exposure_cap": 1.0,
-        "allowed_strategies": ["mean_reversion"],
+        "allowed_strategies": ["trend_following"],
         "blocked_strategies": [],
         "data_quality": {"status": "good", "trade_allowed": True},
     }
@@ -22,16 +22,16 @@ def _strategy_aware(score: float):
     return {
         "status": "qualified",
         "opportunity_score": score,
-        "preferred_strategy_hint": "mean_reversion",
+        "preferred_strategy_hint": "trend_following",
         "strategy_affinity": {
-            "trend_following": 0.20,
+            "trend_following": 0.85,
             "breakout": 0.30,
-            "mean_reversion": 0.85,
+            "mean_reversion": 0.20,
         },
         "qualification_policy": {
             "mode": "strategy_aware",
             "generic_score": score,
-            "strategy_name": "mean_reversion",
+            "strategy_name": "trend_following",
             "strategy_affinity": 0.85,
             "hard_execution_safe": True,
             "hard_execution_thresholds_relaxed": False,
@@ -43,8 +43,8 @@ def _generic():
     return {
         "status": "qualified",
         "opportunity_score": 0.82,
-        "preferred_strategy_hint": "mean_reversion",
-        "strategy_affinity": {"mean_reversion": 0.85},
+        "preferred_strategy_hint": "trend_following",
+        "strategy_affinity": {"trend_following": 0.85},
         "qualification_policy": {"mode": "generic", "generic_score": 0.82},
     }
 
