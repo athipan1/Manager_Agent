@@ -105,3 +105,43 @@ def test_hourly_portfolio_risk_keeps_generic_candidate_at_existing_size(monkeypa
     assert captured["max_position_pct"] == Decimal("0.20")
     assert decision["scanner_opportunity_size_multiplier"] == 1.0
     assert decision["effective_max_position_pct"] == 0.2
+
+
+def test_hourly_portfolio_risk_blocks_unsafe_strategy_aware_before_risk_agent(monkeypatch):
+    monkeypatch.setattr(portfolio, "build_stock_risk_context", lambda *a, **k: {})
+    analysis = _analysis(0.65)
+    profile = analysis["scanner_candidate"]["metadata"]["data_bundle"]["opportunity_profile"]
+    profile["qualification_policy"]["hard_execution_safe"] = False
+    calls = {"count": 0}
+
+    def fake_assess_trade(**kwargs):
+        calls["count"] += 1
+        raise AssertionError("Risk_Agent path must not be called for unsafe strategy-aware evidence")
+
+    monkeypatch.setattr(portfolio, "assess_trade", fake_assess_trade)
+
+    decisions = portfolio.assess_portfolio_trades(
+        analysis_results=[analysis],
+        cash_balance=Decimal("100000"),
+        existing_positions=[],
+        per_request_risk_budget=Decimal("0.10"),
+        max_total_exposure=Decimal("0.80"),
+        risk_per_trade=Decimal("0.01"),
+        fixed_stop_loss_pct=Decimal("0.05"),
+        enable_technical_stop=True,
+        max_position_pct=Decimal("0.20"),
+        min_position_value=Decimal("100"),
+        open_orders_exposure=Decimal("0"),
+        margin_multiplier=Decimal("1"),
+        session_risk_context={},
+        account_id=1,
+        correlation_id="strategy-aware-unsafe-test",
+    )
+
+    assert calls["count"] == 0
+    decision = decisions[0]
+    assert decision["approved"] is False
+    assert decision["status"] == "blocked_by_strategy_aware_safety"
+    assert decision["position_size"] == 0
+    assert decision["scanner_opportunity_size_multiplier"] == 0.0
+    assert decision["effective_max_position_pct"] == 0.0
