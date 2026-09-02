@@ -18,6 +18,25 @@ def _report():
                         "missing_financial_statements": 657,
                         "provider_rate_limited": 23,
                     },
+                    "fundamental_cache": {
+                        "schema_version": "scanner-fundamental-candidate-cache.v1",
+                        "enabled": True,
+                        "ttl_seconds": 21600,
+                        "entry_count": 240,
+                        "hit_count": 120,
+                        "miss_count": 880,
+                        "hit_rate": 0.12,
+                        "scope": "broad_fundamental_discovery_only",
+                        "production_execution_evidence_reused": False,
+                    },
+                    "adaptive_provider_control": {
+                        "provider_request_attempts": 430,
+                        "recovered_rate_limit_events": 4,
+                        "unresolved_rate_limit_events": 19,
+                        "provider_circuit_opened": True,
+                        "provider_request_avoided_count": 450,
+                        "trading_thresholds_relaxed": False,
+                    },
                     "scanner_data_quality_gate": {
                         "original_count": 10,
                         "passed_count": 8,
@@ -133,6 +152,30 @@ def test_builds_diagnostic_funnel_without_relaxing_safety():
         "investability_average_dollar_volume_below_minimum": 1,
         "investability_market_cap_below_minimum": 1,
     }
+    assert funnel["health"]["fundamental_cache"] == {
+        "enabled": True,
+        "schema_version": "scanner-fundamental-candidate-cache.v1",
+        "ttl_seconds": 21600,
+        "entry_count": 240,
+        "hit_count": 120,
+        "miss_count": 880,
+        "hit_rate": 0.12,
+        "provider_requests_saved_by_cache": 120,
+        "provider_requests_avoided_by_circuit_breaker": 450,
+        "provider_requests_saved_or_avoided": 570,
+        "production_execution_evidence_reused": False,
+    }
+    assert funnel["health"]["provider_control"] == {
+        "provider_request_attempts": 430,
+        "recovered_rate_limit_events": 4,
+        "unresolved_rate_limit_events": 19,
+        "provider_circuit_opened": True,
+        "trading_thresholds_relaxed": False,
+    }
+    assert funnel["health"]["top_rejection_reasons"][0] == {
+        "code": "missing_financial_statements",
+        "count": 657,
+    }
     assert funnel["primary_bottleneck"]["stage"] == "scanner_provider_coverage"
     assert {row["stage"] for row in funnel["active_bottlenecks"]} >= {
         "scanner_provider_coverage",
@@ -196,5 +239,9 @@ def test_markdown_surfaces_primary_operational_metrics():
     assert "Production candidates: `3`" in markdown
     assert "Shadow research candidates: `5`" in markdown
     assert "Data quality threshold relaxed: `False`" in markdown
+    assert "Fundamental cache" in markdown
+    assert "Hits / misses: `120 / 880`" in markdown
+    assert "Provider requests saved by cache: `120`" in markdown
+    assert "provider_rate_limited" in markdown
     assert "**scanner_provider_coverage**" in markdown
     assert "never authorizes Shadow broker orders" in markdown
