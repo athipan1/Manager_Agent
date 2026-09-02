@@ -4,8 +4,10 @@ on:
   push:
     branches:
       - ops/hourly-cache-proof-20260902
-    paths:
-      - .github/workflows/hourly-paper-regular-proof.yml
+
+permissions:
+  contents: read
+  issues: read
 
 jobs:
   hourly-paper:
@@ -16,7 +18,7 @@ jobs:
       max_universe: "1000"
       top_n: "10"
       min_final_score: "0.55"
-      operator_confirmation: "EXECUTE_ALPACA_PAPER"
+      operator_confirmation: EXECUTE_ALPACA_PAPER
       emergency_halt_drill: false
       authorized_soak_schedule: false
     secrets: inherit
