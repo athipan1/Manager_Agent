@@ -8,6 +8,7 @@ def _recommendation(**overrides):
         "recommended_action": "trade",
         "recommended_strategy": "trend_following",
         "position_size_multiplier": 1.0,
+        "risk_multiplier": 1.0,
         "risk_budget_multiplier": 1.0,
         "exposure_cap": 1.0,
         "allowed_strategies": ["trend_following"],
