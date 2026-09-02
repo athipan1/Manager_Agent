@@ -111,8 +111,9 @@ def build_bucket_risk_decisions(
     observable full stop-loss protection.
 
     Candidates qualified only by Scanner's strategy-aware opportunity policy keep
-    every existing gate but receive a smaller max-position cap before Risk_Agent,
-    ensuring moderate confidence can never become a full-size broker order.
+    every existing gate but receive a smaller max-position cap before Risk_Agent.
+    Unsafe or relaxed strategy-aware evidence is blocked before Risk_Agent so a
+    zero cap can never fall through to a risk-based nonzero quantity.
     """
     selection = select_candidates_by_bucket(
         ranked,
@@ -122,6 +123,7 @@ def build_bucket_risk_decisions(
     decisions: Dict[str, Any] = {}
     checked = 0
     gate_blocked = 0
+    strategy_safety_blocked = 0
     total_exposure = _total_position_exposure(positions)
     broker_orders = open_orders or []
     exposure_snapshot = build_exposure_snapshot(
@@ -210,6 +212,24 @@ def build_bucket_risk_decisions(
                 str(scanner_size_multiplier)
             )
 
+            if scanner_size_multiplier <= 0.0:
+                bucket_decisions.append(
+                    {
+                        "symbol": symbol,
+                        "strategy_bucket": bucket,
+                        "approved": False,
+                        "status": "blocked_by_strategy_aware_safety",
+                        "reason": "strategy-aware evidence is unsafe, unverified, or marked as threshold-relaxed",
+                        "exposure_gate": gate,
+                        "scanner_opportunity_size_multiplier": 0.0,
+                        "base_max_position_pct": float(max_position_pct),
+                        "effective_max_position_pct": 0.0,
+                        "scanner_opportunity_sizing_policy_version": STRATEGY_AWARE_SIZING_POLICY_VERSION,
+                    }
+                )
+                strategy_safety_blocked += 1
+                continue
+
             stock_context = build_stock_risk_context(
                 symbol,
                 positions or [],
@@ -267,6 +287,7 @@ def build_bucket_risk_decisions(
             "risk_checks_attempted": checked,
             "max_checks": max_checks,
             "exposure_gate_blocked_count": gate_blocked,
+            "strategy_aware_safety_blocked_count": strategy_safety_blocked,
             "global_new_entry_blocked": bool(
                 block_on_unprotected_positions
                 and exposure_snapshot.get("unprotected_positions")
