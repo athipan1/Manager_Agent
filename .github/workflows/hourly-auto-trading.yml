@@ -31,7 +31,6 @@ on:
         description: "Explicit Paper execution confirmation from the caller"
         required: false
         default: ""
-        type: string
       emergency_halt_drill:
         description: "Trip, verify and clear the runtime Risk emergency halt before trading"
         required: false
@@ -209,6 +208,15 @@ jobs:
         working-directory: Manager_Agent
         run: python scripts/hourly_paper_preflight.py
 
+      - name: Restore persistent Scanner fundamental cache
+        if: steps.preflight.outputs.paper_automation == 'true'
+        uses: actions/cache@v4
+        with:
+          path: Manager_Agent/.cache/scanner/fundamentals
+          key: scanner-fundamental-v1-${{ runner.os }}-${{ github.ref_name }}-${{ github.run_id }}
+          restore-keys: |
+            scanner-fundamental-v1-${{ runner.os }}-${{ github.ref_name }}-
+
       - name: Configure isolated runtime stack
         working-directory: Manager_Agent
         run: |
@@ -344,7 +352,7 @@ jobs:
           MANAGER_AGENT_URL: http://localhost:8000
           TECHNICAL_AGENT_URL: http://localhost:8002
           FUNDAMENTAL_AGENT_URL: http://localhost:8001
-          MARKET_REGIME_AGENT_URL: http://localhost:8014
+          MARKET_REGIME_AGENT_URL: http://market-regime-agent:8014
           PORTFOLIO_AGENT_URL: http://localhost:8012
           PROFIT_AGENT_URL: http://localhost:8011
           PERFORMANCE_AGENT_URL: http://localhost:8013
