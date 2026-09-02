@@ -34,7 +34,8 @@ def strategy_aware_size_multiplier(opportunity_profile: Any) -> float:
 
     Generic qualification preserves the existing size. Strategy-aware qualification
     converts marginal generic opportunity evidence into smaller exposure rather than
-    weakening any hard quote, spread, Backtest, Risk, or Execution gate.
+    weakening any hard quote, spread, Backtest, Risk, or Execution gate. Malformed or
+    unsafe strategy-aware evidence fails closed with a zero size multiplier.
     """
 
     profile = _mapping(opportunity_profile)
@@ -45,9 +46,9 @@ def strategy_aware_size_multiplier(opportunity_profile: Any) -> float:
     if str(qualification.get("mode") or "").strip().lower() != "strategy_aware":
         return 1.0
     if qualification.get("hard_execution_safe") is not True:
-        return 1.0
+        return 0.0
     if qualification.get("hard_execution_thresholds_relaxed") is True:
-        return 1.0
+        return 0.0
 
     generic_score = _float_value(
         qualification.get("generic_score"),
