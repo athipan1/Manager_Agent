@@ -289,6 +289,16 @@ jobs:
               and row["liquid_spread_sane"] is True
               for row in regular
           ) if regular else None
+          unsafe_regular = [
+              row for row in regular
+              if row["spread_structurally_valid"] is not True
+              or row["liquid_spread_sane"] is not True
+          ]
+          unsafe_spread_promoted = [
+              row["symbol"] for row in unsafe_regular
+              if row["status"] == "qualified"
+              or row["workflow_status"] == "strategy_ready"
+          ]
 
           failures = []
           if atr_coverage < 0.95:
@@ -297,8 +307,11 @@ jobs:
               failures.append(f"relative-volume coverage {rvol_coverage:.1%} < 95%")
           if alpaca_coverage < 0.95:
               failures.append(f"Alpaca provider success {alpaca_coverage:.1%} < 95%")
-          if spread_sanity_applicable and spread_sanity is not True:
-              failures.append("regular-session liquid spread sanity failed")
+          if unsafe_spread_promoted:
+              failures.append(
+                  "unsafe regular-session spread evidence was promoted: "
+                  + ", ".join(str(symbol) for symbol in unsafe_spread_promoted)
+              )
 
           blocked_misclassified = [
               row["symbol"] for row in evidence_rows
@@ -334,6 +347,9 @@ jobs:
               "alpaca_success_coverage": round(alpaca_coverage, 4),
               "liquid_spread_sanity_applicable": spread_sanity_applicable,
               "liquid_spread_sanity_passed": spread_sanity,
+              "unsafe_regular_spread_count": len(unsafe_regular),
+              "unsafe_spread_promoted_symbols": unsafe_spread_promoted,
+              "spread_safety_semantics": "unsafe evidence must remain REVIEW/blocked; live market spreads are not required to be universally sane",
               "evidence": evidence_rows,
               "failures": failures,
           }
