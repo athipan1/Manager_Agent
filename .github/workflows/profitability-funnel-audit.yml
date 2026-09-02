@@ -56,6 +56,64 @@ jobs:
             --output reports/hourly-profitability-funnel.json \
             --markdown reports/hourly-profitability-funnel.md
 
+      - name: Verify profitability funnel safety contract
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          path = Path("reports/hourly-profitability-funnel.json")
+          payload = json.loads(path.read_text(encoding="utf-8"))
+
+          if payload.get("schema_version") != "profitability-funnel.v2":
+              raise SystemExit("unexpected profitability funnel schema")
+          if not isinstance(payload.get("stages"), list):
+              raise SystemExit("profitability funnel stages must be a list")
+          if not isinstance(payload.get("active_bottlenecks"), list):
+              raise SystemExit("active_bottlenecks must be a list")
+
+          safety = payload.get("safety") or {}
+          expected_false = (
+              "scanner_data_quality_threshold_relaxed",
+              "production_opportunity_threshold_relaxed",
+              "risk_thresholds_relaxed",
+              "investability_thresholds_relaxed",
+              "shadow_broker_order_authorized",
+          )
+          if safety.get("purpose") != "diagnostic_only":
+              raise SystemExit("profitability funnel must remain diagnostic_only")
+          changed = [key for key in expected_false if safety.get(key) is not False]
+          if changed:
+              raise SystemExit(
+                  "diagnostic safety contract violated: " + ", ".join(changed)
+              )
+
+          health = payload.get("health") or {}
+          primary = payload.get("primary_bottleneck") or {}
+          print(
+              "Profitability funnel verified: "
+              f"production_candidates={health.get('production_candidate_count', 0)}, "
+              f"research_candidates={health.get('research_candidate_count', 0)}, "
+              f"primary_bottleneck={primary.get('stage', 'none')}"
+          )
+          PY
+
+      - name: Publish profitability funnel to workflow summary
+        if: always()
+        run: |
+          if [ -f reports/hourly-profitability-funnel.md ]; then
+            cat reports/hourly-profitability-funnel.md >> "${GITHUB_STEP_SUMMARY}"
+          else
+            {
+              echo "# Hourly Profitability Funnel Audit"
+              echo
+              echo "The funnel report was not generated. Inspect the audit job failure and the source Hourly Auto Trading artifact."
+              echo
+              echo "Source run: \`${{ github.event.workflow_run.id }}\`"
+            } >> "${GITHUB_STEP_SUMMARY}"
+          fi
+
       - name: Build Backtest nested training gate diagnostic
         env:
           SOURCE_RUN_ID: ${{ github.event.workflow_run.id }}
@@ -104,6 +162,7 @@ jobs:
           fi
 
       - name: Upload profitability and Backtest diagnostics
+        if: always()
         uses: actions/upload-artifact@v7
         with:
           name: profitability-funnel-audit
