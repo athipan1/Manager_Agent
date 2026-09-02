@@ -105,3 +105,34 @@ def test_market_regime_cap_remains_stricter_than_strategy_aware_cap():
     assert context["exposure_cap"] == 0.40
     assert context["effective_size_multiplier"] == 0.40
     assert plan["backtest_compare_payload"]["max_position_pct"] == 0.04
+
+
+def test_unsafe_strategy_aware_evidence_fails_closed_before_backtest():
+    profile = _strategy_aware(0.65)
+    profile["qualification_policy"]["hard_execution_safe"] = False
+
+    plan = build_regime_backtest_plan(
+        _recommendation(),
+        {"symbols": ["ABC"], "max_position_pct": 0.10},
+        opportunity_profile=profile,
+    )
+
+    assert plan["action"] == "no_trade"
+    assert plan["market_context"]["scanner_opportunity_size_multiplier"] == 0.0
+    assert plan["market_context"]["effective_size_multiplier"] == 0.0
+    assert plan["backtest_compare_payload"] is None
+
+
+def test_relaxed_strategy_aware_threshold_marker_fails_closed():
+    profile = _strategy_aware(0.65)
+    profile["qualification_policy"]["hard_execution_thresholds_relaxed"] = True
+
+    plan = build_regime_backtest_plan(
+        _recommendation(),
+        {"symbols": ["ABC"], "max_position_pct": 0.10},
+        opportunity_profile=profile,
+    )
+
+    assert plan["action"] == "no_trade"
+    assert plan["market_context"]["scanner_opportunity_size_multiplier"] == 0.0
+    assert plan["backtest_compare_payload"] is None
