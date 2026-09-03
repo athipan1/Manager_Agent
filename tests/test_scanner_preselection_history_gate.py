@@ -87,7 +87,11 @@ def test_unknown_history_is_deferred_to_exact_backtest_not_falsely_rejected(monk
         fetch_bar_count=lambda symbol, required: None,
     )
 
-    assert [row["symbol"] for row in selection["selected"]] == ["YB", "ZJK"]
+    assert [row["symbol"] for row in selection["selected"]] == [
+        "YB",
+        "ZJK",
+        "NAGE",
+    ]
     assert gate["rejected_symbols"] == []
     assert gate["unknown_symbols"] == ["YB", "ZJK", "NAGE"]
     assert all(

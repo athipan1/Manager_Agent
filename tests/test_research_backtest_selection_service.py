@@ -1,4 +1,5 @@
 from app.services.research_backtest_selection_service import (
+    EXPLORATORY_BUCKET,
     RESEARCH_RERANKER_VERSION,
     select_research_backtest_candidates,
 )
@@ -95,7 +96,7 @@ def test_explicit_scanner_fail_closed_stays_blocked():
     assert "scanner_opportunity_fail_closed" in selection["evaluations"][0]["reasons"]
 
 
-def test_research_selector_keeps_score_classification_and_evidence_gates():
+def test_research_selector_keeps_score_and_evidence_gates_and_isolates_near_classification():
     rows = [
         _row("LOW_SCORE", score=0.57),
         _row("LOW_CONF", score=0.80, confidence=0.69),
@@ -105,10 +106,15 @@ def test_research_selector_keeps_score_classification_and_evidence_gates():
 
     selection = select_research_backtest_candidates(rows, min_final_score=0.58)
 
-    assert [row["symbol"] for row in selection["selected"]] == ["PASS"]
+    assert [row["symbol"] for row in selection["selected"]] == ["PASS", "LOW_CONF"]
+    low_conf = next(row for row in selection["selected"] if row["symbol"] == "LOW_CONF")
+    assert low_conf["strategy_bucket"] == EXPLORATORY_BUCKET
+    assert low_conf["selection_lane"] == "research_strategy_discovery"
+    assert low_conf["production_entry_authorized"] is False
+    assert low_conf["risk_execution_authorized"] is False
 
 
-def test_legacy_rows_keep_final_score_order_when_candidate_score_is_missing():
+def test_legacy_rows_keep_final_score_order_with_wider_research_capacity():
     rows = [
         _row("VALUE1", score=0.70),
         _row("VALUE2", score=0.80),
@@ -117,10 +123,14 @@ def test_legacy_rows_keep_final_score_order_when_candidate_score_is_missing():
 
     selection = select_research_backtest_candidates(rows, min_final_score=0.58)
 
-    assert [row["symbol"] for row in selection["selected"]] == ["VALUE3", "VALUE2"]
+    assert [row["symbol"] for row in selection["selected"]] == [
+        "VALUE3",
+        "VALUE2",
+        "VALUE1",
+    ]
 
 
-def test_candidate_score_reranks_scarce_backtest_slots_before_final_score():
+def test_candidate_score_reranks_wider_backtest_slots_before_final_score():
     rows = [
         _row(
             "HIGH_FINAL_LOW_EVIDENCE",
@@ -150,6 +160,7 @@ def test_candidate_score_reranks_scarce_backtest_slots_before_final_score():
     assert [row["symbol"] for row in selection["selected"]] == [
         "LOWER_FINAL_HIGH_EVIDENCE",
         "MID_FINAL_GOOD_EVIDENCE",
+        "HIGH_FINAL_LOW_EVIDENCE",
     ]
     assert selection["reranker_version"] == RESEARCH_RERANKER_VERSION
     assert selection["reranker_policy"]["candidate_score_is_ordering_only"] is True

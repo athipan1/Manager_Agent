@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from decimal import Decimal
 from typing import Any, Dict, Iterable, Mapping
 
@@ -8,15 +9,24 @@ from .research_strategy_compatibility_service import (
     preflight_runtime_research_strategy_compatibility,
 )
 
-RESEARCH_BACKTEST_POLICY_VERSION = "manager-research-backtest-v3"
-RESEARCH_RERANKER_VERSION = "manager-research-reranker-v2"
+RESEARCH_BACKTEST_POLICY_VERSION = "manager-research-backtest-v4"
+RESEARCH_RERANKER_VERSION = "manager-research-reranker-v3"
 RESEARCH_ALLOWED_VERDICTS = {"hold", "buy", "strong_buy"}
+EXPLORATORY_BUCKET = "exploratory"
+RESEARCH_BUCKETS = frozenset({*KNOWN_BUCKETS, EXPLORATORY_BUCKET})
 DEFAULT_RESEARCH_BUCKET_LIMITS = {
-    "core_dividend": 2,
-    "value_rebound": 2,
-    "news_momentum": 1,
+    "core_dividend": 3,
+    "value_rebound": 3,
+    "news_momentum": 2,
+    EXPLORATORY_BUCKET: 2,
 }
-BUCKET_PRIORITY = ("core_dividend", "value_rebound", "news_momentum")
+BUCKET_PRIORITY = (
+    "core_dividend",
+    "value_rebound",
+    "news_momentum",
+    EXPLORATORY_BUCKET,
+)
+DEFAULT_EXPLORATORY_MIN_CONFIDENCE = 0.60
 
 
 def _decimal(value: Any) -> Decimal:
@@ -143,6 +153,20 @@ def _bucket_confidence(row: Mapping[str, Any]) -> float:
     return max(0.0, min(_float(row.get("bucket_confidence")), 1.0))
 
 
+def _exploratory_min_confidence() -> float:
+    raw = str(
+        os.getenv(
+            "BACKTEST_RESEARCH_EXPLORATORY_MIN_CONFIDENCE",
+            str(DEFAULT_EXPLORATORY_MIN_CONFIDENCE),
+        )
+    ).strip()
+    try:
+        value = float(raw)
+    except ValueError:
+        return DEFAULT_EXPLORATORY_MIN_CONFIDENCE
+    return max(0.0, min(value, AUTO_CLASSIFY_THRESHOLD))
+
+
 def _research_rank_key(row: Mapping[str, Any]) -> tuple[Any, ...]:
     """Prefer evidence likely to survive later gates without making it binding."""
 
@@ -193,6 +217,41 @@ def _reranker_evidence(row: Mapping[str, Any]) -> Dict[str, Any]:
     }
 
 
+def _normalize_research_row(row: Mapping[str, Any]) -> Dict[str, Any]:
+    """Route a near-classified row to broker-isolated strategy discovery.
+
+    AUTO_CLASSIFY_THRESHOLD remains unchanged. A lower confidence may only enter
+    the explicit exploratory research bucket, where production/Risk/Execution
+    authority is false and exact Backtest remains mandatory.
+    """
+
+    normalized = dict(row)
+    bucket = str(row.get("strategy_bucket") or row.get("bucket") or "").strip()
+    status = str(row.get("bucket_classification_status") or "").strip()
+    confidence = _bucket_confidence(row)
+    production_classified = (
+        bucket in KNOWN_BUCKETS
+        and status == "classified"
+        and confidence >= AUTO_CLASSIFY_THRESHOLD
+    )
+    if production_classified:
+        normalized["research_strategy_discovery"] = False
+        return normalized
+
+    if confidence >= _exploratory_min_confidence():
+        normalized["original_strategy_bucket"] = bucket or None
+        normalized["original_bucket_classification_status"] = status or None
+        normalized["strategy_bucket"] = EXPLORATORY_BUCKET
+        # Backtest validates this explicit research bucket as a real bucket. It is
+        # not a claim that the original production classifier passed.
+        normalized["bucket_classification_status"] = "classified"
+        normalized["research_strategy_discovery"] = True
+        normalized["research_only_unclassified_source"] = True
+        normalized["production_entry_authorized"] = False
+        normalized["risk_execution_authorized"] = False
+    return normalized
+
+
 def _research_eligible(
     row: Mapping[str, Any],
     *,
@@ -200,15 +259,16 @@ def _research_eligible(
 ) -> tuple[bool, list[str]]:
     reasons: list[str] = []
     bucket = str(row.get("strategy_bucket") or row.get("bucket") or "")
-    if bucket not in KNOWN_BUCKETS:
+    exploratory = bucket == EXPLORATORY_BUCKET
+    if bucket not in RESEARCH_BUCKETS:
         reasons.append("bucket_not_classified")
     if str(row.get("bucket_classification_status") or "") != "classified":
         reasons.append("classification_status_not_classified")
-    try:
-        confidence = float(row.get("bucket_confidence") or 0.0)
-    except (TypeError, ValueError):
-        confidence = 0.0
-    if confidence < AUTO_CLASSIFY_THRESHOLD:
+    confidence = _bucket_confidence(row)
+    minimum_confidence = (
+        _exploratory_min_confidence() if exploratory else AUTO_CLASSIFY_THRESHOLD
+    )
+    if confidence < minimum_confidence:
         reasons.append("bucket_confidence_below_threshold")
     if not bool(row.get("evidence_gate_passed", True)):
         reasons.append("evidence_gate_failed")
@@ -238,18 +298,18 @@ def select_research_backtest_candidates(
 ) -> Dict[str, Any]:
     """Select broker-isolated research candidates for exact Backtest.
 
-    Existing classification/evidence/final-score gates stay intact. Runtime
-    compatibility evidence from Backtest_Agent may additionally exclude a row only
-    when the trusted Market Regime intersection is known to leave fewer than the
-    configured minimum number of balanced-v1 strategy families. Unknown evidence
-    is deferred to exact Backtest.
+    Production classification and Backtest promotion thresholds stay intact.
+    Near-classified rows may additionally enter the explicit exploratory bucket,
+    which can spend research Backtest capacity but can never authorize Risk,
+    Execution, or broker mutation by itself.
     """
 
     threshold = Decimal(str(min_final_score))
     limits = {**DEFAULT_RESEARCH_BUCKET_LIMITS, **dict(bucket_limits or {})}
     original_rows = [dict(row) for row in ranked_rows if isinstance(row, Mapping)]
+    normalized_rows = [_normalize_research_row(row) for row in original_rows]
     rows, compatibility_gate = preflight_runtime_research_strategy_compatibility(
-        original_rows
+        normalized_rows
     )
     compatibility = _compatibility_by_symbol(compatibility_gate)
     rejected_for_compatibility = set(
@@ -261,7 +321,7 @@ def select_research_backtest_candidates(
     selected: list[Dict[str, Any]] = []
     evaluations: list[Dict[str, Any]] = []
 
-    for row in original_rows:
+    for row in normalized_rows:
         eligible, reasons = _research_eligible(row, threshold=threshold)
         symbol = str(row.get("symbol") or row.get("ticker") or "").strip().upper()
         if symbol in rejected_for_compatibility:
@@ -271,6 +331,10 @@ def select_research_backtest_candidates(
             {
                 "symbol": row.get("symbol") or row.get("ticker"),
                 "strategy_bucket": row.get("strategy_bucket") or row.get("bucket"),
+                "original_strategy_bucket": row.get("original_strategy_bucket"),
+                "research_strategy_discovery": bool(
+                    row.get("research_strategy_discovery")
+                ),
                 "final_verdict": _verdict(row),
                 "final_opportunity_score": float(_final_score(row)),
                 "eligible": eligible,
@@ -293,12 +357,17 @@ def select_research_backtest_candidates(
             symbol = str(row.get("symbol") or row.get("ticker") or "").strip().upper()
             if not symbol or any(item["symbol"] == symbol for item in selected):
                 continue
+            exploratory = bucket == EXPLORATORY_BUCKET
             selected.append(
                 {
                     "symbol": symbol,
                     "strategy_bucket": bucket,
+                    "original_strategy_bucket": row.get("original_strategy_bucket"),
                     "bucket_confidence": row.get("bucket_confidence"),
                     "bucket_classification_status": row.get("bucket_classification_status"),
+                    "original_bucket_classification_status": row.get(
+                        "original_bucket_classification_status"
+                    ),
                     "evidence_gate_passed": bool(row.get("evidence_gate_passed", True)),
                     "final_verdict": _verdict(row),
                     "final_opportunity_score": float(_final_score(row)),
@@ -306,7 +375,12 @@ def select_research_backtest_candidates(
                     "pre_backtest_strategy_compatibility": row.get(
                         "pre_backtest_strategy_compatibility"
                     ),
-                    "selection_lane": "research_backtest",
+                    "selection_lane": (
+                        "research_strategy_discovery"
+                        if exploratory
+                        else "research_backtest"
+                    ),
+                    "research_strategy_discovery": exploratory,
                     "production_entry_authorized": False,
                     "risk_execution_authorized": False,
                 }
@@ -318,6 +392,7 @@ def select_research_backtest_candidates(
         "min_final_score": float(threshold),
         "allowed_verdicts": sorted(RESEARCH_ALLOWED_VERDICTS),
         "auto_classify_threshold": AUTO_CLASSIFY_THRESHOLD,
+        "exploratory_min_confidence": _exploratory_min_confidence(),
         "selected_count": len(selected),
         "selected": selected,
         "evaluations": evaluations,
@@ -327,6 +402,15 @@ def select_research_backtest_candidates(
             "legacy_fallback": "final_opportunity_score",
             "production_binding": False,
             "thresholds_relaxed": False,
+        },
+        "exploratory_policy": {
+            "bucket": EXPLORATORY_BUCKET,
+            "research_only": True,
+            "production_auto_classify_threshold_unchanged": True,
+            "exact_backtest_required": True,
+            "production_binding": False,
+            "risk_execution_authority_granted": False,
+            "broker_order_authorized": False,
         },
         "production_entry_authorized": False,
         "risk_execution_authorized": False,
