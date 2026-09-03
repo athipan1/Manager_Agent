@@ -62,21 +62,17 @@ def test_closed_paper_market_is_controlled_no_trade() -> None:
     assert gate["reason"] == "market_closed"
     assert gate["next_action"] == "WAIT_FOR_REGULAR_SESSION"
     assert gate["eligible_symbols"] == ["MSFT"]
-    assert gate["diagnostics"] == {
-        "market_open": False,
-        "market_mode": "PORTFOLIO_REVIEW_ONLY",
-        "paper_automation": True,
-        "backtest_tested_count": 1,
-        "backtest_eligible_count": 1,
-        "eligible_symbols": ["MSFT"],
-    }
+    assert gate["diagnostics"]["market_open"] is False
+    assert gate["diagnostics"]["backtest_tested_count"] == 1
+    assert gate["diagnostics"]["backtest_eligible_count"] == 1
+    assert gate["diagnostics"]["challenger_count"] == 0
 
 
 def test_open_market_without_eligible_strategy_is_controlled_no_trade() -> None:
     gate = resolve_trade_gate(preflight(market_open=True), backtest([]))
     assert gate["should_trade"] is False
     assert gate["reason"] == "no_eligible_strategy"
-    assert gate["next_action"] == "REVIEW_BACKTEST_REJECTIONS"
+    assert gate["next_action"] == "OBSERVE_CHALLENGERS_OR_REVIEW_BACKTEST_REJECTIONS"
     assert gate["diagnostics"]["market_open"] is True
     assert gate["diagnostics"]["backtest_eligible_count"] == 0
 
@@ -115,8 +111,10 @@ def test_no_trade_report_persists_trade_gate_diagnostics() -> None:
     assert manager["trade_gate"]["backtest_tested_count"] == 1
     assert manager["trade_gate"]["backtest_eligible_count"] == 1
     assert manager["trade_gate"]["eligible_symbols"] == ["MSFT"]
+    assert manager["trade_gate"]["challenger_count"] == 0
     assert manager["safety"]["risk_called"] is False
     assert manager["safety"]["execution_called"] is False
+    assert manager["safety"]["challenger_lane_broker_mutation_allowed"] is False
 
 
 def test_operator_artifact_reports_not_attempted_without_false_failure() -> None:

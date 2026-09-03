@@ -8,6 +8,8 @@ import json
 from pathlib import Path
 from typing import Any, Mapping
 
+from scripts.classify_backtest_challengers import build_report as build_challenger_report
+
 
 def as_dict(value: Any) -> dict[str, Any]:
     return dict(value) if isinstance(value, Mapping) else {}
@@ -83,6 +85,7 @@ def trade_gate_diagnostics(
     data = unwrap_backtest_report(backtest_report)
     runtime = as_dict(preflight.get("runtime"))
     items = as_list(data.get("items"))
+    challenger_report = build_challenger_report(backtest_report)
     return {
         "market_open": preflight.get("market_open") is True,
         "market_mode": preflight.get("market_mode"),
@@ -90,15 +93,18 @@ def trade_gate_diagnostics(
         "backtest_tested_count": len(items),
         "backtest_eligible_count": len(symbols),
         "eligible_symbols": symbols,
+        "challenger_count": len(as_list(challenger_report.get("challenger_symbols"))),
+        "challenger_symbols": as_list(challenger_report.get("challenger_symbols")),
+        "clearly_not_ready_symbols": as_list(
+            challenger_report.get("clearly_not_ready_symbols")
+        ),
     }
 
 
 def resolve_trade_gate(
     preflight: Mapping[str, Any], backtest_report: Mapping[str, Any]
 ) -> dict[str, Any]:
-    if preflight.get("status") != "ready" or not preflight.get(
-        "portfolio_cycle_id"
-    ):
+    if preflight.get("status") != "ready" or not preflight.get("portfolio_cycle_id"):
         raise ValueError("Hourly preflight must be ready before trade gating")
 
     runtime = as_dict(preflight.get("runtime"))
@@ -118,7 +124,7 @@ def resolve_trade_gate(
         return {
             "should_trade": False,
             "reason": "no_eligible_strategy",
-            "next_action": "REVIEW_BACKTEST_REJECTIONS",
+            "next_action": "OBSERVE_CHALLENGERS_OR_REVIEW_BACKTEST_REJECTIONS",
             "eligible_symbols": [],
             "diagnostics": diagnostics,
         }
@@ -167,6 +173,11 @@ def build_no_trade_report(
             "backtest_tested_count": diagnostics.get("backtest_tested_count", 0),
             "backtest_eligible_count": diagnostics.get("backtest_eligible_count", 0),
             "eligible_symbols": symbols,
+            "challenger_count": diagnostics.get("challenger_count", 0),
+            "challenger_symbols": diagnostics.get("challenger_symbols", []),
+            "clearly_not_ready_symbols": diagnostics.get(
+                "clearly_not_ready_symbols", []
+            ),
         },
         "manager_response": {
             "status": "success",
@@ -189,6 +200,7 @@ def build_no_trade_report(
             "risk_called": False,
             "execution_called": False,
             "broker_orders_submitted": False,
+            "challenger_lane_broker_mutation_allowed": False,
         },
     }
 
@@ -206,9 +218,7 @@ def write_github_output(path: Path | None, gate: Mapping[str, Any]) -> None:
         )
         handle.write(f"reason={gate.get('reason')}\n")
         handle.write(f"next_action={gate.get('next_action')}\n")
-        handle.write(
-            f"eligible_count={len(as_list(gate.get('eligible_symbols')))}\n"
-        )
+        handle.write(f"eligible_count={len(as_list(gate.get('eligible_symbols')))}\n")
         handle.write(
             "market_open="
             + ("true" if diagnostics.get("market_open") is True else "false")
@@ -219,6 +229,9 @@ def write_github_output(path: Path | None, gate: Mapping[str, Any]) -> None:
         )
         handle.write(
             f"backtest_eligible_count={int(diagnostics.get('backtest_eligible_count', 0))}\n"
+        )
+        handle.write(
+            f"challenger_count={int(diagnostics.get('challenger_count', 0))}\n"
         )
 
 
@@ -235,6 +248,11 @@ def parse_args() -> argparse.Namespace:
         type=Path,
         default=Path("reports/hourly-manager-cycle.json"),
     )
+    parser.add_argument(
+        "--challenger-output",
+        type=Path,
+        default=Path("reports/hourly-backtest-challengers.json"),
+    )
     parser.add_argument("--github-output", type=Path)
     return parser.parse_args()
 
@@ -243,6 +261,14 @@ def main() -> int:
     args = parse_args()
     preflight = json.loads(args.preflight.read_text(encoding="utf-8"))
     backtest_report = json.loads(args.backtest.read_text(encoding="utf-8"))
+
+    challenger_report = build_challenger_report(backtest_report)
+    args.challenger_output.parent.mkdir(parents=True, exist_ok=True)
+    args.challenger_output.write_text(
+        json.dumps(challenger_report, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+
     gate = resolve_trade_gate(preflight, backtest_report)
     write_github_output(args.github_output, gate)
     diagnostics = as_dict(gate.get("diagnostics"))
@@ -259,14 +285,16 @@ def main() -> int:
             f"next_action={gate['next_action']} "
             f"market_open={diagnostics.get('market_open')} "
             f"backtest_tested_count={diagnostics.get('backtest_tested_count')} "
-            f"eligible_count={len(gate['eligible_symbols'])}"
+            f"eligible_count={len(gate['eligible_symbols'])} "
+            f"challenger_symbols={diagnostics.get('challenger_symbols')}"
         )
     else:
         print(
             "Hourly trade gate passed: "
             f"next_action={gate['next_action']} "
             f"backtest_tested_count={diagnostics.get('backtest_tested_count')} "
-            f"eligible_count={len(gate['eligible_symbols'])}"
+            f"eligible_count={len(gate['eligible_symbols'])} "
+            f"challenger_symbols={diagnostics.get('challenger_symbols')}"
         )
     return 0
 
