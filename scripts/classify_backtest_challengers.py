@@ -50,6 +50,7 @@ def classify_item(item: Mapping[str, Any]) -> dict[str, Any]:
     selection = as_dict(row.get("selection"))
     best = as_dict(selection.get("best_overall"))
     gates = as_dict(best.get("gates"))
+    candidate_oos = as_dict(best.get("candidate_oos"))
     reasons = [str(x) for x in as_list(best.get("disqualification_reasons"))]
 
     if status == "eligible_strategy_found":
@@ -94,6 +95,17 @@ def classify_item(item: Mapping[str, Any]) -> dict[str, Any]:
         "lane": LANE if challenger else None,
         "broker_eligible": status == "eligible_strategy_found",
         "selected_strategy_id": row.get("selected_strategy_id"),
+        "best_strategy_id": best.get("strategy_id"),
+        "best_strategy_name": best.get("strategy") or best.get("strategy_name"),
+        "best_strategy_score": best.get("score"),
+        "candidate_oos_metrics": {
+            "median_sharpe_ratio": candidate_oos.get("median_sharpe_ratio"),
+            "median_profit_factor": candidate_oos.get("median_profit_factor"),
+            "profitable_window_rate": candidate_oos.get("profitable_window_rate"),
+            "worst_max_drawdown": candidate_oos.get("worst_max_drawdown"),
+            "evaluated_windows": candidate_oos.get("evaluated_windows")
+            or candidate_oos.get("window_count"),
+        },
         "failed_candidate_oos_gates": sorted(
             key
             for key, value in gates.items()
