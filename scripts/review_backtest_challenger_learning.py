@@ -2,9 +2,11 @@
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import json
 import sys
 from pathlib import Path
+from types import ModuleType
 from typing import Any, Callable, Mapping
 
 
@@ -112,22 +114,39 @@ def build_learning_report(
     }
 
 
+def _load_module(path: Path, name: str) -> ModuleType:
+    if not path.is_file():
+        raise RuntimeError(f"required challenger contract is missing: {path}")
+    spec = importlib.util.spec_from_file_location(name, path)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"cannot load challenger contract: {path}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
 def _load_contracts(repo_root: Path):
     siblings = repo_root.parent
-    for repo in ("Backtest_Agent", "Performance_Agent", "Learning_Agent"):
-        path = str(siblings / repo)
-        if path not in sys.path:
-            sys.path.insert(0, path)
-    from app.challenger_evidence import build_challenger_evidence
-    from app.forward_evidence import build_forward_evidence
+    backtest_module = _load_module(
+        siblings / "Backtest_Agent" / "app" / "challenger_evidence.py",
+        "hourly_backtest_challenger_evidence",
+    )
+    performance_module = _load_module(
+        siblings / "Performance_Agent" / "app" / "forward_evidence.py",
+        "hourly_performance_forward_evidence",
+    )
+
+    learning_root = str(siblings / "Learning_Agent")
+    if learning_root not in sys.path:
+        sys.path.insert(0, learning_root)
     from learning_agent.backtest_shadow_feedback import (
         BacktestShadowFeedbackRequest,
         evaluate_backtest_shadow_feedback,
     )
 
     return (
-        build_challenger_evidence,
-        build_forward_evidence,
+        backtest_module.build_challenger_evidence,
+        performance_module.build_forward_evidence,
         BacktestShadowFeedbackRequest,
         evaluate_backtest_shadow_feedback,
     )
