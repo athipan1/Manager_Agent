@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -12,10 +13,12 @@ try:
     from scripts.classify_backtest_challengers import (
         build_report as build_challenger_report,
     )
+    from scripts.run_post_backtest_challenger_shadow import run_post_backtest_shadow
 except ModuleNotFoundError as exc:
     if exc.name != "scripts":
         raise
     from classify_backtest_challengers import build_report as build_challenger_report
+    from run_post_backtest_challenger_shadow import run_post_backtest_shadow
 
 
 def as_dict(value: Any) -> dict[str, Any]:
@@ -242,6 +245,31 @@ def write_github_output(path: Path | None, gate: Mapping[str, Any]) -> None:
         )
 
 
+def _run_challenger_observation(
+    *,
+    preflight: Mapping[str, Any],
+    scanner_report: Mapping[str, Any],
+    challenger_report: Mapping[str, Any],
+) -> dict[str, Any]:
+    if not as_list(challenger_report.get("challenger_symbols")):
+        return {
+            "status": "success",
+            "candidate_count": 0,
+            "broker_order_authorized": False,
+        }
+    cycle_id = str(preflight.get("portfolio_cycle_id") or "").strip()
+    if not cycle_id:
+        raise ValueError("portfolio_cycle_id is required for challenger observation")
+    return run_post_backtest_shadow(
+        scanner_report=scanner_report,
+        challenger_report=challenger_report,
+        cycle_id=cycle_id,
+        account_id=os.getenv("DEFAULT_ACCOUNT_ID", "1"),
+        manager_url=os.getenv("MANAGER_AGENT_URL", "http://localhost:8000"),
+        performance_url=os.getenv("PERFORMANCE_AGENT_URL", "http://localhost:8013"),
+    )
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument(
@@ -249,6 +277,11 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--backtest", type=Path, default=Path("reports/hourly-backtest-result.json")
+    )
+    parser.add_argument(
+        "--scanner-report",
+        type=Path,
+        default=Path("reports/hourly-pre-backtest-discovery.json"),
     )
     parser.add_argument(
         "--manager-output",
@@ -259,6 +292,11 @@ def parse_args() -> argparse.Namespace:
         "--challenger-output",
         type=Path,
         default=Path("reports/hourly-backtest-challengers.json"),
+    )
+    parser.add_argument(
+        "--challenger-shadow-output",
+        type=Path,
+        default=Path("reports/hourly-backtest-challenger-shadow.json"),
     )
     parser.add_argument("--github-output", type=Path)
     return parser.parse_args()
@@ -276,11 +314,35 @@ def main() -> int:
         encoding="utf-8",
     )
 
+    scanner_report = (
+        json.loads(args.scanner_report.read_text(encoding="utf-8"))
+        if args.scanner_report.exists()
+        else {}
+    )
+    challenger_shadow = _run_challenger_observation(
+        preflight=preflight,
+        scanner_report=scanner_report,
+        challenger_report=challenger_report,
+    )
+    if challenger_shadow.get("broker_order_authorized") is not False:
+        raise RuntimeError("challenger observation unexpectedly authorized broker order")
+    args.challenger_shadow_output.parent.mkdir(parents=True, exist_ok=True)
+    args.challenger_shadow_output.write_text(
+        json.dumps(challenger_shadow, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+
     gate = resolve_trade_gate(preflight, backtest_report)
     write_github_output(args.github_output, gate)
     diagnostics = as_dict(gate.get("diagnostics"))
     if gate["should_trade"] is False:
         report = build_no_trade_report(preflight, gate, backtest_report)
+        report["challenger_observation"] = {
+            "status": challenger_shadow.get("status"),
+            "candidate_count": challenger_shadow.get("candidate_count", 0),
+            "symbols": challenger_shadow.get("symbols", []),
+            "broker_order_authorized": False,
+        }
         args.manager_output.parent.mkdir(parents=True, exist_ok=True)
         args.manager_output.write_text(
             json.dumps(report, ensure_ascii=False, indent=2) + "\n",
@@ -293,7 +355,8 @@ def main() -> int:
             f"market_open={diagnostics.get('market_open')} "
             f"backtest_tested_count={diagnostics.get('backtest_tested_count')} "
             f"eligible_count={len(gate['eligible_symbols'])} "
-            f"challenger_symbols={diagnostics.get('challenger_symbols')}"
+            f"challenger_symbols={diagnostics.get('challenger_symbols')} "
+            f"challenger_shadow_candidates={challenger_shadow.get('candidate_count', 0)}"
         )
     else:
         print(
@@ -301,7 +364,8 @@ def main() -> int:
             f"next_action={gate['next_action']} "
             f"backtest_tested_count={diagnostics.get('backtest_tested_count')} "
             f"eligible_count={len(gate['eligible_symbols'])} "
-            f"challenger_symbols={diagnostics.get('challenger_symbols')}"
+            f"challenger_symbols={diagnostics.get('challenger_symbols')} "
+            f"challenger_shadow_candidates={challenger_shadow.get('candidate_count', 0)}"
         )
     return 0
 
