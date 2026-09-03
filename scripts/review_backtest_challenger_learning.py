@@ -136,7 +136,11 @@ def _load_contracts(repo_root: Path):
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--backtest", type=Path, default=Path("reports/hourly-backtest-result.json"))
-    parser.add_argument("--shadow", type=Path, default=Path("reports/hourly-shadow-lane.json"))
+    parser.add_argument(
+        "--shadow",
+        type=Path,
+        default=Path("reports/hourly-backtest-challenger-shadow.json"),
+    )
     parser.add_argument("--output", type=Path, default=Path("reports/hourly-challenger-learning.json"))
     args = parser.parse_args()
 
