@@ -58,9 +58,16 @@ def dashboard() -> dict:
 
 def test_closed_paper_market_is_controlled_no_trade() -> None:
     gate = resolve_trade_gate(preflight(market_open=False), backtest(["MSFT"]))
-    assert gate == {
-        "should_trade": False,
-        "reason": "market_closed",
+    assert gate["should_trade"] is False
+    assert gate["reason"] == "market_closed"
+    assert gate["next_action"] == "WAIT_FOR_REGULAR_SESSION"
+    assert gate["eligible_symbols"] == ["MSFT"]
+    assert gate["diagnostics"] == {
+        "market_open": False,
+        "market_mode": "PORTFOLIO_REVIEW_ONLY",
+        "paper_automation": True,
+        "backtest_tested_count": 1,
+        "backtest_eligible_count": 1,
         "eligible_symbols": ["MSFT"],
     }
 
@@ -69,6 +76,18 @@ def test_open_market_without_eligible_strategy_is_controlled_no_trade() -> None:
     gate = resolve_trade_gate(preflight(market_open=True), backtest([]))
     assert gate["should_trade"] is False
     assert gate["reason"] == "no_eligible_strategy"
+    assert gate["next_action"] == "REVIEW_BACKTEST_REJECTIONS"
+    assert gate["diagnostics"]["market_open"] is True
+    assert gate["diagnostics"]["backtest_eligible_count"] == 0
+
+
+def test_open_market_with_eligible_strategy_calls_trade_pipeline() -> None:
+    gate = resolve_trade_gate(preflight(market_open=True), backtest(["NVDA"]))
+    assert gate["should_trade"] is True
+    assert gate["reason"] == "eligible_strategy_available"
+    assert gate["next_action"] == "CALL_MANAGER_RISK_EXECUTION"
+    assert gate["diagnostics"]["backtest_tested_count"] == 1
+    assert gate["diagnostics"]["backtest_eligible_count"] == 1
 
 
 def test_simulator_can_continue_candidate_analysis_when_market_is_closed() -> None:
@@ -83,6 +102,21 @@ def test_invalid_backtest_count_fails_closed() -> None:
     report["data"]["eligible_count"] = 0
     with pytest.raises(ValueError, match="does not match"):
         resolve_trade_gate(preflight(market_open=True), report)
+
+
+def test_no_trade_report_persists_trade_gate_diagnostics() -> None:
+    ready = preflight(market_open=False)
+    report = backtest(["MSFT"])
+    gate = resolve_trade_gate(ready, report)
+    manager = build_no_trade_report(ready, gate, report)
+    assert manager["reason"] == "market_closed"
+    assert manager["next_action"] == "WAIT_FOR_REGULAR_SESSION"
+    assert manager["trade_gate"]["market_open"] is False
+    assert manager["trade_gate"]["backtest_tested_count"] == 1
+    assert manager["trade_gate"]["backtest_eligible_count"] == 1
+    assert manager["trade_gate"]["eligible_symbols"] == ["MSFT"]
+    assert manager["safety"]["risk_called"] is False
+    assert manager["safety"]["execution_called"] is False
 
 
 def test_operator_artifact_reports_not_attempted_without_false_failure() -> None:
