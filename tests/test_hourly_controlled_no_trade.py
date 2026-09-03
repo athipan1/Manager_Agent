@@ -168,6 +168,8 @@ def test_hourly_workflow_guards_trade_and_reconciles_after_portfolio_review() ->
     workflow = Path(".github/workflows/hourly-auto-trading.yml").read_text(
         encoding="utf-8"
     )
+    assert 'cron: "35 * * * *"' in workflow
+    assert 'cron: "5 * * * *"' not in workflow
     assert "steps.trade_gate.outputs.should_trade == 'true'" in workflow
     assert (
         "if: ${{ !cancelled() && steps.portfolio_review.outcome == 'success' }}"
