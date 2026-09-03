@@ -18,16 +18,16 @@ from .scanner_candidate_service import candidate_to_dict
 from .scanner_data_quality_service import scanner_candidate_data_bundle
 
 SCANNER_OPPORTUNITY_PROFILE_SCHEMA = "scanner-opportunity-profile.v1"
-SCANNER_OPPORTUNITY_POLICY_VERSION = "manager-scanner-opportunity-gate.v2"
+SCANNER_QUALIFICATION_POLICY_SCHEMA = "scanner-opportunity-qualification.v2"
+SCANNER_OPPORTUNITY_POLICY_VERSION = "manager-scanner-opportunity-gate.v3"
 DEFAULT_MIN_OPPORTUNITY_SCORE = 0.70
 RESEARCH_MIN_OPPORTUNITY_SCORE = 0.50
+STRATEGY_AWARE_MIN_SCORE_FLOOR = 0.55
+STRATEGY_AWARE_MIN_AFFINITY_THRESHOLD = 0.65
 _TRUE_VALUES = frozenset({"1", "true", "yes", "on"})
 _ALLOWED_STATUSES = frozenset({"qualified", "review", "avoid"})
 _ALLOWED_STRATEGY_HINTS = frozenset(
     {"trend_following", "breakout", "mean_reversion"}
-)
-_CONTROLLED_QUOTE_REVIEW_STATES = frozenset(
-    {"market_closed", "stale_quote", "missing_quote_timestamp"}
 )
 
 
@@ -113,12 +113,113 @@ def _review_result(
         "opportunity_score": _finite_number(profile.get("opportunity_score")),
         "min_opportunity_score": min_score,
         "preferred_strategy_hint": profile.get("preferred_strategy_hint"),
+        "strategy_affinity": _to_dict(profile.get("strategy_affinity")),
+        "qualification_policy": _to_dict(profile.get("qualification_policy")),
+        "strategy_aware_admission": False,
         "execution_context": context,
         "evidence_quality": _to_dict(profile.get("evidence_quality")),
         "profile_reasons": list(profile.get("reasons") or []),
         "workflow_failure": workflow_failure,
         "controlled_no_trade": controlled_no_trade,
         "research_lane_eligible": research_lane_eligible,
+    }
+
+
+def _verified_strategy_aware_admission(
+    profile: Dict[str, Any],
+    *,
+    score: float,
+    threshold: float,
+    preferred_hint: str,
+) -> tuple[bool, str, Dict[str, Any]]:
+    """Validate Scanner strategy-aware admission without trusting it as authority.
+
+    Manager independently rechecks the execution evidence before this helper is
+    called. This helper only validates the qualification contract that permits a
+    sub-0.70 candidate to continue to deeper analysis and exact Backtest. It never
+    grants Risk, Execution or broker authority.
+    """
+
+    policy = _to_dict(profile.get("qualification_policy"))
+    if not policy or str(policy.get("mode") or "").strip().lower() != "strategy_aware":
+        return False, "strategy-aware qualification is not present", policy
+    if str(policy.get("schema_version") or "").strip() != SCANNER_QUALIFICATION_POLICY_SCHEMA:
+        return False, "strategy-aware qualification schema is unsupported", policy
+    if policy.get("manager_decision_required") is not True:
+        return False, "strategy-aware qualification does not require Manager authority", policy
+    if policy.get("hard_execution_safe") is not True:
+        return False, "strategy-aware qualification did not verify hard execution safety", policy
+    if policy.get("hard_execution_thresholds_relaxed") is not False:
+        return False, "strategy-aware qualification reports relaxed hard execution thresholds", policy
+    if str(profile.get("workflow_status") or "").strip().lower() != "strategy_ready":
+        return False, "strategy-aware qualification is not in strategy_ready workflow state", policy
+
+    strategy_name = str(policy.get("strategy_name") or "").strip().lower()
+    if strategy_name not in _ALLOWED_STRATEGY_HINTS:
+        return False, "strategy-aware qualification has an unsupported strategy family", policy
+    if preferred_hint and strategy_name != preferred_hint:
+        return False, "strategy-aware qualification conflicts with preferred strategy hint", policy
+
+    generic_score = _finite_number(policy.get("generic_score"))
+    score_floor = _finite_number(policy.get("strategy_score_floor"))
+    affinity = _finite_number(policy.get("strategy_affinity"))
+    affinity_threshold = _finite_number(policy.get("strategy_affinity_threshold"))
+    if None in {generic_score, score_floor, affinity, affinity_threshold}:
+        return False, "strategy-aware qualification numeric evidence is incomplete", policy
+    if abs(float(generic_score) - score) > 0.0001:
+        return False, "strategy-aware generic score does not match opportunity score", policy
+    if not STRATEGY_AWARE_MIN_SCORE_FLOOR <= float(score_floor) <= threshold:
+        return False, "strategy-aware score floor is outside Manager safety bounds", policy
+    if score < float(score_floor):
+        return False, "opportunity score is below the declared strategy-aware floor", policy
+    if not STRATEGY_AWARE_MIN_AFFINITY_THRESHOLD <= float(affinity_threshold) <= 1.0:
+        return False, "strategy-aware affinity threshold is outside Manager safety bounds", policy
+    if not 0.0 <= float(affinity) <= 1.0 or float(affinity) < float(affinity_threshold):
+        return False, "strategy affinity is below the declared strategy-aware threshold", policy
+    return True, "verified", policy
+
+
+def _pass_result(
+    *,
+    symbol: str,
+    profile: Dict[str, Any],
+    schema: str,
+    status: str,
+    score: float,
+    threshold: float,
+    require_profile: bool,
+    require_spread: bool,
+    hint: str,
+    strategy_aware: bool,
+    reason_code: str,
+    reason: str,
+) -> Dict[str, Any]:
+    return {
+        "symbol": symbol,
+        "decision": "PASS",
+        "allowed": True,
+        "reason_code": reason_code,
+        "reason": reason,
+        "policy_version": SCANNER_OPPORTUNITY_POLICY_VERSION,
+        "required_schema": SCANNER_OPPORTUNITY_PROFILE_SCHEMA,
+        "schema_version": schema,
+        "profile_required": require_profile,
+        "live_spread_required": require_spread,
+        "status": status,
+        "workflow_status": profile.get("workflow_status"),
+        "opportunity_score": score,
+        "min_opportunity_score": threshold,
+        "preferred_strategy_hint": hint or None,
+        "strategy_affinity": _to_dict(profile.get("strategy_affinity")),
+        "qualification_policy": _to_dict(profile.get("qualification_policy")),
+        "strategy_aware_admission": strategy_aware,
+        "execution_context": _to_dict(profile.get("execution_context")),
+        "evidence_quality": _to_dict(profile.get("evidence_quality")),
+        "profile_reasons": list(profile.get("reasons") or []),
+        "compatibility_bypass": False,
+        "workflow_failure": False,
+        "controlled_no_trade": False,
+        "research_lane_eligible": False,
     }
 
 
@@ -183,6 +284,9 @@ def evaluate_scanner_candidate_opportunity(
             "opportunity_score": None,
             "min_opportunity_score": threshold,
             "preferred_strategy_hint": None,
+            "strategy_affinity": {},
+            "qualification_policy": {},
+            "strategy_aware_admission": False,
             "execution_context": {},
             "evidence_quality": {},
             "profile_reasons": [],
@@ -274,9 +378,7 @@ def evaluate_scanner_candidate_opportunity(
             live_spread_required=require_spread,
         )
 
-    # Explicit Scanner fail-closed evidence always wins. Structural bid/ask sanity,
-    # however, is not meaningful once the quote is known to be closed/stale; those
-    # states are controlled no-trade research states and must be classified first.
+    # Hard execution evidence always wins over any generic or strategy-aware score.
     if profile.get("fail_closed") is True:
         return _review_result(
             symbol=symbol,
@@ -381,7 +483,47 @@ def evaluate_scanner_candidate_opportunity(
             live_spread_required=require_spread,
             research_lane_eligible=research_eligible,
         )
+
     if score < threshold:
+        strategy_aware_ok, strategy_aware_reason, qualification = _verified_strategy_aware_admission(
+            profile,
+            score=score,
+            threshold=threshold,
+            preferred_hint=hint,
+        )
+        if strategy_aware_ok:
+            return _pass_result(
+                symbol=symbol,
+                profile=profile,
+                schema=schema,
+                status=status,
+                score=score,
+                threshold=threshold,
+                require_profile=require_profile,
+                require_spread=require_spread,
+                hint=hint,
+                strategy_aware=True,
+                reason_code="SCANNER_OPPORTUNITY_STRATEGY_AWARE_ACCEPTED",
+                reason=(
+                    "Scanner opportunity score is below the generic threshold but a "
+                    "verified strategy-aware qualification may continue to Manager, "
+                    "Backtest and reduced-size Risk evaluation."
+                ),
+            )
+        if str(qualification.get("mode") or "").strip().lower() == "strategy_aware":
+            return _review_result(
+                symbol=symbol,
+                reason_code="SCANNER_OPPORTUNITY_STRATEGY_AWARE_INVALID",
+                reason=(
+                    "Scanner claimed strategy-aware qualification but Manager could "
+                    f"not verify it: {strategy_aware_reason}."
+                ),
+                profile=profile,
+                min_score=threshold,
+                profile_required=require_profile,
+                live_spread_required=require_spread,
+                research_lane_eligible=research_eligible,
+            )
         return _review_result(
             symbol=symbol,
             reason_code="SCANNER_OPPORTUNITY_SCORE_BELOW_THRESHOLD",
@@ -396,31 +538,20 @@ def evaluate_scanner_candidate_opportunity(
             research_lane_eligible=research_eligible,
         )
 
-    return {
-        "symbol": symbol,
-        "decision": "PASS",
-        "allowed": True,
-        "reason_code": "SCANNER_OPPORTUNITY_ACCEPTED",
-        "reason": "Scanner opportunity evidence satisfies the Manager gate.",
-        "policy_version": SCANNER_OPPORTUNITY_POLICY_VERSION,
-        "required_schema": SCANNER_OPPORTUNITY_PROFILE_SCHEMA,
-        "schema_version": schema,
-        "profile_required": require_profile,
-        "live_spread_required": require_spread,
-        "status": status,
-        "workflow_status": profile.get("workflow_status"),
-        "opportunity_score": score,
-        "min_opportunity_score": threshold,
-        "preferred_strategy_hint": hint or None,
-        "strategy_affinity": _to_dict(profile.get("strategy_affinity")),
-        "execution_context": context,
-        "evidence_quality": evidence_quality,
-        "profile_reasons": list(profile.get("reasons") or []),
-        "compatibility_bypass": False,
-        "workflow_failure": False,
-        "controlled_no_trade": False,
-        "research_lane_eligible": False,
-    }
+    return _pass_result(
+        symbol=symbol,
+        profile=profile,
+        schema=schema,
+        status=status,
+        score=score,
+        threshold=threshold,
+        require_profile=require_profile,
+        require_spread=require_spread,
+        hint=hint,
+        strategy_aware=False,
+        reason_code="SCANNER_OPPORTUNITY_ACCEPTED",
+        reason="Scanner opportunity evidence satisfies the Manager generic gate.",
+    )
 
 
 def partition_scanner_candidates_by_opportunity(
@@ -474,14 +605,29 @@ def partition_scanner_candidates_by_opportunity(
     research_lane_eligible_count = sum(
         1 for row in evaluations if row.get("research_lane_eligible") is True
     )
+    strategy_aware_pass_count = sum(
+        1 for row in evaluations if row.get("strategy_aware_admission") is True
+    )
+    generic_pass_count = sum(
+        1
+        for row in evaluations
+        if row.get("allowed") is True
+        and row.get("strategy_aware_admission") is not True
+        and row.get("compatibility_bypass") is not True
+    )
     summary = {
         "policy_version": SCANNER_OPPORTUNITY_POLICY_VERSION,
         "required_schema": SCANNER_OPPORTUNITY_PROFILE_SCHEMA,
+        "qualification_policy_schema": SCANNER_QUALIFICATION_POLICY_SCHEMA,
         "profile_required": required,
         "live_spread_required": require_spread,
         "min_opportunity_score": threshold,
+        "strategy_aware_min_score_floor": STRATEGY_AWARE_MIN_SCORE_FLOOR,
+        "strategy_aware_min_affinity_threshold": STRATEGY_AWARE_MIN_AFFINITY_THRESHOLD,
         "original_count": len(evaluations),
         "passed_count": len(passed),
+        "generic_pass_count": generic_pass_count,
+        "strategy_aware_pass_count": strategy_aware_pass_count,
         "review_count": len(review),
         "compatibility_bypass_count": compatibility_bypass_count,
         "controlled_no_trade_count": controlled_no_trade_count,
