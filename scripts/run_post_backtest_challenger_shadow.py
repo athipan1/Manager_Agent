@@ -37,6 +37,35 @@ def _profile(row: Mapping[str, Any]) -> dict[str, Any]:
     return _dict(bundle.get("opportunity_profile"))
 
 
+def _strategy_observations(challenger: Mapping[str, Any]) -> list[dict[str, Any]]:
+    rows = [
+        _dict(item)
+        for item in challenger.get("shadow_strategy_candidates") or []
+        if isinstance(item, Mapping)
+        and item.get("broker_order_authorized") is False
+        and item.get("risk_execution_authorized") is False
+    ]
+    if rows:
+        return rows
+    strategy_id = str(challenger.get("best_strategy_id") or "").strip()
+    if not strategy_id:
+        return []
+    return [
+        {
+            "rank": 1,
+            "strategy_id": strategy_id,
+            "strategy_name": challenger.get("best_strategy_name"),
+            "score": challenger.get("best_strategy_score"),
+            "failed_candidate_oos_gates": challenger.get("failed_candidate_oos_gates")
+            or [],
+            "observation_only": True,
+            "production_promotion_authorized": False,
+            "risk_execution_authorized": False,
+            "broker_order_authorized": False,
+        }
+    ]
+
+
 def build_post_backtest_candidates(
     scanner_report: Mapping[str, Any], challenger_report: Mapping[str, Any]
 ) -> list[dict[str, Any]]:
@@ -79,34 +108,44 @@ def build_post_backtest_candidates(
         if source is None:
             continue
         source_profile = _profile(source)
-        strategy_name = str(
-            challenger.get("best_strategy_name")
-            or challenger.get("strategy_name")
-            or source_profile.get("preferred_strategy_hint")
-            or "unassigned"
-        )
-        candidate = dict(source)
-        candidate.update(
-            {
-                "symbol": symbol,
-                "status": source_profile.get("status"),
-                "opportunity_score": source_profile.get("opportunity_score"),
-                "preferred_strategy_hint": strategy_name,
-                "strategy_affinity": source_profile.get("strategy_affinity") or {},
-                "execution_context": source_profile.get("execution_context") or {},
-                "evidence_quality": source_profile.get("evidence_quality") or {},
-                "reason_code": None,
+        for strategy in _strategy_observations(challenger):
+            strategy_id = str(strategy.get("strategy_id") or "").strip()
+            if not strategy_id:
+                continue
+            candidate = dict(source)
+            candidate.update(
+                {
+                    "symbol": symbol,
+                    "status": source_profile.get("status"),
+                    "opportunity_score": source_profile.get("opportunity_score"),
+                    # Use the immutable Backtest strategy_id so Shadow ledger keys,
+                    # Performance aggregation, and Learning evidence distinguish
+                    # different parameterizations of the same strategy family.
+                    "preferred_strategy_hint": strategy_id,
+                    "strategy_affinity": source_profile.get("strategy_affinity") or {},
+                    "execution_context": source_profile.get("execution_context") or {},
+                    "evidence_quality": source_profile.get("evidence_quality") or {},
+                    "reason_code": None,
+                }
+            )
+            metadata = _dict(candidate.get("metadata"))
+            metadata["backtest_challenger"] = {
+                "lane": "SHADOW_CHALLENGER",
+                "observation_only": True,
+                "broker_order_authorized": False,
+                "production_promotion_authorized": False,
+                "strategy_id": strategy_id,
+                "strategy_name": strategy.get("strategy_name"),
+                "strategy_rank": strategy.get("rank"),
+                "strategy_score": strategy.get("score"),
+                "candidate_oos_metrics": strategy.get("candidate_oos_metrics") or {},
+                "failed_candidate_oos_gates": strategy.get(
+                    "failed_candidate_oos_gates"
+                )
+                or [],
             }
-        )
-        metadata = _dict(candidate.get("metadata"))
-        metadata["backtest_challenger"] = {
-            "lane": "SHADOW_CHALLENGER",
-            "observation_only": True,
-            "broker_order_authorized": False,
-            "failed_candidate_oos_gates": challenger.get("failed_candidate_oos_gates") or [],
-        }
-        candidate["metadata"] = metadata
-        candidates.append(candidate)
+            candidate["metadata"] = metadata
+            candidates.append(candidate)
     return candidates
 
 
@@ -142,6 +181,8 @@ def run_post_backtest_shadow(
         return {
             "status": "success",
             "candidate_count": 0,
+            "symbol_count": 0,
+            "strategy_observation_count": 0,
             "shadow": None,
             "performance": None,
             "broker_order_authorized": False,
@@ -177,10 +218,21 @@ def run_post_backtest_shadow(
     if performance_data.get("broker_order_authorized") is not False:
         raise RuntimeError("Performance review unexpectedly authorized broker order")
 
+    symbols = sorted({_symbol(row) for row in candidates if _symbol(row)})
+    strategies = sorted(
+        {
+            str(row.get("preferred_strategy_hint") or "").strip()
+            for row in candidates
+            if str(row.get("preferred_strategy_hint") or "").strip()
+        }
+    )
     return {
         "status": "success",
         "candidate_count": len(candidates),
-        "symbols": [_symbol(row) for row in candidates],
+        "symbol_count": len(symbols),
+        "strategy_observation_count": len(candidates),
+        "symbols": symbols,
+        "strategy_ids": strategies,
         "shadow": shadow,
         "performance": performance,
         "broker_order_authorized": False,
