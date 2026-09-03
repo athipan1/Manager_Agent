@@ -77,6 +77,22 @@ def eligible_symbols(report: Mapping[str, Any]) -> list[str]:
     return symbols
 
 
+def trade_gate_diagnostics(
+    preflight: Mapping[str, Any], backtest_report: Mapping[str, Any], symbols: list[str]
+) -> dict[str, Any]:
+    data = unwrap_backtest_report(backtest_report)
+    runtime = as_dict(preflight.get("runtime"))
+    items = as_list(data.get("items"))
+    return {
+        "market_open": preflight.get("market_open") is True,
+        "market_mode": preflight.get("market_mode"),
+        "paper_automation": runtime.get("paper_automation") is True,
+        "backtest_tested_count": len(items),
+        "backtest_eligible_count": len(symbols),
+        "eligible_symbols": symbols,
+    }
+
+
 def resolve_trade_gate(
     preflight: Mapping[str, Any], backtest_report: Mapping[str, Any]
 ) -> dict[str, Any]:
@@ -88,23 +104,30 @@ def resolve_trade_gate(
     runtime = as_dict(preflight.get("runtime"))
     paper_automation = runtime.get("paper_automation") is True
     symbols = eligible_symbols(backtest_report)
+    diagnostics = trade_gate_diagnostics(preflight, backtest_report, symbols)
 
     if paper_automation and preflight.get("market_open") is not True:
         return {
             "should_trade": False,
             "reason": "market_closed",
+            "next_action": "WAIT_FOR_REGULAR_SESSION",
             "eligible_symbols": symbols,
+            "diagnostics": diagnostics,
         }
     if not symbols:
         return {
             "should_trade": False,
             "reason": "no_eligible_strategy",
+            "next_action": "REVIEW_BACKTEST_REJECTIONS",
             "eligible_symbols": [],
+            "diagnostics": diagnostics,
         }
     return {
         "should_trade": True,
         "reason": "eligible_strategy_available",
+        "next_action": "CALL_MANAGER_RISK_EXECUTION",
         "eligible_symbols": symbols,
+        "diagnostics": diagnostics,
     }
 
 
@@ -126,13 +149,25 @@ def build_no_trade_report(
         for symbol in as_list(gate.get("eligible_symbols"))
         if normalized_symbol(symbol)
     ]
+    diagnostics = as_dict(gate.get("diagnostics"))
     return {
         "schema_version": "hourly-manager-cycle.no-trade.v1",
         "status": "success",
         "execute_requested": False,
         "market_mode": preflight.get("market_mode"),
         "reason": reason,
+        "next_action": gate.get("next_action"),
         "broker_orders_submitted": False,
+        "trade_gate": {
+            "should_trade": False,
+            "reason": reason,
+            "next_action": gate.get("next_action"),
+            "market_open": diagnostics.get("market_open"),
+            "paper_automation": diagnostics.get("paper_automation"),
+            "backtest_tested_count": diagnostics.get("backtest_tested_count", 0),
+            "backtest_eligible_count": diagnostics.get("backtest_eligible_count", 0),
+            "eligible_symbols": symbols,
+        },
         "manager_response": {
             "status": "success",
             "data": {
@@ -161,6 +196,7 @@ def build_no_trade_report(
 def write_github_output(path: Path | None, gate: Mapping[str, Any]) -> None:
     if path is None:
         return
+    diagnostics = as_dict(gate.get("diagnostics"))
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("a", encoding="utf-8") as handle:
         handle.write(
@@ -169,8 +205,20 @@ def write_github_output(path: Path | None, gate: Mapping[str, Any]) -> None:
             + "\n"
         )
         handle.write(f"reason={gate.get('reason')}\n")
+        handle.write(f"next_action={gate.get('next_action')}\n")
         handle.write(
             f"eligible_count={len(as_list(gate.get('eligible_symbols')))}\n"
+        )
+        handle.write(
+            "market_open="
+            + ("true" if diagnostics.get("market_open") is True else "false")
+            + "\n"
+        )
+        handle.write(
+            f"backtest_tested_count={int(diagnostics.get('backtest_tested_count', 0))}\n"
+        )
+        handle.write(
+            f"backtest_eligible_count={int(diagnostics.get('backtest_eligible_count', 0))}\n"
         )
 
 
@@ -197,6 +245,7 @@ def main() -> int:
     backtest_report = json.loads(args.backtest.read_text(encoding="utf-8"))
     gate = resolve_trade_gate(preflight, backtest_report)
     write_github_output(args.github_output, gate)
+    diagnostics = as_dict(gate.get("diagnostics"))
     if gate["should_trade"] is False:
         report = build_no_trade_report(preflight, gate, backtest_report)
         args.manager_output.parent.mkdir(parents=True, exist_ok=True)
@@ -207,11 +256,16 @@ def main() -> int:
         print(
             "Controlled no-trade gate recorded: "
             f"reason={gate['reason']} "
+            f"next_action={gate['next_action']} "
+            f"market_open={diagnostics.get('market_open')} "
+            f"backtest_tested_count={diagnostics.get('backtest_tested_count')} "
             f"eligible_count={len(gate['eligible_symbols'])}"
         )
     else:
         print(
             "Hourly trade gate passed: "
+            f"next_action={gate['next_action']} "
+            f"backtest_tested_count={diagnostics.get('backtest_tested_count')} "
             f"eligible_count={len(gate['eligible_symbols'])}"
         )
     return 0

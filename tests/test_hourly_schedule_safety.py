@@ -17,7 +17,7 @@ def test_hourly_workflow_yaml_parses():
 
 def test_hourly_schedule_and_concurrency_contract():
     workflow = workflow_text()
-    assert '- cron: "5 * * * *"' in workflow
+    assert '- cron: "35 * * * *"' in workflow
     assert "group: hourly-alpaca-paper-portfolio" in workflow
     assert "cancel-in-progress: false" in workflow
     assert "vars.HOURLY_PAPER_SCHEDULE_ENABLED == 'true'" in workflow
