@@ -322,8 +322,7 @@ jobs:
           path: Database_Agent
           fetch-depth: 1
 
-      - name: Checkout Learning_Agent for Simulator dry run
-        if: steps.preflight.outputs.paper_automation != 'true'
+      - name: Checkout Learning_Agent for challenger advisory review
         uses: actions/checkout@v6
         with:
           repository: athipan1/Learning_Agent
@@ -459,6 +458,12 @@ jobs:
         run: >-
           python scripts/resolve_hourly_trade_gate.py
           --github-output "$GITHUB_OUTPUT"
+
+      - name: Review Backtest challengers with Forward Performance and Learning
+        id: challenger_learning
+        if: steps.scanner_preselection.outputs.backtest_symbols != ''
+        working-directory: Manager_Agent
+        run: python scripts/review_backtest_challenger_learning.py
 
       - name: Recheck durable emergency halt before broker mutation
         if: >-
