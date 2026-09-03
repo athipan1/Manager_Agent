@@ -8,7 +8,14 @@ import json
 from pathlib import Path
 from typing import Any, Mapping
 
-from scripts.classify_backtest_challengers import build_report as build_challenger_report
+try:
+    from scripts.classify_backtest_challengers import (
+        build_report as build_challenger_report,
+    )
+except ModuleNotFoundError as exc:
+    if exc.name != "scripts":
+        raise
+    from classify_backtest_challengers import build_report as build_challenger_report
 
 
 def as_dict(value: Any) -> dict[str, Any]:
