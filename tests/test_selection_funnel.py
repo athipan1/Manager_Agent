@@ -138,3 +138,19 @@ def test_exposure_rejection_retains_actual_limit_and_human_action():
     assert reject['reason']=='Refresh the broker snapshot.'
     assert result['counts']['allocation_selected_count']==1
     assert result['counts']['exposure_gate_rejected_count']==1
+
+
+def test_controlled_zero_candidates_keeps_scanner_gate_input_and_no_trade():
+    s={'status':'success','outcome':'NO_TRADE','controlled_no_trade':True,
+        'response':{'status':'error','data':{'report_id':'cycle-1','stage':'scanner_discovery',
+        'scanner_data':{'candidates':[],'metadata':{'selected_universe_count':1000,
+        'scanner_data_quality_gate':{'original_count':10,'passed_count':0,'evaluations':[
+            {'symbol':'AAPL','allowed':False,'reason_code':'LOW_COVERAGE','reason':'Coverage too low.',
+             'coverage_ratio':0.5,'min_coverage_ratio':0.8}]}}}}}}
+    result=build_funnel(s)
+    assert result['outcome']=='NO_TRADE'
+    assert result['counts']['scanner_candidate_count']==10
+    assert result['counts']['deep_analysis_success_count']==0
+    assert result['counts']['deep_analysis_failure_count']==0
+    assert result['counts']['production_candidate_count']==0
+    assert result['rejections'][0]['gate']=='data_quality'

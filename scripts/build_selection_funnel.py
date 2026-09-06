@@ -47,6 +47,7 @@ def build_funnel(source: dict, backtest: dict | None = None, cycle: dict | None 
     scanner = obj(data.get('scanner_data'))
     metadata = obj(data.get('scanner_metadata')) or obj(scanner.get('metadata'))
     broad = obj(metadata.get('discovery_funnel'))
+    quality_gate = obj(metadata.get('scanner_data_quality_gate'))
     ranked = rows(data.get('ranked_candidates'))
     bucket = obj(data.get('bucket_selection'))
     summary = obj(bucket.get('summary'))
@@ -58,7 +59,7 @@ def build_funnel(source: dict, backtest: dict | None = None, cycle: dict | None 
         'universe_count': metadata.get('selected_universe_count', metadata.get('requested_universe_count')),
         'prefilter_count': broad.get('prefilter_count'),
         'ranked_market_count': broad.get('ranked_market_count'),
-        'scanner_candidate_count': data.get('scanner_count', len(rows(scanner.get('candidates'))) if scanner else None),
+        'scanner_candidate_count': quality_gate.get('original_count', data.get('scanner_count', len(rows(scanner.get('candidates'))) if scanner else None)),
         'research_candidate_count': data.get('research_candidate_count', len(rows(data.get('research_candidates')))),
         'deep_analysis_success_count': data.get('deep_analysis_success_count', data.get('deep_analysis_count')),
         'deep_analysis_failure_count': data.get('deep_analysis_failure_count'),
@@ -73,10 +74,12 @@ def build_funnel(source: dict, backtest: dict | None = None, cycle: dict | None 
         counts['final_score_pass_count'] = 0
     # A missing counter stays unknown; absence must never imply success or zero loss.
     if counts['deep_analysis_failure_count'] is None and counts['scanner_candidate_count'] is not None and counts['deep_analysis_success_count'] is not None:
-        counts['deep_analysis_failure_count'] = counts['scanner_candidate_count'] - counts['deep_analysis_success_count']
+        attempted = len(rows(data.get('top_10_symbols'))) if 'top_10_symbols' in data else data.get('scanner_count')
+        if attempted is not None:
+            counts['deep_analysis_failure_count'] = attempted - counts['deep_analysis_success_count']
     if counts['final_score_pass_count'] is not None:
         counts['final_score_rejected_count'] = len(ranked) - counts['final_score_pass_count']
-    if counts['scanner_candidate_count'] == 0:
+    if counts['scanner_candidate_count'] == 0 or (data.get('stage') == 'scanner_discovery' and scanner):
         for key in ('deep_analysis_success_count', 'deep_analysis_failure_count', 'final_score_pass_count',
                     'final_score_rejected_count', 'allocation_selected_count', 'exposure_gate_allowed_count', 'exposure_gate_rejected_count'):
             counts[key] = 0
@@ -199,6 +202,8 @@ def build_funnel(source: dict, backtest: dict | None = None, cycle: dict | None 
         for symbol in score_by_symbol:
             reject(symbol, 'cycle_trade_gate', str(reason).upper(), str(reason).replace('_', ' '), limit='all_cycle_safety_checks_pass')
     no_trade = counts['production_candidate_count'] == 0 and response.get('status') == 'success'
+    if source.get('status') == 'success' and source.get('controlled_no_trade') is True and source.get('outcome') == 'NO_TRADE':
+        no_trade = True
     if cycle.get('status') in {'controlled_no_trade', 'no_trade'}:
         no_trade = True
     unique = {}
