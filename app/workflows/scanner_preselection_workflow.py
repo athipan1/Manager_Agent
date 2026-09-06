@@ -251,8 +251,15 @@ async def run_scanner_preselection_flow(
             *[
                 analyze_single_asset(ticker, correlation_id)
                 for ticker in selected_tickers
-            ]
+            ],
+            return_exceptions=True,
         )
+        analysis_results = [
+            {"ticker": ticker, "error": "DEEP_ANALYSIS_EXCEPTION",
+             "error_type": type(result).__name__}
+            if isinstance(result, BaseException) else result
+            for ticker, result in zip(selected_tickers, analysis_results)
+        ]
         valid_results = [
             result for result in analysis_results if "error" not in result
         ]
@@ -265,6 +272,10 @@ async def run_scanner_preselection_flow(
             if isinstance(response.data, dict):
                 response.data["preselection_only"] = True
                 response.data["database_sync"] = database_sync
+                response.data["scanner_metadata"] = scan_payload.get("metadata", {})
+                response.data["scanner_count"] = len(candidates)
+                response.data["deep_analysis_success_count"] = 0
+                response.data["deep_analysis_failure_count"] = len(analysis_results)
             _attach_shadow_candidates(response, research_candidates)
             return response
 
@@ -310,9 +321,22 @@ async def run_scanner_preselection_flow(
             "research_candidate_count": len(research_candidates),
             "shadow_lane_eligible": bool(research_candidates),
             "deep_analysis_count": len(valid_results),
+            "deep_analysis_success_count": len(valid_results),
+            "deep_analysis_failure_count": len(analysis_results) - len(valid_results),
+            "analysis_outcomes": [
+                {"symbol": result.get("ticker"), "status": result.get("status", "failed"),
+                 "error": result.get("error"), "final_verdict": result.get("final_verdict"),
+                 "agents": {name: {
+                     "action": getattr(getattr(result.get("details"), name, None), "action", None),
+                     "score": getattr(getattr(result.get("details"), name, None), "score", None),
+                     "reason": getattr(getattr(result.get("details"), name, None), "reason", None),
+                 } for name in ("technical", "fundamental")}}
+                for result in analysis_results
+            ],
             "top_10_symbols": selected_tickers,
             "allocation_plan": allocation_report.get("allocation_plan"),
             "bucket_selection": allocation_report.get("bucket_selection"),
+            "pre_risk_capacity": allocation_report.get("pre_risk_capacity"),
             "pre_gate_selected_positions": pre_gate_selected_positions,
             "pre_backtest_selected_positions": selected_positions,
             "selected_positions": selected_positions,

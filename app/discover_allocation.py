@@ -287,6 +287,35 @@ def select_candidates_by_bucket(
             item.get("symbol") for item in quarantined
         ],
     }
+    # Persist every failed predicate, including HOLD above the score threshold.
+    # These observations never participate in selection or change its policy.
+    evaluations = []
+    for item in enriched:
+        score = float(_score(item))
+        checks = [
+            ("final_score", score >= float(threshold), score, float(threshold),
+             "FINAL_SCORE_BELOW_THRESHOLD", "Final opportunity score is below the configured minimum."),
+            ("allocation_verdict", _verdict(item) in {"buy", "strong_buy"}, _verdict(item), ["buy", "strong_buy"],
+             "BUY_VERDICT_REQUIRED", "Allocation requires BUY or STRONG_BUY; a passing score alone is insufficient."),
+            ("allocation_classification", item.get("strategy_bucket") in BUCKET_PRIORITY
+             and item.get("bucket_classification_status") == "classified"
+             and float(item.get("bucket_confidence") or 0) >= AUTO_CLASSIFY_THRESHOLD,
+             item.get("bucket_confidence"), AUTO_CLASSIFY_THRESHOLD,
+             "BUCKET_CLASSIFICATION_REVIEW", "Bucket classification or its confidence requires review."),
+            ("analysis_evidence", bool(item.get("evidence_gate_passed", True)),
+             bool(item.get("evidence_gate_passed", True)), True,
+             "ANALYSIS_EVIDENCE_INSUFFICIENT", "Analysis evidence did not pass the required contract gate."),
+        ]
+        evaluations.append({
+            "symbol": item.get("symbol"), "score": score,
+            "threshold": float(threshold), "final_score_passed": score >= float(threshold),
+            "eligible": _eligible_for_new_entry(item, threshold),
+            "rejections": [{"symbol": item.get("symbol"), "score": score,
+                "threshold": limit, "gate": gate, "reason_code": code,
+                "reason": reason, "observed": observed, "lane": "production"}
+                for gate, passed, observed, limit, code, reason in checks if not passed],
+        })
+    selected["selection_evaluations"] = evaluations
     return selected
 
 

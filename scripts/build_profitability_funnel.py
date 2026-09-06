@@ -228,7 +228,7 @@ def _active_bottlenecks(
 def build_profitability_funnel(report: dict[str, Any]) -> dict[str, Any]:
     response = _dict(report.get("response"))
     data = _dict(response.get("data"))
-    scanner_metadata = _dict(data.get("scanner_metadata"))
+    scanner_metadata = _dict(data.get("scanner_metadata")) or _dict(_dict(data.get("scanner_data")).get("metadata"))
     data_quality_gate = _dict(scanner_metadata.get("scanner_data_quality_gate"))
     opportunity_gate = _dict(scanner_metadata.get("scanner_opportunity_gate"))
     fundamental_cache = _dict(scanner_metadata.get("fundamental_cache"))
@@ -249,7 +249,7 @@ def build_profitability_funnel(report: dict[str, Any]) -> dict[str, Any]:
     requested = _int(_dict(report.get("request")).get("max_universe"))
     attempted = _int(scanner_metadata.get("attempted_count"), requested)
     analyzed = _int(scanner_metadata.get("analyzed_count"))
-    production_candidates = _int(
+    scanner_candidates = _int(
         data.get("scanner_count"),
         len(_list(data.get("top_10_symbols"))),
     )
@@ -259,15 +259,15 @@ def build_profitability_funnel(report: dict[str, Any]) -> dict[str, Any]:
     )
     quality_input = _int(
         data_quality_gate.get("original_count"),
-        production_candidates + _int(data_quality_gate.get("review_count")),
+        scanner_candidates + _int(data_quality_gate.get("review_count")),
     )
     data_quality_passed = _int(
         data_quality_gate.get("passed_count"),
-        production_candidates,
+        scanner_candidates,
     )
     opportunity_passed = _int(
         opportunity_gate.get("passed_count"),
-        production_candidates,
+        scanner_candidates,
     )
     deep_analysis = _int(data.get("deep_analysis_count"))
     ranked_count = len(ranked_candidates)
@@ -320,7 +320,7 @@ def build_profitability_funnel(report: dict[str, Any]) -> dict[str, Any]:
         {"name": "scanner_analysis_ready", "count": data_quality_passed, "conversion_from_gate_input": _ratio(data_quality_passed, quality_input)},
         {"name": "scanner_production_ready", "count": opportunity_passed, "conversion_from_analysis_ready": _ratio(opportunity_passed, data_quality_passed)},
         {"name": "scanner_research_shadow", "count": research_candidates, "execution_authorized": False},
-        {"name": "deep_analysis_success", "count": deep_analysis, "conversion_from_production": _ratio(deep_analysis, production_candidates)},
+        {"name": "deep_analysis_success", "count": deep_analysis, "conversion_from_scanner": _ratio(deep_analysis, scanner_candidates)},
         {"name": "ranked_candidates", "count": ranked_count},
         {"name": "classified_evidence_eligible", "count": classified, "conversion_from_ranked": _ratio(classified, ranked_count)},
         {"name": "selected_before_investability", "count": selected_before_investability},
@@ -399,7 +399,8 @@ def build_profitability_funnel(report: dict[str, Any]) -> dict[str, Any]:
             "data_quality_rejection_reasons": data_quality_reasons,
             "opportunity_gate_decision": opportunity_gate.get("decision"),
             "opportunity_rejection_reasons": opportunity_reasons,
-            "production_candidate_count": production_candidates,
+            "scanner_candidate_count": scanner_candidates,
+            "production_candidate_count": opportunity_passed,
             "research_candidate_count": research_candidates,
             "shadow_execution_authorized": False,
             "quarantine_count": _int(bucket_summary.get("quarantine_count")),
@@ -523,7 +524,7 @@ def main() -> None:
     print(
         "Profitability funnel audit complete: "
         f"primary_bottleneck={primary.get('stage', 'none')}, "
-        f"production_candidates={_dict(funnel.get('health')).get('production_candidate_count', 0)}, "
+        f"scanner_candidates={_dict(funnel.get('health')).get('production_candidate_count', 0)}, "
         f"research_candidates={_dict(funnel.get('health')).get('research_candidate_count', 0)}, "
         f"backtest_symbols={len(_list(_dict(funnel.get('health')).get('backtest_symbols')))}"
     )
@@ -531,3 +532,4 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+

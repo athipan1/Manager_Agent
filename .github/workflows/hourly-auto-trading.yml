@@ -516,6 +516,11 @@ jobs:
             PYTHONPATH=. python scripts/render_hourly_portfolio_report.py || true
           fi
 
+      - name: Build per-cycle selection funnel with exact Backtest results
+        if: always()
+        working-directory: Manager_Agent
+        run: python scripts/build_selection_funnel.py --reports-dir reports
+
       - name: Upload hourly portfolio audit
         if: always()
         uses: actions/upload-artifact@v7
