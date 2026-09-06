@@ -124,3 +124,17 @@ def test_preselection_e2e_keeps_success_and_records_each_analysis_failure(monkey
     assert result['outcome']=='NO_TRADE'
     assert {r['symbol'] for r in result['rejections'] if r['gate']=='deep_analysis'}=={'MSFT','GOOG'}
     assert result['counts']['final_score_pass_count']==1
+
+
+def test_exposure_rejection_retains_actual_limit_and_human_action():
+    s=source('buy',True);d=s['response']['data'];d['pre_backtest_selected_positions']=[]
+    d['exposure_gate']={'summary':{'allowed_count':0,'rejected_count':1},
+        'rejected':[{'symbol':'AAPL','rejection_codes':['broker_snapshot_stale'],'required_actions':['Refresh the broker snapshot.']}],
+        'decisions':[{'symbol':'AAPL','snapshot_age_seconds':91,'max_snapshot_age_seconds':60}]}
+    result=build_funnel(s)
+    reject=result['rejections'][0]
+    assert reject['gate']=='exposure'
+    assert reject['observed']==91 and reject['threshold']==60
+    assert reject['reason']=='Refresh the broker snapshot.'
+    assert result['counts']['allocation_selected_count']==1
+    assert result['counts']['exposure_gate_rejected_count']==1

@@ -123,12 +123,35 @@ def build_funnel(source: dict, backtest: dict | None = None, cycle: dict | None 
     allocation = obj(data.get('allocation_plan'))
     for gate, records in [('investability', rows(obj(allocation.get('investability_gate')).get('rejected'))),
                           ('exposure', rows(exposure.get('rejected'))),
-                          ('allocation_capacity', rows(obj(allocation.get('pre_risk_capacity')).get('skipped')))]:
+                          ('allocation_capacity', rows(obj(data.get('pre_risk_capacity')).get('skipped')))]:
         for row in records:
+            detail = row
+            if gate == 'exposure':
+                detail = next((r for r in rows(exposure.get('decisions')) if r.get('symbol') == row.get('symbol')), row)
+            if gate == 'allocation_capacity':
+                detail = obj(row.get('pre_risk_capacity')) or row
             codes = rows(row.get('rejection_codes')) or rows(row.get('reason_codes')) or [row.get('reason_code') or f'{gate.upper()}_REJECTED']
             for code in codes:
-                reject(row.get('symbol'), gate, code, row.get('reason') or row.get('reasons') or 'Candidate rejected by ' + gate,
-                       observed=row.get('observed'), limit=row.get('threshold'), evidence=row)
+                reason = (detail.get('reason') or row.get('capacity_skip_reason') or row.get('reasons')
+                          or '; '.join(row.get('required_actions') or []) or 'Candidate rejected by ' + gate)
+                limit = detail.get('thresholds') or detail.get('threshold')
+                observed = detail.get('metrics') or detail.get('observed')
+                if gate == 'exposure':
+                    evidence_fields = {
+                        'broker_snapshot_stale': ('snapshot_age_seconds', 'max_snapshot_age_seconds'),
+                        'bucket_capacity_exhausted': ('bucket_remaining_capacity', None),
+                        'symbol_capacity_exhausted': ('symbol_remaining_capacity', None),
+                        'database_sync_unhealthy': ('database_sync_ok', None),
+                        'existing_positions_not_fully_protected': ('blocking_unprotected_symbols', None),
+                    }
+                    observed_key, limit_key = evidence_fields.get(code, ('maximum_order_value', None))
+                    observed = detail.get(observed_key)
+                    limit = detail.get(limit_key) if limit_key else ('synced' if code == 'database_sync_unhealthy' else
+                        'no_unprotected_positions' if code == 'existing_positions_not_fully_protected' else 'remaining_capacity > 0')
+                elif gate == 'allocation_capacity':
+                    observed = detail.get('allowed_incremental_value')
+                    limit = detail.get('minimum_incremental_value')
+                reject(row.get('symbol'), gate, code, reason, observed=observed, limit=limit, evidence=detail)
     for name, values in bucket.items():
         for row in rows(obj(values).get('overflow')):
             reject(row.get('symbol'), 'allocation_capacity', 'BUCKET_POSITION_LIMIT',

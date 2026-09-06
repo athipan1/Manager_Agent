@@ -336,6 +336,7 @@ async def run_scanner_preselection_flow(
             "top_10_symbols": selected_tickers,
             "allocation_plan": allocation_report.get("allocation_plan"),
             "bucket_selection": allocation_report.get("bucket_selection"),
+            "pre_risk_capacity": allocation_report.get("pre_risk_capacity"),
             "pre_gate_selected_positions": pre_gate_selected_positions,
             "pre_backtest_selected_positions": selected_positions,
             "selected_positions": selected_positions,
