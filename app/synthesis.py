@@ -53,13 +53,13 @@ def _normalized_weights(raw_weights: Any) -> tuple[float, float]:
     return tech_weight / total, fund_weight / total
 
 
-def get_weighted_verdict(
+def get_weighted_verdict_trace(
     technical_action: str,
     technical_score: float,
     fundamental_action: str,
     fundamental_score: float,
     asset_symbol: str,
-) -> str:
+) -> dict:
     """Combine direction, confidence, configured weights and asset bias.
 
     Previous behavior discarded both confidence scores after accepting them as
@@ -89,14 +89,37 @@ def get_weighted_verdict(
     weighted_score = base_weighted_score * bias_multiplier
 
     if weighted_score >= 0.8:
-        return "strong_buy"
-    if weighted_score >= 0.2:
-        return "buy"
-    if weighted_score > -0.2:
-        return "hold"
-    if weighted_score > -0.8:
-        return "sell"
-    return "strong_sell"
+        verdict = "strong_buy"
+    elif weighted_score >= 0.2:
+        verdict = "buy"
+    elif weighted_score > -0.2:
+        verdict = "hold"
+    elif weighted_score > -0.8:
+        verdict = "sell"
+    else:
+        verdict = "strong_sell"
+    return {
+        "schema_version": "manager-verdict-trace.v1", "verdict": verdict,
+        "technical": {"action": technical_action, "direction": tech_val, "weight": tech_weight,
+                      "confidence": _confidence(technical_score),
+                      "contribution": tech_val * _confidence(technical_score) * tech_weight},
+        "fundamental": {"action": fundamental_action, "direction": fund_val, "weight": fund_weight,
+                        "confidence": _confidence(fundamental_score),
+                        "contribution": fund_val * _confidence(fundamental_score) * fund_weight},
+        "base_weighted_score": base_weighted_score, "asset_bias": bias,
+        "bias_multiplier": bias_multiplier, "directional_score": weighted_score,
+        "thresholds": {"strong_buy": 0.8, "buy": 0.2, "sell": -0.2, "strong_sell": -0.8},
+        "buy_passed": weighted_score >= 0.2,
+        "reason_code": "DIRECTIONAL_BUY_SUPPORTED" if weighted_score >= 0.2 else "DIRECTIONAL_SCORE_BELOW_BUY_THRESHOLD",
+        "final_opportunity_score_used": False, "unanimous_consensus_required": False,
+        "market_regime_role": "separate_portfolio_and_execution_gate_no_directional_vote",
+    }
+
+
+def get_weighted_verdict(technical_action, technical_score, fundamental_action, fundamental_score, asset_symbol) -> str:
+    return get_weighted_verdict_trace(
+        technical_action, technical_score, fundamental_action, fundamental_score, asset_symbol,
+    )["verdict"]
 
 
 def get_reasons(technical_action: str, fundamental_action: str) -> Tuple[str, str]:

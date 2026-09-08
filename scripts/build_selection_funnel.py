@@ -167,7 +167,7 @@ def build_funnel(source: dict, backtest: dict | None = None, cycle: dict | None 
 
     bt = obj(obj(backtest).get('data'))
     bt_correlation = obj(backtest).get('correlation_id')
-    same_cycle = bool(backtest) and (bt_correlation == data.get('report_id') or
+    same_cycle = bool(backtest) and bool(bt_correlation) and (bt_correlation == data.get('report_id') or
         (source_run_id is not None and bt_correlation == f'backtest-nested-{source_run_id}'))
     eligible = set(bt.get('eligible_symbols') or []) if same_cycle else set()
     if bt and same_cycle:
@@ -183,10 +183,13 @@ def build_funnel(source: dict, backtest: dict | None = None, cycle: dict | None 
         reasons = rows(best.get('disqualification_reasons')) or [item.get('error') or item.get('status') or 'Exact Backtest did not approve a strategy.']
         for reason in reasons:
             reason = str(reason)
-            metric = reason.split(' gate failed', 1)[0].removeprefix('walk_forward_') if reason.startswith('walk_forward_') else None
-            observed = obj(best.get('walk_forward')).get(metric) if metric else best.get('score')
+            nested_reason = reason.startswith('nested_outer_oos: ')
+            metric_reason = reason.removeprefix('nested_outer_oos: ')
+            metric = metric_reason.split(' gate failed', 1)[0].removeprefix('walk_forward_') if metric_reason.startswith('walk_forward_') else None
+            metrics = obj(selection.get('nested_walk_forward')) if nested_reason else obj(best.get('walk_forward'))
+            observed = metrics.get(metric) if metric else best.get('score')
             limit = obj(selection.get('walk_forward_criteria')).get('min_' + metric) if metric else None
-            code = ('BACKTEST_WALK_FORWARD_' + metric.upper()) if metric else 'BACKTEST_NO_ELIGIBLE_STRATEGY'
+            code = (('BACKTEST_NESTED_OOS_' if nested_reason else 'BACKTEST_WALK_FORWARD_') + metric.upper()) if metric else 'BACKTEST_NO_ELIGIBLE_STRATEGY'
             reject(symbol, 'exact_backtest', code, reason, lane='research' if symbol not in symbols(data.get('pre_backtest_selected_positions')) else 'production',
                    strategy_id=best.get('strategy_id'), observed=observed, limit=limit,
                    validation_thresholds={'selection':selection.get('selection_criteria'), 'walk_forward':selection.get('walk_forward_criteria')},

@@ -42,7 +42,8 @@ def test_process_agent_response_defaults_invalid_action_to_hold():
     )
 
     assert detail.action == "hold"
-    assert detail.score == 0.5
+    assert detail.score == 0.0
+    assert "Invalid or missing" in detail.reason
     assert isinstance(detail.reason, str)
 
 
@@ -92,9 +93,9 @@ def _patch_successful_analysis(monkeypatch, calls):
         lambda ticker: None,
     )
     monkeypatch.setattr(
-        "app.workflows.analysis_workflow.get_weighted_verdict",
+        "app.workflows.analysis_workflow.get_weighted_verdict_trace",
         lambda tech_action, tech_score, fund_action, fund_score, asset_symbol: (
-            "buy"
+            {"verdict": "buy"}
         ),
     )
 
@@ -169,9 +170,9 @@ async def test_analyze_single_asset_returns_partial_when_one_agent_fails(
         lambda ticker: None,
     )
     monkeypatch.setattr(
-        "app.workflows.analysis_workflow.get_weighted_verdict",
+        "app.workflows.analysis_workflow.get_weighted_verdict_trace",
         lambda tech_action, tech_score, fund_action, fund_score, asset_symbol: (
-            "hold"
+            {"verdict": "hold"}
         ),
     )
 

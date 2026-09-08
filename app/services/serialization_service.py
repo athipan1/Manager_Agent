@@ -7,6 +7,7 @@ without starting FastAPI or any downstream trading agents.
 from __future__ import annotations
 
 import datetime
+import math
 from decimal import Decimal
 from typing import Any, Dict
 
@@ -32,6 +33,8 @@ def normalize_score(value: Any) -> float:
     """
     try:
         score = float(value or 0.0)
+        if isinstance(value, bool) or not math.isfinite(score):
+            return 0.0
         score = score / 100.0 if score > 1.0 else score
         return max(0.0, min(1.0, score))
     except (TypeError, ValueError):
