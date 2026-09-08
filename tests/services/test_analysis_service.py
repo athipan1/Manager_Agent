@@ -1,4 +1,5 @@
 from types import SimpleNamespace
+import pytest
 
 from app.services.analysis_service import (
     extract_current_price_and_stop,
@@ -74,19 +75,20 @@ def test_score_deep_analysis_matches_legacy_weighting():
     }
 
 
-def test_score_deep_analysis_uses_scanner_score_when_fundamental_score_missing():
+@pytest.mark.parametrize("fundamental", [None, SimpleNamespace(score=0.0)])
+def test_score_deep_analysis_preserves_missing_or_zero_fundamental_evidence(fundamental):
     details = SimpleNamespace(
         technical=SimpleNamespace(score=0.6),
-        fundamental=SimpleNamespace(score=0.0),
+        fundamental=fundamental,
     )
     payload = {"details": details, "final_verdict": "hold"}
 
     assert score_deep_analysis(payload, scanner_score=0.4) == {
         "scanner_score": 0.4,
         "technical_score": 0.6,
-        "fundamental_score": 0.4,
+        "fundamental_score": 0.0,
         "verdict_score": 0.45,
-        "final_opportunity_score": 0.465,
+        "final_opportunity_score": 0.305,
     }
 
 
