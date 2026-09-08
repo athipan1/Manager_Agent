@@ -519,7 +519,9 @@ jobs:
       - name: Build per-cycle selection funnel with exact Backtest results
         if: always()
         working-directory: Manager_Agent
-        run: python scripts/build_selection_funnel.py --reports-dir reports
+        run: |
+          python scripts/build_selection_funnel.py --reports-dir reports
+          python scripts/build_decision_trace.py --reports-dir reports
 
       - name: Upload hourly portfolio audit
         if: always()

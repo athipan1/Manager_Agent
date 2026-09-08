@@ -71,7 +71,6 @@ def score_deep_analysis(
     tech_score = normalize_score(tech_detail.score if tech_detail else 0.0)
     fund_score = (
         normalize_score(fund_detail.score if fund_detail else 0.0)
-        or scanner_score
     )
     verdict = analysis_result.get("final_verdict", "hold")
     verdict_score = {

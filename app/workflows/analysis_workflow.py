@@ -8,6 +8,8 @@ details and builds the weighted final verdict.
 from __future__ import annotations
 
 import copy
+import hashlib
+import json
 import os
 import threading
 import time
@@ -22,10 +24,12 @@ from ..services.serialization_service import (
     response_to_dict,
 )
 from ..stock_guard import validate_stock_scope
-from ..synthesis import get_reasons, get_weighted_verdict
+from ..synthesis import get_reasons, get_weighted_verdict_trace
+from ..scanner_client import get_scanner_prefetch
+from ..config_manager import config_manager
 
 
-DEEP_ANALYSIS_CACHE_POLICY_VERSION = "manager-deep-analysis-cache-v1"
+DEEP_ANALYSIS_CACHE_POLICY_VERSION = "manager-deep-analysis-cache-v2"
 DEEP_ANALYSIS_RESPONSE_CACHE: Dict[str, Dict[str, Any]] = {}
 _DEEP_ANALYSIS_CACHE_LOCK = threading.RLock()
 _DEFAULT_DEEP_ANALYSIS_CACHE_TTL_SECONDS = 900.0
@@ -52,6 +56,13 @@ def clear_deep_analysis_cache() -> None:
 
 def _cache_key(ticker: str) -> str:
     return str(ticker or "").strip().upper()
+
+
+def _context_fingerprint(ticker: str) -> str:
+    context = {"scanner": get_scanner_prefetch(ticker),
+               "weights": config_manager.get("AGENT_WEIGHTS"),
+               "biases": config_manager.get("ASSET_BIASES", {})}
+    return hashlib.sha256(json.dumps(context, sort_keys=True, default=str).encode()).hexdigest()
 
 
 def _prune_deep_analysis_cache(now: float) -> None:
@@ -103,7 +114,7 @@ def _get_cached_analysis(
     with _DEEP_ANALYSIS_CACHE_LOCK:
         _prune_deep_analysis_cache(now)
         cached = DEEP_ANALYSIS_RESPONSE_CACHE.pop(key, None)
-    if not cached:
+    if not cached or cached.get("context_fingerprint") != _context_fingerprint(ticker):
         return None
 
     age_seconds = max(0.0, now - float(cached["stored_at"]))
@@ -128,6 +139,7 @@ def _store_analysis(
         _prune_deep_analysis_cache(now)
         DEEP_ANALYSIS_RESPONSE_CACHE[key] = {
             "stored_at": now,
+            "context_fingerprint": _context_fingerprint(ticker),
             "source_correlation_id": correlation_id,
             "result": copy.deepcopy(result),
         }
@@ -148,12 +160,17 @@ def process_agent_response(
     if not data_obj:
         return None
 
-    action = str(data_obj.get("action") or "hold").lower()
+    raw_action = data_obj.get("action")
+    action = str(getattr(raw_action, "value", raw_action) or "hold").strip().lower()
     if action not in {"buy", "sell", "hold"}:
         action = "hold"
 
     score = normalize_score(data_obj.get("confidence_score", 0.0))
+    if str(getattr(raw_action, "value", raw_action) or "").strip().lower() not in {"buy", "sell", "hold"}:
+        score = 0.0
     reason = data_obj.get("reason")
+    if str(getattr(raw_action, "value", raw_action) or "").strip().lower() not in {"buy", "sell", "hold"}:
+        reason = f"Invalid or missing {agent_type} action; neutral fallback contributes zero confidence."
     tech_reason, fund_reason = get_reasons(
         action if agent_type == "technical" else "hold",
         action if agent_type == "fundamental" else "hold",
@@ -167,6 +184,24 @@ def process_agent_response(
             or (tech_reason if agent_type == "technical" else fund_reason)
         ),
     )
+
+
+def _agent_decision_trace(response: dict) -> dict:
+    data = agent_data(response)
+    raw_action = data.get("action")
+    normalized = str(getattr(raw_action, "value", raw_action) or "").strip().lower()
+    valid = response.get("status") == "success" and normalized in {"buy", "sell", "hold"}
+    return {
+        "response_status": response.get("status"), "raw_action": raw_action,
+        "normalized_action": normalized if valid else "hold",
+        "normalization_status": "recognized" if valid else "invalid_or_missing_response",
+        "fallback_used": not valid, "error": response.get("error"),
+        "confidence": data.get("confidence_score"), "reason": data.get("reason"),
+        "source": data.get("source"), "timestamp": response.get("timestamp"),
+        "correlation_id": response.get("correlation_id"),
+        "decision": data.get("decision_trace") or {"status": "not_reported_by_agent"},
+        "data_quality": data.get("data_quality") or {"score": data.get("data_quality_score")},
+    }
 
 
 async def analyze_single_asset(
@@ -203,6 +238,12 @@ async def analyze_single_asset(
         return {
             "ticker": normalized_ticker,
             "error": "All agents failed",
+            "decision_trace": {
+                "schema_version": "asset-decision-trace.v1", "symbol": normalized_ticker,
+                "aggregation": {"status": "not_evaluated", "reason_code": "ALL_AGENTS_FAILED"},
+                "agents": {name: _agent_decision_trace(raw) for name, raw in
+                           (("technical", tech_raw), ("fundamental", fund_raw))},
+            },
             "raw_data": {
                 "technical": tech_raw,
                 "fundamental": fund_raw,
@@ -218,7 +259,7 @@ async def analyze_single_asset(
             },
         }
 
-    final_verdict = get_weighted_verdict(
+    verdict_trace = get_weighted_verdict_trace(
         tech_detail.action if tech_detail else "hold",
         tech_detail.score if tech_detail else 0.0,
         fund_detail.action if fund_detail else "hold",
@@ -228,7 +269,13 @@ async def analyze_single_asset(
 
     result = {
         "ticker": normalized_ticker,
-        "final_verdict": final_verdict,
+        "final_verdict": verdict_trace["verdict"],
+        "decision_trace": {
+            "schema_version": "asset-decision-trace.v1", "symbol": normalized_ticker,
+            "aggregation": verdict_trace,
+            "agents": {name: _agent_decision_trace(raw) for name, raw in
+                       (("technical", tech_raw), ("fundamental", fund_raw))},
+        },
         "status": "complete" if tech_detail and fund_detail else "partial",
         "details": ReportDetails(
             technical=tech_detail,

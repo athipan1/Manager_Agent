@@ -326,6 +326,7 @@ async def run_scanner_preselection_flow(
             "analysis_outcomes": [
                 {"symbol": result.get("ticker"), "status": result.get("status", "failed"),
                  "error": result.get("error"), "final_verdict": result.get("final_verdict"),
+                 "decision_trace": result.get("decision_trace"), "analysis_cache": result.get("analysis_cache"),
                  "agents": {name: {
                      "action": getattr(getattr(result.get("details"), name, None), "action", None),
                      "score": getattr(getattr(result.get("details"), name, None), "score", None),
