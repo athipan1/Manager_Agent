@@ -62,14 +62,13 @@ TECHNICAL = r'''
 import numpy as np
 import pandas as pd
 from unittest.mock import patch
+from fastapi.testclient import TestClient
 try:
-    from app.service import analyze_stock
-    from app.models import StandardAgentResponse
+    from app.main import app
     service_module = "app.service"
 except ModuleNotFoundError:
     # Technical's existing Docker image copies app/ directly into /app.
-    from service import analyze_stock
-    from models import StandardAgentResponse
+    from main import app
     service_module = "service"
 close = np.r_[np.linspace(50,100,230), np.linspace(100,160,15),
               np.linspace(160,105,12), np.repeat(105.,15)]
@@ -77,12 +76,16 @@ frame = pd.DataFrame({"Open":close, "High":close+1, "Low":close-1,
                       "Close":close, "Volume":1e6},
                      index=pd.date_range(end=pd.Timestamp.now(tz="UTC"), periods=len(close), freq="D"))
 with patch(service_module + ".get_stock_data", return_value=frame):
-    positive = StandardAgentResponse.model_validate(analyze_stock("TEST")).model_dump(mode="json")
+    response = TestClient(app).post("/analyze", json={"ticker": "TEST", "timeframe": "1d"},
+                                    headers={"X-Correlation-ID": "decision-contract-fixture"})
+    assert response.status_code == 200, response.text
+    positive = response.json()
+assert positive["correlation_id"] == "decision-contract-fixture"
 assert positive["data"]["action"] == "buy", positive
 assert all(row["passed"] for row in positive["data"]["decision_trace"]["buy_conditions"])
 short = frame.tail(50)
 with patch(service_module + ".get_stock_data", return_value=short):
-    rejected = StandardAgentResponse.model_validate(analyze_stock("TEST")).model_dump(mode="json")
+    rejected = TestClient(app).post("/analyze", json={"ticker": "TEST", "timeframe": "1d"}).json()
 assert rejected["status"] == "error" and rejected["data"]["action"] == "hold"
 emit({"positive": positive, "negative": rejected})
 '''
