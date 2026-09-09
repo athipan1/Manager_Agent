@@ -326,6 +326,18 @@ async def execute_portfolio_batch(
                 "skipped_open_order_conflicts": [],
             }
 
+    # This records completed authorization, not a broker acknowledgement. Keep it
+    # after persisted Risk approvals, duplicate checks and final batch validation.
+    authorized_orders = [
+        {
+            "symbol": _order_symbol(order),
+            "portfolio_cycle_id": correlation_id,
+            "risk_approval_id": getattr(order, "risk_approval_id", None),
+            "client_order_id": getattr(order, "client_order_id", None),
+            "quantity": getattr(order, "quantity", None),
+        }
+        for order in order_requests
+    ]
     response = await exec_client.execute_order_batch(order_requests, correlation_id)
     response_dict = response_to_dict(response)
     data = response_dict.get("data") or {}
@@ -334,6 +346,7 @@ async def execute_portfolio_batch(
         "status": status_value,
         "validation": validation_data,
         **data,
+        "authorized_orders": authorized_orders,
         "failed_to_build": failed_to_build,
         "skipped_open_order_conflicts": skipped_open_order_conflicts,
         "duplicate_orders": duplicate_orders,

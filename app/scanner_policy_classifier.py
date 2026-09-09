@@ -438,6 +438,8 @@ def classify_candidate_strategy_bucket(
     sanitized, audit = _sanitized_item(original, policy)
     base = _classify_candidate_strategy_bucket(sanitized)
     summary = _augmented_summary(original, policy, audit)
+    summary["classification_rule_trace"] = base.evidence_summary.get("classification_rule_trace", {})
+    summary["classification_policy_adjustments"] = dict(audit)
 
     reasons = list(base.reasons)
     if audit.get("policy_v3"):

@@ -127,6 +127,11 @@ def build_selected_positions(
             candidate_meta=candidate_meta,
             bucket_plan=bucket_plan,
         )
+        portfolio_value = _positive_float(allocation_plan.get("portfolio_value"))
+        allocation_weight = (
+            float(target_value) / portfolio_value
+            if target_value is not None and portfolio_value is not None else None
+        )
         selected_positions.append(
             {
                 "symbol": symbol,
@@ -154,6 +159,10 @@ def build_selected_positions(
                 "source_conflicts": evidence_summary.get("source_conflicts") or [],
                 "target_weight": target_weight,
                 "allocation_pct": float(target_weight) * 100,
+                # Legacy target_weight/allocation_pct describe the whole bucket.
+                "bucket_target_weight": target_weight,
+                "allocation_weight": allocation_weight,
+                "symbol_allocation_pct": allocation_weight * 100 if allocation_weight is not None else None,
                 "bucket_target_value": bucket_plan.get("target_value"),
                 "target_value": target_value,
                 "suggested_max_value": candidate_meta.get("suggested_max_value")
@@ -264,6 +273,9 @@ def build_position_analysis_payloads(
             "source_conflicts": evidence_summary.get("source_conflicts") or [],
             "target_weight": position.get("target_weight"),
             "allocation_pct": position.get("allocation_pct"),
+            "bucket_target_weight": position.get("bucket_target_weight"),
+            "allocation_weight": position.get("allocation_weight"),
+            "symbol_allocation_pct": position.get("symbol_allocation_pct"),
             "bucket_target_value": position.get("bucket_target_value"),
             "target_value": position.get("target_value"),
             "suggested_max_value": position.get("suggested_max_value"),

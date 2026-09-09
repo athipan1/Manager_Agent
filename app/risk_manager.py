@@ -142,8 +142,7 @@ def _normalize_stock_context(stock_risk_context: Dict[str, Any], *, current_posi
     context.setdefault("asset_class", config.ASSET_CLASS)
     context.setdefault("owned_quantity", float(abs(int(current_position_size or 0))))
     context["strategy_bucket"] = _normalize_strategy_bucket(context.get("strategy_bucket"))
-    if context["strategy_bucket"] == UNASSIGNED:
-        context["strategy_bucket"] = VALUE_REBOUND
+    # An explicit failed classification must reach Risk unchanged.
     context.setdefault("current_bucket_exposure", 0.0)
     if _as_decimal(context.get("current_symbol_exposure"), Decimal("0")) <= Decimal("0") and symbol_exposure > Decimal("0"):
         context["current_symbol_exposure"] = float(symbol_exposure)
