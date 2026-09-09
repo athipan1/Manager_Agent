@@ -163,7 +163,7 @@ def build_stock_risk_context(symbol: str, positions: Iterable[Any], analysis_res
         "current_sector_exposure": float(current_sector_exposure(positions or [], sector, inferred_symbol=symbol_upper)),
         "current_bucket_exposure": float(current_bucket_exposure(positions or [], strategy_bucket, inferred_symbol=symbol_upper)),
     }
-    for key in ("target_weight", "allocation_pct", "target_value", "suggested_max_value", "suggested_equal_weight_value"):
+    for key in ("target_weight", "allocation_pct", "bucket_target_weight", "allocation_weight", "symbol_allocation_pct", "target_value", "suggested_max_value", "suggested_equal_weight_value"):
         if key in portfolio_context and portfolio_context.get(key) is not None:
             context[key] = portfolio_context.get(key)
     return context

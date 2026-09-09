@@ -217,6 +217,9 @@ async def test_execute_portfolio_batch_validates_and_executes_orders(monkeypatch
     assert result["status"] == "submitted"
     assert result["validation"] == {"approved": True}
     assert result["created"] == [{"order_id": "order-1"}]
+    assert {r["symbol"] for r in result["authorized_orders"]} == {"AAPL", "MSFT"}
+    assert all(r["portfolio_cycle_id"] == "cid" for r in result["authorized_orders"])
+    assert {r["risk_approval_id"] for r in result["authorized_orders"]} == {"risk-AAPL", "risk-MSFT"}
     assert result["failed_to_build"] == []
     assert len(exec_client.validated_batches[0][0]) == 2
     assert len(exec_client.executed_batches[0][0]) == 2
@@ -334,6 +337,7 @@ async def test_execute_portfolio_batch_rejects_when_validation_rejects(monkeypat
 
     assert result["status"] == "rejected"
     assert result["created"] == []
+    assert not result.get("authorized_orders")
     assert exec_client.executed_batches == []
 
 

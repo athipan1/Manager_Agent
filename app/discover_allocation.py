@@ -5,6 +5,7 @@ from typing import Any, Dict, List, Mapping, Optional
 
 from .portfolio_allocation import (
     CORE_DIVIDEND,
+    DEFAULT_BUCKET_POLICIES,
     NEWS_MOMENTUM,
     UNASSIGNED,
     VALUE_REBOUND,
@@ -213,6 +214,11 @@ def build_discover_allocation_plan(
     return build_strategy_allocation_plan(enriched, portfolio_value)
 
 
+def _bucket_minimum(item: Mapping[str, Any]) -> Decimal:
+    policy = DEFAULT_BUCKET_POLICIES.get(item.get("strategy_bucket"))
+    return policy.min_final_score if policy else Decimal("0")
+
+
 def _eligible_for_new_entry(
     item: Mapping[str, Any],
     threshold: Decimal,
@@ -224,7 +230,7 @@ def _eligible_for_new_entry(
         and float(item.get("bucket_confidence") or 0.0)
         >= AUTO_CLASSIFY_THRESHOLD
         and bool(item.get("evidence_gate_passed", True))
-        and _score(item) >= threshold
+        and _score(item) >= max(threshold, _bucket_minimum(item))
         and _verdict(item) in {"buy", "strong_buy"}
     )
 
@@ -295,6 +301,9 @@ def select_candidates_by_bucket(
         checks = [
             ("final_score", score >= float(threshold), score, float(threshold),
              "FINAL_SCORE_BELOW_THRESHOLD", "Final opportunity score is below the configured minimum."),
+            ("bucket_eligibility", _score(item) >= _bucket_minimum(item), score,
+             float(_bucket_minimum(item)), "BUCKET_SCORE_BELOW_THRESHOLD",
+             "Final opportunity score is below this bucket's unchanged policy minimum."),
             ("allocation_verdict", _verdict(item) in {"buy", "strong_buy"}, _verdict(item), ["buy", "strong_buy"],
              "BUY_VERDICT_REQUIRED", "Allocation requires BUY or STRONG_BUY; a passing score alone is insufficient."),
             ("allocation_classification", item.get("strategy_bucket") in BUCKET_PRIORITY
@@ -309,6 +318,8 @@ def select_candidates_by_bucket(
         evaluations.append({
             "symbol": item.get("symbol"), "score": score,
             "threshold": float(threshold), "final_score_passed": score >= float(threshold),
+            "bucket_min_final_score": float(_bucket_minimum(item)),
+            "effective_min_final_score": float(max(threshold, _bucket_minimum(item))),
             "eligible": _eligible_for_new_entry(item, threshold),
             "rejections": [{"symbol": item.get("symbol"), "score": score,
                 "threshold": limit, "gate": gate, "reason_code": code,

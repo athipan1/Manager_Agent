@@ -91,6 +91,9 @@ emit({"positive": positive, "negative": rejected})
 '''
 
 MANAGER = r'''
+from decimal import Decimal
+from app.discover_allocation import build_discover_allocation_plan, enrich_ranked_candidates_with_buckets, select_candidates_by_bucket
+from app.discover_report_builder import build_selected_positions
 from app.workflows.analysis_workflow import process_agent_response
 from app.synthesis import get_weighted_verdict_trace
 technical = process_agent_response(payload["technical"]["positive"], "technical")
@@ -102,8 +105,39 @@ assert get_weighted_verdict_trace("hold", .99, "hold", .99, "TEST")["verdict"] =
 assert get_weighted_verdict_trace(technical.action, technical.score, "hold", .55, "TEST")["verdict"] == "buy"
 invalid = process_agent_response(payload["technical"]["negative"], "technical")
 assert invalid is None  # Error envelopes cannot contribute a directional vote.
+ranked = enrich_ranked_candidates_with_buckets([{
+    "symbol": "TEST", "analysis": {"ticker": "TEST", "final_verdict": trace["verdict"],
+        "status": "complete", "details": {"technical": payload["technical"]["positive"],
+        "fundamental": payload["fundamental"]["positive"]}},
+    "score_breakdown": {"final_opportunity_score": .8}}])
+snapshot = payload["portfolio"]["positive"]["data"]
+plan = build_discover_allocation_plan(ranked, Decimal(str(snapshot["equity"])))
+selection = select_candidates_by_bucket(ranked)
+positions = build_selected_positions(ranked=ranked, allocation_plan=plan, bucket_selection=selection)
+for position in positions:
+    assert position["allocation_weight"] == position["target_value"] / snapshot["equity"]
+assert ranked[0]["evidence_summary"]["classification_rule_trace"]["schema_version"] == "bucket-classification-trace.v1"
 emit({"aggregation": trace, "risk_pass": None, "execution_authorized": False,
+      "portfolio_selection": selection, "selected_positions": positions,
       "reason_code": "TEST_FIXTURE_HAS_NO_EXECUTION_AUTHORITY"})
+'''
+
+PORTFOLIO = r'''
+import os
+from fastapi.testclient import TestClient
+from app.main import app
+client = TestClient(app)
+headers = {"X-API-KEY": os.getenv("PORTFOLIO_AGENT_API_KEY", "dev_portfolio_key"),
+           "X-Correlation-ID": "decision-contract-fixture"}
+response = client.post("/portfolio/allocation", json={"equity": 100000, "cash": 100000, "positions": []}, headers=headers)
+assert response.status_code == 200, response.text
+positive = response.json()
+assert positive["correlation_id"] == headers["X-Correlation-ID"]
+rejected = client.post("/portfolio/allocation", json={"equity": 100000, "cash": 100000,
+    "target_bucket_weights": {"core_dividend": "Infinity"}}, headers=headers)
+assert rejected.status_code == 422, rejected.text
+assert rejected.json()["correlation_id"] == headers["X-Correlation-ID"]
+emit({"positive": positive, "invalid_snapshot": rejected.json()})
 '''
 
 
@@ -140,12 +174,14 @@ def main():
     scanner = run_stage("Scanner_Agent", SCANNER, {}, args)
     fundamental = run_stage("Fundamental_Agent", FUNDAMENTAL, scanner, args)
     technical = run_stage("Technical_Agent", TECHNICAL, {}, args)
-    manager = run_stage("Manager_Agent", MANAGER, {"technical": technical, "fundamental": fundamental}, args)
+    portfolio = run_stage("Portfolio_Agent", PORTFOLIO, {}, args)
+    manager = run_stage("Manager_Agent", MANAGER, {"technical": technical, "fundamental": fundamental, "portfolio": portfolio}, args)
     report = {"schema_version": "decision-contract-e2e.v1", "data_source": "deterministic_test_fixtures",
-              "scanner": scanner, "technical": technical, "fundamental": fundamental, "manager": manager,
+              "scanner": scanner, "technical": technical, "fundamental": fundamental, "manager": manager, "portfolio": portfolio,
               "checks": {"observed_fiscal_dates_preserved": True, "evidence_can_generate_buy": True,
                          "negative_cash_flow_blocks_fundamental_buy": True,
-                         "insufficient_bars_fail_closed": True, "hold_score_cannot_create_buy": True},
+                         "insufficient_bars_fail_closed": True, "hold_score_cannot_create_buy": True,
+                         "portfolio_snapshot_contract": True, "bucket_selection_from_agent_evidence": True},
               "execution_authorized": False}
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(report, indent=2) + "\n")

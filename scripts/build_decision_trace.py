@@ -10,17 +10,21 @@ from pathlib import Path
 
 try:
     from .build_selection_funnel import build_funnel, obj, rows, number, symbols
+    from .portfolio_decision_trace import enrich_portfolio_rows
 except ImportError:
     from build_selection_funnel import build_funnel, obj, rows, number, symbols
+    from portfolio_decision_trace import enrich_portfolio_rows
 
 GATES = (
     "scanner_pass",
     "score_pass",
     "verdict_pass",
+    "bucket_pass",
     "allocation_pass",
     "backtest_pass",
     "risk_pass",
     "execution_authorized",
+    "broker_order",
 )
 WF_METRICS = {
     "window_count": ("evaluated_windows", "min_windows"),
@@ -83,6 +87,19 @@ def _backtest_trace(item, root, same_cycle):
         "strategy_id": strategy_id,
         "strategy": strategy,
         "effective_parameters": parameters,
+        "all_strategy_results": [
+            {
+                "strategy_id": candidate.get("strategy_id"),
+                "strategy": candidate.get("strategy"),
+                "eligible": candidate.get("eligible"),
+                "parameters": candidate.get("effective_parameters"),
+                "metrics": candidate.get("metrics"),
+                "candidate_oos": _walk_forward(obj(candidate.get("walk_forward")), criteria, "candidate_oos"),
+                "gates": candidate.get("gates"),
+                "disqualification_reasons": candidate.get("disqualification_reasons"),
+            }
+            for candidate in rows(selection.get("ranked_results"))
+        ],
         "signal_generation": {
             "trade_count": metrics.get("trade_count"),
             "trades_observed": number(metrics.get("trade_count")) > 0
@@ -156,7 +173,7 @@ def _backtest_trace(item, root, same_cycle):
     }
 
 
-def build_report(source, backtest, cycle, review, *, source_run_id=None):
+def build_report(source, backtest, cycle, review, *, source_run_id=None, final_cycle=None):
     funnel = build_funnel(source, backtest, cycle, source_run_id=source_run_id)
     data = obj(obj(source.get("response")).get("data"))
     ranked = {row.get("symbol"): row for row in rows(data.get("ranked_candidates"))}
@@ -175,7 +192,9 @@ def build_report(source, backtest, cycle, review, *, source_run_id=None):
     validation_approved = obj(execution.get("validation")).get("approved") is True
     regime = obj(review.get("market_regime"))
     result = []
-    for symbol in sorted(set(ranked) | set(outcomes) | set(items)):
+    history_symbols = symbols(obj(data.get("pre_backtest_history_gate")).get("evaluations"))
+    research_symbols = symbols(data.get("research_candidates"))
+    for symbol in sorted(set(ranked) | set(outcomes) | set(items) | history_symbols | research_symbols):
         candidate = ranked.get(symbol, {})
         outcome = outcomes.get(symbol, {})
         score = scores.get(symbol, {})
@@ -258,8 +277,9 @@ def build_report(source, backtest, cycle, review, *, source_run_id=None):
                 "rejections": [row for row in funnel["rejections"] if row.get("symbol") == symbol],
             }
         )
+    enrich_portfolio_rows(result, data, cycle, obj(final_cycle))
     return {
-        "schema_version": "hourly-decision-trace.v1",
+        "schema_version": "hourly-decision-trace.v2",
         "source_run_id": source_run_id,
         "portfolio_cycle_id": funnel["portfolio_cycle_id"],
         "generated_at": datetime.now(timezone.utc).isoformat(),
@@ -287,13 +307,13 @@ def render_markdown(report):
         "",
         "PASS / FAIL / N/A are separate stage outcomes; N/A is not approval.",
         "",
-        "| Symbol | Score | Verdict | " + " | ".join(GATES) + " |",
-        "|---|---:|---|" + "---|" * len(GATES),
+        "| Symbol | Score | Verdict | Bucket | Allocation weight | " + " | ".join(GATES) + " |",
+        "|---|---:|---|---|---:|" + "---|" * len(GATES),
     ]
     for row in report["symbols"]:
         states = ["PASS" if row[key] is True else "FAIL" if row[key] is False else "N/A" for key in GATES]
         lines.append(
-            f"| {row['symbol']} | {row['final_score']} | {row['final_verdict']} | "
+            f"| {row['symbol']} | {row['final_score']} | {row['final_verdict']} | {row['bucket']} | {row['allocation_weight']} | "
             + " | ".join(states)
             + " |"
         )
@@ -333,6 +353,13 @@ def render_markdown(report):
             + str(row["market_regime"].get("reason")),
         ]
         bt = row.get("backtest")
+        lines += ["", "### Portfolio admission", "",
+                  "Bucket: " + str(row["bucket"]) + "; reasons: " + json.dumps(row["allocation"].get("classification_reasons")),
+                  "", "Thresholds: bucket score=" + str(row["allocation"].get("bucket_min_final_score"))
+                  + ", classification confidence=" + str(row["allocation"].get("classification_min_confidence")),
+                  "", "Rule inputs and thresholds: " + json.dumps(row["allocation"].get("classification_rule_trace")),
+                  "", "Constraints: " + json.dumps(row["constraints"]),
+                  "", "Backtest: " + row["backtest_status"] + "; Risk: " + row["risk_status"]]
         if bt:
             metrics = bt["research_period_metrics"]
             lines += [
@@ -397,6 +424,7 @@ def main():
         read("hourly-manager-cycle.json"),
         read("hourly-position-review.json"),
         source_run_id=args.source_run_id,
+        final_cycle=read("hourly-portfolio-cycle.json"),
     )
     args.reports_dir.mkdir(parents=True, exist_ok=True)
     (args.reports_dir / "hourly-decision-trace.json").write_text(

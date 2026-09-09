@@ -417,11 +417,14 @@ def classify_candidate_strategy_bucket(
             legacy_raw_scores.get("free_cash_flow"),
         )
     )
-    debt_to_equity = _ratio_decimal(
-        _first_value(
-            fundamental_inputs.get("debt_to_equity"),
-            legacy_raw_scores.get("debt_to_equity"),
-        )
+    debt_input = _first_value(
+        fundamental_inputs.get("debt_to_equity"), legacy_raw_scores.get("debt_to_equity")
+    )
+    # Canonical Fundamental evidence already expresses this ratio as a decimal.
+    # Missing debt evidence cannot establish a low-debt classification.
+    debt_to_equity = (
+        _decimal(debt_input) if fundamental_inputs.get("debt_to_equity") is not None
+        else _ratio_decimal(debt_input)
     )
 
     technical_score = _score01(
@@ -529,6 +532,8 @@ def classify_candidate_strategy_bucket(
     if (
         quality_score >= 0.65
         and free_cash_flow > Decimal("0")
+        and debt_input is not None
+        and debt_to_equity.is_finite()
         and debt_to_equity <= Decimal("1")
     ):
         _add_evidence(
@@ -617,6 +622,41 @@ def classify_candidate_strategy_bucket(
             ),
         )
 
+    # Values used by this exact classification, after any caller policy transforms.
+    evidence_summary["classification_rule_trace"] = {
+        "schema_version": "bucket-classification-trace.v1",
+        "effective_inputs": {
+            "sector": sector, "dividend_yield": float(dividend_yield),
+            "quality_score": quality_score, "growth_score": growth_score,
+            "valuation_score": valuation_score, "pe_ratio": float(pe_ratio),
+            "pb_ratio": float(pb_ratio), "free_cash_flow": float(free_cash_flow),
+            "debt_to_equity": float(debt_to_equity) if debt_input is not None and debt_to_equity.is_finite() else None,
+            "final_score": float(opportunity_score),
+            "momentum_score": momentum_score, "trend_score": trend_score,
+            "technical_strength": technical_strength, "technical_vote_score": technical_vote_score,
+            "breakout_ratio": float(breakout_ratio),
+        },
+        "source_scales": {"fundamental": fundamental_scale, "technical": technical_scale},
+        "input_semantics": {
+            "effective_values_include_policy_transforms_and_defaults": True,
+            "missing_pe_pb_default": 999,
+            "missing_scores_default": 0,
+            "canonical_debt_to_equity_unit": "decimal_ratio",
+            "debt_evidence_present": debt_input is not None,
+        },
+        "bucket_scores": dict(scores), "matched_evidence": dict(reasons),
+        "thresholds": {
+            "auto_classify": AUTO_CLASSIFY_THRESHOLD, "review": REVIEW_THRESHOLD,
+            "conflict_score": CONFLICT_SCORE_THRESHOLD, "conflict_margin": CONFLICT_MARGIN,
+            "core_quality": .70, "core_quality_final_score": .55,
+            "core_cashflow_quality": .65, "core_max_debt_to_equity": 1.0,
+            "value_max_pe": 15, "value_max_pb": 1.5, "value_min_valuation": .70,
+            "momentum_min_growth": .70, "momentum_min_final_score": .62,
+            "momentum_min_momentum": .70, "momentum_min_trend": .65,
+            "breakout_min_ratio": .97, "breakout_min_vote": .65,
+            "corroboration_min_growth": .65, "corroboration_min_technical": .65,
+        },
+    }
     if not scores:
         return StrategyBucketClassification(
             bucket=UNASSIGNED,
