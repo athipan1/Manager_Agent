@@ -292,7 +292,7 @@ jobs:
         working-directory: Manager_Agent
         run: |
           # TestClient is a test-only dependency; keep the production image unchanged.
-          docker compose -f docker-compose.yml -f /tmp/agent-contract-compose.yml --profile backtest exec -T technical-agent python -m pip install 'httpx==0.28.1'
+          docker compose -f docker-compose.yml -f /tmp/agent-contract-compose.yml --profile backtest exec -T technical-agent python -m pip install --no-cache-dir --target /tmp/decision-contract-deps 'httpx==0.28.1'
           python scripts/run_decision_contract_e2e.py
 
       - name: Upload decision contract evidence
