@@ -290,7 +290,10 @@ jobs:
 
       - name: Validate cross-repo evidence and verdict decisions
         working-directory: Manager_Agent
-        run: python scripts/run_decision_contract_e2e.py
+        run: |
+          # TestClient is a test-only dependency; keep the production image unchanged.
+          docker compose -f docker-compose.yml -f /tmp/agent-contract-compose.yml --profile backtest exec -T technical-agent python -m pip install 'httpx==0.28.1'
+          python scripts/run_decision_contract_e2e.py
 
       - name: Upload decision contract evidence
         if: always()
