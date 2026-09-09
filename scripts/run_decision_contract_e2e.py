@@ -118,7 +118,8 @@ def run_stage(repo, code, payload, args):
     else:
         cwd, env = None, None
         command = ["docker", "compose", "-f", "docker-compose.yml", "-f", args.compose_override,
-                   "--profile", "backtest", "exec", "-T", "-e", "PYTHONPATH=/app:/app/app",
+                   "--profile", "backtest", "exec", "-T", "-e",
+                   "PYTHONPATH=/app:/app/app:/tmp/decision-contract-deps",
                    repo.lower().replace("_", "-"), "python", "-c", program]
     result = subprocess.run(command, input=json.dumps(payload), text=True, capture_output=True,
                             cwd=cwd, env=env, timeout=120)
