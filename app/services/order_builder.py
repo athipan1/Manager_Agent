@@ -67,6 +67,8 @@ def validate_strategy_bucket_for_side(bucket: str, side: Any) -> str:
 
 
 def _positive_float(value: Any, field_name: str) -> float:
+    if isinstance(value, bool):
+        raise OrderBuildError(f"{field_name} must be a number, not boolean")
     try:
         result = float(value)
     except (TypeError, ValueError) as exc:
@@ -74,6 +76,17 @@ def _positive_float(value: Any, field_name: str) -> float:
     if not math.isfinite(result) or result <= 0:
         raise OrderBuildError(f"{field_name} must be greater than zero")
     return result
+
+
+def _approved_quantity(decision: Dict[str, Any]) -> int:
+    values = [_positive_float(decision[key], key)
+              for key in ("position_size", "final_quantity")
+              if decision.get(key) is not None]
+    if not values or any(not value.is_integer() for value in values):
+        raise OrderBuildError("approved entry quantity must be a positive whole number")
+    if any(value != values[0] for value in values):
+        raise OrderBuildError("approved entry quantities are contradictory")
+    return int(values[0])
 
 
 def guard_plan_for_execution(decision: Dict[str, Any]) -> Dict[str, Any]:
@@ -169,13 +182,7 @@ def order_request_from_decision(
         trade_plan_order.metadata.update(decision.get("metadata") or {})
         return trade_plan_order
 
-    quantity = int(
-        decision.get("position_size") or decision.get("final_quantity") or 0
-    )
-    if quantity <= 0:
-        raise OrderBuildError(
-            "final_quantity or position_size must be greater than zero"
-        )
+    quantity = _approved_quantity(decision)
     risk_approval_id = decision.get("risk_approval_id")
     if not risk_approval_id:
         raise OrderBuildError(

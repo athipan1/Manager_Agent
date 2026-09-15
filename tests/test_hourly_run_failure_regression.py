@@ -9,6 +9,19 @@ from scripts.build_hourly_operator_artifact import resolve_cycle_status
 from app.services.shadow_trading_service import ShadowPlanRequest, build_shadow_trade_plan
 
 
+@pytest.mark.parametrize('quantity', [1.5, float('nan'), float('inf'), -1, 0, True])
+def test_manager_rejects_invalid_quantity_without_rounding(quantity):
+    from app.services.order_builder import order_request_from_decision, OrderBuildError
+    with pytest.raises(OrderBuildError):
+        order_request_from_decision({'position_size': quantity}, 1)
+
+
+def test_manager_rejects_conflicting_approved_quantities():
+    from app.services.order_builder import order_request_from_decision, OrderBuildError
+    with pytest.raises(OrderBuildError, match='contradictory'):
+        order_request_from_decision({'position_size': 10, 'final_quantity': 9}, 1)
+
+
 def candidate(**context):
     return {"symbol": "DCBO", "metadata": {"data_bundle": {"opportunity_profile": {
         "status": "review", "opportunity_score": .62,
