@@ -6,6 +6,7 @@ contracts. It does not submit orders or call broker/execution services.
 
 from __future__ import annotations
 
+import math
 import uuid
 from typing import Any, Callable, Dict, Optional, Union
 
@@ -70,7 +71,7 @@ def _positive_float(value: Any, field_name: str) -> float:
         result = float(value)
     except (TypeError, ValueError) as exc:
         raise OrderBuildError(f"{field_name} must be a number") from exc
-    if result <= 0:
+    if not math.isfinite(result) or result <= 0:
         raise OrderBuildError(f"{field_name} must be greater than zero")
     return result
 
@@ -192,9 +193,23 @@ def order_request_from_decision(
         strategy_bucket_from_decision(decision),
         side,
     )
+    guard_plan = guard_plan_for_execution(decision)
+    symbol = str(decision["symbol"]).upper()
+    exit_side = "sell" if side == "buy" else "buy"
+    # Fill absent routing fields from the approved entry; never repair a
+    # contradictory protective contract by silently overwriting it.
+    guard_plan.setdefault("symbol", symbol)
+    guard_plan.setdefault("side", exit_side)
+    guard_plan.setdefault("quantity", quantity)
+    if (guard_plan["symbol"] != symbol or guard_plan["side"] != exit_side
+            or guard_plan["quantity"] != quantity):
+        raise OrderBuildError("protective symbol, side and quantity must match the approved entry")
+    stop, target = guard_plan["trigger_price"], guard_plan["take_profit_price"]
+    if not (stop < entry_price < target if side == "buy" else target < entry_price < stop):
+        raise OrderBuildError("protective prices must bracket the entry price")
 
     return CreateOrderRequest(
-        symbol=str(decision["symbol"]).upper(),
+        symbol=symbol,
         side=side,
         order_type="market",
         quantity=quantity,
@@ -204,6 +219,6 @@ def order_request_from_decision(
         strategy_bucket=strategy_bucket,
         risk_approval_id=str(risk_approval_id),
         final_quantity=quantity,
-        guard_plan=guard_plan_for_execution(decision),
+        guard_plan=guard_plan,
         metadata=dict(decision.get("metadata") or {}),
     )
