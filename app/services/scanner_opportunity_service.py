@@ -365,6 +365,20 @@ def evaluate_scanner_candidate_opportunity(
 
     context = _to_dict(profile.get("execution_context"))
     evidence_quality = _to_dict(profile.get("evidence_quality"))
+    quote_status = str(context.get("quote_status") or "").strip().lower()
+    workflow_status = str(profile.get("workflow_status") or "").strip().lower()
+    if quote_status == "session_unverified" or workflow_status == "session_unverified":
+        return _review_result(
+            symbol=symbol,
+            reason_code="SCANNER_BROKER_SESSION_UNVERIFIED",
+            reason="Alpaca execution session could not be verified from a fresh broker clock.",
+            profile=profile,
+            min_score=threshold,
+            profile_required=require_profile,
+            live_spread_required=require_spread,
+            workflow_failure=True,
+            controlled_no_trade=False,
+        )
     current_price = _finite_number(context.get("current_price"))
     dollar_volume = _finite_number(context.get("estimated_dollar_volume"))
     if current_price is None or current_price <= 0 or dollar_volume is None or dollar_volume <= 0:
@@ -390,8 +404,6 @@ def evaluate_scanner_candidate_opportunity(
             live_spread_required=require_spread,
         )
 
-    quote_status = str(context.get("quote_status") or "").strip().lower()
-    workflow_status = str(profile.get("workflow_status") or "").strip().lower()
     research_eligible = score >= RESEARCH_MIN_OPPORTUNITY_SCORE and status in {
         "qualified",
         "review",
