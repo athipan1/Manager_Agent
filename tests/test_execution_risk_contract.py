@@ -103,7 +103,8 @@ async def test_execute_trade_persists_approval_before_sending_execution_order():
     assert order.risk_approval_id == "risk-approved-1"
     assert order.quantity == 10
     assert order.final_quantity == 10
-    assert order.guard_plan == decision["guard_plan"]
+    assert order.guard_plan == {**decision["guard_plan"], "symbol": "AAPL",
+                                "side": "sell", "quantity": 10}
     assert order.guard_plan["trigger_price"] == 95.0
     assert order.guard_plan["take_profit_price"] == 110.0
     assert order.strategy_bucket == "core_dividend"
