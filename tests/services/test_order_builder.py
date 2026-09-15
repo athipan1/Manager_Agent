@@ -84,11 +84,33 @@ def test_order_request_from_decision_builds_execution_contract():
     assert order.risk_approval_id == "risk-123"
     assert order.strategy_bucket == "value_rebound"
     assert order.guard_plan == {
+        "symbol": "AAPL",
+        "side": "sell",
+        "quantity": 3,
         "source": "manager_portfolio_default_guard",
         "trigger_price": 120.0,
         "take_profit_price": 130.0,
         "risk_amount": 10.0,
     }
+
+
+@pytest.mark.parametrize("field,value", [("side", "buy"), ("symbol", "MSFT"), ("quantity", 4)])
+def test_order_builder_rejects_contradictory_protection(field, value):
+    decision = {"symbol": "AAPL", "action": "buy", "position_size": 3,
+                "entry_price": 100, "risk_approval_id": "risk-test",
+                "strategy_bucket": "value_rebound",
+                "guard_plan": {"trigger_price": 95, "take_profit_price": 110, field: value}}
+    with pytest.raises(OrderBuildError, match="protective symbol, side and quantity"):
+        order_request_from_decision(decision, account_id=1)
+
+
+@pytest.mark.parametrize("stop,target", [(105, 110), (95, 90), (float("nan"), 110), (95, float("inf"))])
+def test_order_builder_rejects_invalid_protective_prices(stop, target):
+    decision = {"symbol": "AAPL", "action": "buy", "position_size": 3,
+                "entry_price": 100, "risk_approval_id": "risk-test",
+                "strategy_bucket": "value_rebound", "stop_loss": stop, "take_profit": target}
+    with pytest.raises(OrderBuildError):
+        order_request_from_decision(decision, account_id=1)
 
 
 def test_order_request_from_decision_uses_final_quantity_when_position_size_missing():
