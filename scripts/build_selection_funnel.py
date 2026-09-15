@@ -41,7 +41,7 @@ def symbols(value: Any) -> set[str]:
             for r in rows(value) if isinstance(r, dict)} - {''}
 
 
-def build_funnel(source: dict, backtest: dict | None = None, cycle: dict | None = None, *, source_run_id: str | None = None) -> dict:
+def build_funnel(source: dict, backtest: dict | None = None, cycle: dict | None = None, *, source_run_id: str | None = None, phase_reports: dict | None = None) -> dict:
     response = obj(source.get('response'))
     data = obj(response.get('data'))
     scanner = obj(data.get('scanner_data'))
@@ -199,6 +199,20 @@ def build_funnel(source: dict, backtest: dict | None = None, cycle: dict | None 
     elif counts['backtest_eligible_count'] is not None:
         counts['production_candidate_count'] = len(symbols(data.get('pre_backtest_selected_positions')) & eligible)
     cycle = obj(cycle)
+    # Selection abstention cannot conceal a failed runtime phase. Reports are
+    # evidence only: this classification never changes execution authority.
+    failures = []
+    evidence = {**obj(phase_reports), 'scanner': source, 'manager': cycle, 'backtest': obj(backtest)}
+    for phase, report in evidence.items():
+        report = obj(report)
+        status = str(report.get('status') or report.get('cycle_status') or '').lower()
+        if status in {'error', 'failed', 'failure', 'failed_closed', 'cancelled'}:
+            failures.append({'phase': phase, 'status': status,
+                             'reason': report.get('error') or obj(report.get('diagnostics')).get('message') or status})
+    opportunity = obj(metadata.get('scanner_opportunity_gate'))
+    if number(opportunity.get('workflow_failure_count')) not in (None, 0):
+        failures.append({'phase': 'scanner_session', 'status': 'failed_closed',
+                         'reason': 'SCANNER_SESSION_UNVERIFIED'})
     gate = obj(cycle.get('trade_gate'))
     reason = cycle.get('reason') or gate.get('reason')
     if reason:
@@ -223,7 +237,8 @@ def build_funnel(source: dict, backtest: dict | None = None, cycle: dict | None 
                          'exact_backtest': 'evaluated' if bt and same_cycle else 'not_evaluated'},
         'route': broad.get('route', 'discover-best-fundamentals'),
         'fundamental_ranked_count': broad.get('fundamental_ranked_count', metadata.get('analyzed_count')),
-        'outcome': 'NO_TRADE' if no_trade else ('CANDIDATES_REQUIRE_RISK' if counts['production_candidate_count'] else 'INCOMPLETE'),
+        'outcome': 'SYSTEM_FAILURE' if failures else ('NO_TRADE' if no_trade else ('CANDIDATES_REQUIRE_RISK' if counts['production_candidate_count'] else 'INCOMPLETE')),
+        'system_failures': failures,
         'execution_outcome': cycle.get('status', 'not_observed'),
         'cycle_reason': reason, 'rejections': rejections, 'reason_counts': code_counts,
         'candidate_outcomes': [{'symbol': s, 'score': score_by_symbol[s], 'threshold': threshold,
@@ -260,7 +275,8 @@ def main():
     def read(name):
         path = args.reports_dir / name
         return json.loads(path.read_text()) if path.exists() else {}
-    funnel = build_funnel(read('hourly-pre-backtest-discovery.json'), read('hourly-backtest-result.json'), read('hourly-manager-cycle.json'), source_run_id=args.source_run_id)
+    funnel = build_funnel(read('hourly-pre-backtest-discovery.json'), read('hourly-backtest-result.json'), read('hourly-manager-cycle.json'), source_run_id=args.source_run_id,
+                         phase_reports={'shadow': read('hourly-shadow-lane.json'), 'finalize': read('hourly-portfolio-cycle.json'), 'operator': read('hourly-auto-trading-report.json')})
     args.reports_dir.mkdir(parents=True, exist_ok=True)
     (args.reports_dir / 'hourly-selection-funnel.json').write_text(json.dumps(funnel, indent=2, ensure_ascii=False, allow_nan=False))
     (args.reports_dir / 'hourly-selection-funnel.md').write_text(render(funnel))

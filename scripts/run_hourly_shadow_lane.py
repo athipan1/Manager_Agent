@@ -204,9 +204,11 @@ def main() -> None:
     try:
         endpoint = args.manager_url.rstrip("/") + "/shadow-trading/hourly"
         shadow = _post_json(endpoint, shadow_payload)
+        output["shadow"] = shadow
         _verify_shadow_safety(shadow)
 
         replay = _post_json(endpoint, shadow_payload)
+        output["replay"] = replay
         replay_verification = _verify_replay_idempotency(shadow, replay)
 
         outcomes = shadow.get("closed_outcomes") or []
@@ -218,6 +220,7 @@ def main() -> None:
             },
             api_key=_performance_api_key(),
         )
+        output["performance"] = performance
         _verify_performance_floor(performance)
         output.update(
             {

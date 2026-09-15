@@ -187,9 +187,16 @@ jobs:
           assert "BACKTEST_PROMOTION_AUTO_APPROVE_PAPER: \"false\"" in text or "BACKTEST_PROMOTION_AUTO_APPROVE_PAPER: 'false'" in text
           PY
 
-      - name: Build and start promotion lifecycle stack
+      - name: Build, migrate and start promotion lifecycle stack
         working-directory: Manager_Agent
         run: |
+          set -euo pipefail
+          compose=(docker compose -f docker-compose.yml -f /tmp/full-system-promotion-e2e.yml)
+          "${compose[@]}" build $RUNTIME_SERVICES
+          "${compose[@]}" up -d --wait db
+          "${compose[@]}" run --rm --no-deps database-agent \
+            python -m scripts.apply_runtime_migrations \
+            2>&1 | tee reports/full-system-promotion-migrations.log
           set +e
           docker compose \
             -f docker-compose.yml \

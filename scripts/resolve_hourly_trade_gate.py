@@ -126,6 +126,7 @@ def resolve_trade_gate(
         return {
             "should_trade": False,
             "reason": "market_closed",
+            "reason_code": "MARKET_CLOSED",
             "next_action": "WAIT_FOR_REGULAR_SESSION",
             "eligible_symbols": symbols,
             "diagnostics": diagnostics,
@@ -134,6 +135,7 @@ def resolve_trade_gate(
         return {
             "should_trade": False,
             "reason": "no_eligible_strategy",
+            "reason_code": "NO_BACKTEST_ELIGIBLE_CANDIDATE",
             "next_action": "OBSERVE_CHALLENGERS_OR_REVIEW_BACKTEST_REJECTIONS",
             "eligible_symbols": [],
             "diagnostics": diagnostics,
@@ -172,6 +174,10 @@ def build_no_trade_report(
         "execute_requested": False,
         "market_mode": preflight.get("market_mode"),
         "reason": reason,
+        "outcome": "NO_TRADE",
+        "reason_code": gate.get("reason_code") or (
+            "MARKET_CLOSED" if reason == "market_closed" else "NO_BACKTEST_ELIGIBLE_CANDIDATE"
+        ),
         "next_action": gate.get("next_action"),
         "broker_orders_submitted": False,
         "trade_gate": {

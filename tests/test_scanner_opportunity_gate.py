@@ -14,6 +14,23 @@ from app.services.scanner_opportunity_service import (
 )
 
 
+def test_unverified_broker_session_is_data_failure_not_market_closure():
+    candidate = _candidate(quote_status="session_unverified", workflow_status="session_unverified")
+    result = evaluate_scanner_candidate_opportunity(candidate, profile_required=True)
+    assert result["allowed"] is False
+    assert result["reason_code"] == "SCANNER_BROKER_SESSION_UNVERIFIED"
+    assert result["workflow_failure"] is True
+    assert result["controlled_no_trade"] is False
+
+
+def test_unverified_session_takes_precedence_over_generic_fail_closed():
+    candidate = _candidate(quote_status="session_unverified", fail_closed=True)
+    result = evaluate_scanner_candidate_opportunity(candidate, profile_required=True)
+    assert result["reason_code"] == "SCANNER_BROKER_SESSION_UNVERIFIED"
+    assert result["workflow_failure"] is True
+    assert result["controlled_no_trade"] is False
+
+
 def _candidate(
     symbol="AAPL",
     *,

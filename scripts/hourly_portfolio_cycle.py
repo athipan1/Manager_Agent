@@ -638,12 +638,14 @@ def finalize_cycle(
     account_id: str,
     report: dict[str, Any],
 ) -> dict[str, Any]:
+    upstream_failure = report.get("upstream_failure")
     if as_dict(preflight.get("runtime")).get("paper_automation"):
-        clients.post(
-            clients.execution,
-            "/reconciliation/run-once?limit=100",
-            {},
-        )
+        if not upstream_failure:
+            clients.post(
+                clients.execution,
+                "/reconciliation/run-once?limit=100",
+                {},
+            )
         candidate = as_dict(report.get("candidate_cycle"))
         manager_response = as_dict(candidate.get("manager_response"))
         manager_data = as_dict(unwrap(manager_response))
@@ -697,7 +699,7 @@ def finalize_cycle(
                 "partial" in str(row.get("status") or "").lower()
                 for row in order_statuses
             ),
-            "status": "completed",
+            "status": "failed_closed" if upstream_failure else "completed",
         }
     )
     clients.post(
@@ -707,7 +709,7 @@ def finalize_cycle(
             "account_id": account_id,
             "review_run_id": f"{preflight['portfolio_cycle_id']}-final",
             "source": "manager-agent-hourly-portfolio-cycle",
-            "status": "completed",
+            "status": report["status"],
             "report": report,
         },
     )
@@ -840,14 +842,34 @@ def main() -> int:
             write_json(args.manager, report)
         else:
             review = json.loads(args.review.read_text(encoding="utf-8"))
-            manager = json.loads(args.manager.read_text(encoding="utf-8"))
+            upstream_failure = None
+            if args.manager.exists():
+                manager = json.loads(args.manager.read_text(encoding="utf-8"))
+            else:
+                for phase in ("shadow-lane", "pre-backtest-discovery", "backtest-result"):
+                    path = args.manager.parent / f"hourly-{phase}.json"
+                    if not path.exists():
+                        continue
+                    evidence = as_dict(json.loads(path.read_text(encoding="utf-8")))
+                    if evidence.get("status") in {"error", "failed", "failure", "failed_closed"}:
+                        upstream_failure = {"phase": phase, "status": evidence["status"],
+                            "reason": redact_diagnostic_text(evidence.get("error") or evidence.get("reason") or "upstream phase failed")}
+                        break
+                if upstream_failure is None:
+                    raise RuntimeSafetyError("MANAGER_CYCLE_EVIDENCE_MISSING")
+                manager = {"status": "not_evaluated", "execute_requested": False,
+                           "reason": "UPSTREAM_SYSTEM_FAILURE"}
             report = finalize_cycle(
                 clients,
                 preflight=preflight,
                 account_id=account_id,
-                report={"review": review, "candidate_cycle": manager},
+                report={"review": review, "candidate_cycle": manager,
+                        **({"upstream_failure": upstream_failure} if upstream_failure else {})},
             )
             write_json(args.output, report)
+            if upstream_failure:
+                print("Final reconciliation recorded; upstream system failure remains blocking.", file=sys.stderr)
+                return 1
         print(f"Hourly portfolio phase {args.phase} completed safely.")
         return 0
     except Exception as exc:

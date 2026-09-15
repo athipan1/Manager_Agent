@@ -149,6 +149,8 @@ def build_shadow_trade_plan(request: ShadowPlanRequest) -> ShadowTradePlan:
     context = _to_dict(profile.get("execution_context"))
     quote_status = str(context.get("quote_status") or "unverified").strip().lower()
     market_session = str(context.get("market_session") or "unverified").strip().lower()
+    if quote_status == "session_unverified" or profile.get("workflow_status") == "session_unverified":
+        raise ValueError("shadow_session_unverified")
     if quote_status in {"market_closed", "stale_quote", "missing_quote_timestamp"}:
         raise ValueError(f"shadow_waits_for_fresh_quote:{quote_status}")
     if market_session not in {"regular", "unverified", "not_applicable", ""}:
@@ -162,6 +164,11 @@ def build_shadow_trade_plan(request: ShadowPlanRequest) -> ShadowTradePlan:
     spread_bps_for_fill = max(0.0, spread_bps or 0.0)
     ask = _finite(context.get("ask"))
     bid = _finite(context.get("bid"))
+    for field, value in (("ask", ask), ("bid", bid)):
+        if context.get(field) is not None and (value is None or value <= 0):
+            raise ValueError(f"shadow_quote_invalid:{field}")
+    if ask is not None and bid is not None and ask < bid:
+        raise ValueError("shadow_quote_invalid:crossed")
     estimated_half_spread = decision_price * spread_bps_for_fill / 20_000.0
     simulated_fill = ask if ask and ask > 0 else decision_price + estimated_half_spread
     simulated_slippage_bps = ((simulated_fill - decision_price) / decision_price) * 10_000.0

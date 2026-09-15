@@ -9,17 +9,21 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 try:
-    from .build_selection_funnel import build_funnel, obj, rows, number, symbols
+    from .build_selection_funnel import build_funnel, number, obj, rows, symbols
     from .portfolio_decision_trace import enrich_portfolio_rows
+    from .session_nested_trace import enrich_sessions, fold_markdown
 except ImportError:
-    from build_selection_funnel import build_funnel, obj, rows, number, symbols
+    from build_selection_funnel import build_funnel, number, obj, rows, symbols
     from portfolio_decision_trace import enrich_portfolio_rows
+    from session_nested_trace import enrich_sessions, fold_markdown
 
 GATES = (
     "scanner_pass",
     "score_pass",
     "verdict_pass",
     "bucket_pass",
+    "candidate_oos_pass",
+    "nested_oos_pass",
     "allocation_pass",
     "backtest_pass",
     "risk_pass",
@@ -173,8 +177,9 @@ def _backtest_trace(item, root, same_cycle):
     }
 
 
-def build_report(source, backtest, cycle, review, *, source_run_id=None, final_cycle=None):
-    funnel = build_funnel(source, backtest, cycle, source_run_id=source_run_id)
+def build_report(source, backtest, cycle, review, *, source_run_id=None, final_cycle=None, preflight=None, phase_reports=None):
+    funnel = build_funnel(source, backtest, cycle, source_run_id=source_run_id,
+                          phase_reports={**obj(phase_reports), 'finalize': obj(final_cycle)})
     data = obj(obj(source.get("response")).get("data"))
     ranked = {row.get("symbol"): row for row in rows(data.get("ranked_candidates"))}
     outcomes = {row.get("symbol"): row for row in rows(data.get("analysis_outcomes"))}
@@ -216,6 +221,8 @@ def build_report(source, backtest, cycle, review, *, source_run_id=None, final_c
             else None,
             "allocation_pass": symbol in allocated if "pre_gate_selected_positions" in data else None,
             "backtest_pass": backtest_pass,
+            "candidate_oos_pass": bt_trace["candidate_oos"]["passed"] if bt_trace and not bt_trace["contract_issues"] else None,
+            "nested_oos_pass": bt_trace["nested_outer_oos"]["passed"] if bt_trace and not bt_trace["contract_issues"] else None,
             "risk_pass": risk_pass,
             "execution_authorized": bool(
                 symbol in created
@@ -278,16 +285,22 @@ def build_report(source, backtest, cycle, review, *, source_run_id=None, final_c
             }
         )
     enrich_portfolio_rows(result, data, cycle, obj(final_cycle))
+    enrich_sessions(result, source, obj(preflight))
     return {
         "schema_version": "hourly-decision-trace.v2",
         "source_run_id": source_run_id,
         "portfolio_cycle_id": funnel["portfolio_cycle_id"],
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "outcome": funnel["outcome"],
+        "system_failures": funnel["system_failures"],
         "counts": funnel["counts"],
         "symbols": result,
         "gate_pass_counts": {gate: sum(row[gate] is True for row in result) for gate in GATES},
         "gate_unknown_counts": {gate: sum(row[gate] is None for row in result) for gate in GATES},
+        "sequential_funnel_counts": {
+            gate: sum(all(row.get(previous) is True for previous in GATES[:index + 1]) for row in result)
+            for index, gate in enumerate(GATES)
+        },
         "safety": {
             "diagnostic_only": True,
             "broker_order_authorized_by_report": False,
@@ -344,8 +357,8 @@ def render_markdown(report):
         aggregation = obj(trace.get("aggregation"))
         lines += [
             "",
-            f"Manager directional score: {aggregation.get('directional_score')} / BUY threshold: "
-            f"{obj(aggregation.get('thresholds')).get('buy')}. Final ranking score is not a directional vote.",
+            (f"Manager directional score: {aggregation.get('directional_score')} / BUY threshold: "
+             f"{obj(aggregation.get('thresholds')).get('buy')}. Final ranking score is not a directional vote."),
             "",
             "Market Regime: "
             + str(row["market_regime"].get("regime"))
@@ -353,6 +366,7 @@ def render_markdown(report):
             + str(row["market_regime"].get("reason")),
         ]
         bt = row.get("backtest")
+        lines += ["", "### Execution session provenance", "", json.dumps(row.get("session_trace"))]
         lines += ["", "### Portfolio admission", "",
                   "Bucket: " + str(row["bucket"]) + "; reasons: " + json.dumps(row["allocation"].get("classification_reasons")),
                   "", "Thresholds: bucket score=" + str(row["allocation"].get("bucket_min_final_score"))
@@ -401,9 +415,10 @@ def render_markdown(report):
                 "",
                 "Holdout: " + json.dumps(bt["history"]["holdout"]),
             ]
+            lines += fold_markdown(bt)
         lines += ["", "### Recorded blockers", ""]
         lines += [
-            f"- `{item['gate']} / {item['reason_code']}`: {item['reason']}" for item in row["rejections"]
+            f"- `{item.get('category', 'unclassified_requires_review')} / {item['gate']} / {item['reason_code']}`: {item['reason']}" for item in row["rejections"]
         ]
     return "\n".join(lines) + "\n"
 
@@ -425,6 +440,8 @@ def main():
         read("hourly-position-review.json"),
         source_run_id=args.source_run_id,
         final_cycle=read("hourly-portfolio-cycle.json"),
+        preflight=read("hourly-preflight.json"),
+        phase_reports={"shadow": read("hourly-shadow-lane.json"), "operator": read("hourly-auto-trading-report.json")},
     )
     args.reports_dir.mkdir(parents=True, exist_ok=True)
     (args.reports_dir / "hourly-decision-trace.json").write_text(
