@@ -125,6 +125,9 @@ def _decision(
     if not promotion:
         reasons.append("backtest_promotion_not_found")
     if promotion:
+        if (promotion.get("fixture_only") is True or promotion.get("research_only") is True
+                or promotion.get("production_authorized") is False):
+            reasons.append("backtest_fixture_or_research_has_no_production_authority")
         expected = {
             "account_id": account_id,
             "skill_id": skill_id,
