@@ -267,3 +267,15 @@ async def test_approval_adapter_fails_closed_without_token(monkeypatch):
             promotion(state="ROBUSTNESS_PASSED", version=4),
             correlation_id="corr-1",
         )
+
+
+@pytest.mark.parametrize("marker", [{"fixture_only": True}, {"research_only": True},
+                                   {"production_authorized": False}])
+def test_fixture_or_research_record_cannot_authorize_production(marker):
+    from app.services.promotion_execution_gate import _decision
+    result = _decision(promotion=promotion(**marker), lookup_error=None,
+        account_id="1", symbol="AAPL", skill_id="hourly-sma-crossover",
+        strategy_id="trend-following-balanced-v1", timeframe="1d",
+        max_age_hours=26, now=NOW, auto_approve=False)
+    assert result["allowed"] is False
+    assert "backtest_fixture_or_research_has_no_production_authority" in result["rejection_codes"]
