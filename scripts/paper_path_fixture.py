@@ -22,7 +22,16 @@ request = WalkForwardMultiStrategyRequest(initial_equity=100000, symbols=['TEST'
 result = run_walk_forward_multi_strategy_backtest_v4(request)
 assert result.best_eligible is not None
 assert result.best_eligible.walk_forward.passed and result.nested_walk_forward.passed
+# Flat synthetic prices prove rejection with the exact same default criteria.
+# These generated bars have no relationship to the sealed historical holdout.
+flat_request = request.model_copy(deep=True)
+flat_request.bars = {'TEST':[bar.model_copy(update={'open':100., 'high':101.,
+    'low':99., 'close':100.}) for bar in bars]}
+flat = run_walk_forward_multi_strategy_backtest_v4(flat_request)
+assert flat.best_eligible is None
+assert flat.nested_walk_forward.passed is False
 emit({'strategy_id': result.best_eligible.strategy_id,
+      'rejected_synthetic_backtest': flat.model_dump(mode='json'),
       'candidate_oos': result.best_eligible.walk_forward.model_dump(mode='json'),
       'nested_oos': result.nested_walk_forward.model_dump(mode='json'),
       'criteria': request.walk_forward_criteria.model_dump(mode='json'),
@@ -60,6 +69,7 @@ for approval in payload['approvals'].values():
     db.seed_risk_approval(RiskApproval.model_validate(approval))
 orders = []
 reads = []
+scenario = payload.get('scenario', 'accepted')
 async def broker(request):
     assert request.url.host == 'paper-api.alpaca.markets', str(request.url)
     path = request.url.path
@@ -68,7 +78,9 @@ async def broker(request):
         if path == '/v2/clock':
             from datetime import datetime, timedelta, timezone
             now = datetime.now(timezone.utc)
-            return httpx.Response(200, json={'timestamp':now.isoformat(), 'is_open':True,
+            timestamp = (now-timedelta(hours=2)).isoformat() if scenario == 'stale_session' else now.isoformat()
+            if scenario == 'malformed_clock': timestamp = 'invalid-clock'
+            return httpx.Response(200, json={'timestamp':timestamp, 'is_open':True,
                 'next_close':(now+timedelta(hours=1)).isoformat(),
                 'next_open':(now+timedelta(days=1)).isoformat()})
         if path == '/v2/account':
@@ -83,6 +95,11 @@ async def broker(request):
         assert order['order_class'] == 'bracket'
         assert order['stop_loss'] and order['take_profit']
         orders.append(order)
+        if scenario == 'timeout':
+            raise httpx.ReadTimeout('Synthetic response lost after broker acceptance', request=request)
+        if scenario == 'partial_fill':
+            return httpx.Response(200, json={'id':'fixture-broker-receipt',
+                'status':'partially_filled', 'filled_qty':'1', 'filled_avg_price':'100'})
         return httpx.Response(200, json={'id':'fixture-broker-receipt', 'status':'accepted'})
     raise AssertionError('Unexpected broker request: ' + str(request.url))
 original_async_client = httpx.AsyncClient
@@ -96,14 +113,33 @@ packet = payload['request']
 client = TestClient(app)
 response = client.request(packet['method'], packet['path'], json=packet['body'],
     headers={**packet['headers'], 'X-API-KEY': settings.API_KEY})
+assert response.status_code == (202 if packet['path'] == '/execute/batch' else 200), response.text
+data = response.json()['data']
+if scenario in {'stale_session', 'malformed_clock', 'timeout'}:
+    assert data['approved'] is False and not data['created'] and data['failed'], data
+if scenario in {'stale_session', 'malformed_clock'}:
+    assert 'session_unverified' in data['failed'][0]['reason'], data
+if scenario == 'partial_fill':
+    assert data['created'][0]['status'] == 'partially_filled', data
 if packet['path'] == '/execute/batch' and response.status_code == 202:
-    assert len(orders) == 1, response.text
+    expected_submissions = 0 if scenario in {'stale_session', 'malformed_clock'} else 1
+    assert len(orders) == expected_submissions, response.text
     # The same persisted order/consumed approval must not submit twice.
     replay = client.post(packet['path'], json=packet['body'],
         headers={'X-API-KEY': settings.API_KEY})
-    assert len(orders) == 1, replay.text
+    assert len(orders) == expected_submissions, replay.text
+    # A new service instance models a sequential workflow/process retry against
+    # the same persisted database. This does NOT model distributed concurrency.
+    retry_service = ExecutionService(db, adapter)
+    app.dependency_overrides[get_execution_service] = lambda: retry_service
+    retry = client.post(packet['path'], json=packet['body'],
+        headers={'X-API-KEY': settings.API_KEY, 'X-Correlation-ID':'workflow-retry'})
+    assert len(orders) == expected_submissions, retry.text
+    if scenario == 'timeout':
+        assert 'BROKER_SUBMISSION_REQUIRES_RECONCILIATION' in retry.text, retry.text
     assert '/v2/clock' in reads and '/v2/account' in reads and '/v2/positions' in reads and '/v2/orders' in reads
 emit({'status_code': response.status_code, 'body': response.json(),
+      'scenario': scenario, 'retry_body': retry.json() if 'retry' in locals() else None,
       'mock_broker_orders': orders, 'broker_preflight_reads': reads,
       'replay_broker_order_count': len(orders)})
 '''
@@ -177,6 +213,18 @@ async def run():
         strategy_ids=[strategy], timeframe='1d', max_age_hours=26,
         walk_forward_required=True, account_id='1', auto_approve=False)
     assert gate['summary']['allowed_count'] == 1, gate
+    promotion_rejections = {}
+    for stage, state in [('candidate_oos', 'VALIDATED'), ('nested_oos', 'OOS_PASSED')]:
+        promotion = (await db._get('/backtests/promotions/latest/exact', correlation,
+            params={'account_id':'1', 'timeframe':'1d', 'validation_profile':'nested_walk_forward_v2'}))['data']
+        promotion['state'] = state
+        rejected = _decision(promotion=promotion, lookup_error=None, account_id='1',
+            symbol='TEST', skill_id='hourly-sma-crossover', strategy_id=strategy,
+            timeframe='1d', max_age_hours=26, now=datetime.now(timezone.utc), auto_approve=False)
+        assert not rejected['allowed']
+        assert 'backtest_promotion_not_robustness_passed' in rejected['rejection_codes']
+        assert rejected['rejection_codes'] == ['backtest_promotion_not_robustness_passed'], rejected
+        promotion_rejections[stage] = rejected
     risk_payload = {'account_id':1, 'symbol':'TEST', 'side':'buy', 'entry_price':100,
         'protection_price':95, 'equity':100000, 'requested_quantity':10,
         'current_symbol_exposure':0, 'current_total_exposure':0, 'open_orders_exposure':0,
@@ -191,6 +239,9 @@ async def run():
     assert risk['data']['approved'] is True, risk
     halted = await risk_agent_client.evaluate_risk_async({**risk_payload, 'emergency_halt':True}, correlation)
     assert halted['data']['approved'] is False, halted
+    rejected_risk = await risk_agent_client.evaluate_risk_async(
+        {**risk_payload, 'current_total_exposure':1000000}, correlation)
+    assert rejected_risk['data']['approved'] is False, rejected_risk
     decision = {'symbol':'TEST', 'action':'buy', 'approved':True,
         'position_size':int(risk['data']['final_quantity']),
         'risk_approval_id':'fixture-approved-risk', 'risk_agent_response':risk,
@@ -207,6 +258,7 @@ async def run():
         assert replay['status'] == 'not_attempted' and replay['duplicate_orders'], replay
     emit({'fixture_only':True, 'production_authorized':False, 'profitability_claim':False,
           'fixture_authority_rejection':rejected_fixture, 'backtest_gate':gate, 'risk':risk, 'halt_rejection':halted,
+          'promotion_rejections':promotion_rejections, 'risk_rejection':rejected_risk,
           'execution':result, 'manager_replay':replay, 'rpc_evidence':rpc_evidence})
 asyncio.run(run())
 '''

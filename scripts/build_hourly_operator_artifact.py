@@ -270,6 +270,8 @@ def resolve_cycle_status(
     cycle: Mapping[str, Any], outcomes: Mapping[str, Any]
 ) -> str:
     explicit = str(cycle.get("status") or "").lower()
+    if any(phase_status(value) in {"failure", "cancelled"} for value in outcomes.values()):
+        return explicit if explicit in {"failed_closed", "failure", "error"} else "failure"
     if explicit:
         return "completed" if explicit == "success" else explicit
     workflow = phase_status(outcomes.get("workflow"))

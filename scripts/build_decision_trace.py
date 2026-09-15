@@ -177,8 +177,9 @@ def _backtest_trace(item, root, same_cycle):
     }
 
 
-def build_report(source, backtest, cycle, review, *, source_run_id=None, final_cycle=None, preflight=None):
-    funnel = build_funnel(source, backtest, cycle, source_run_id=source_run_id)
+def build_report(source, backtest, cycle, review, *, source_run_id=None, final_cycle=None, preflight=None, phase_reports=None):
+    funnel = build_funnel(source, backtest, cycle, source_run_id=source_run_id,
+                          phase_reports={**obj(phase_reports), 'finalize': obj(final_cycle)})
     data = obj(obj(source.get("response")).get("data"))
     ranked = {row.get("symbol"): row for row in rows(data.get("ranked_candidates"))}
     outcomes = {row.get("symbol"): row for row in rows(data.get("analysis_outcomes"))}
@@ -291,6 +292,7 @@ def build_report(source, backtest, cycle, review, *, source_run_id=None, final_c
         "portfolio_cycle_id": funnel["portfolio_cycle_id"],
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "outcome": funnel["outcome"],
+        "system_failures": funnel["system_failures"],
         "counts": funnel["counts"],
         "symbols": result,
         "gate_pass_counts": {gate: sum(row[gate] is True for row in result) for gate in GATES},
@@ -439,6 +441,7 @@ def main():
         source_run_id=args.source_run_id,
         final_cycle=read("hourly-portfolio-cycle.json"),
         preflight=read("hourly-preflight.json"),
+        phase_reports={"shadow": read("hourly-shadow-lane.json"), "operator": read("hourly-auto-trading-report.json")},
     )
     args.reports_dir.mkdir(parents=True, exist_ok=True)
     (args.reports_dir / "hourly-decision-trace.json").write_text(

@@ -193,13 +193,17 @@ def run_stage(repo, code, payload, args, rpc=None):
         cwd = args.local_root / repo
         env = dict(os.environ)
         env["PYTHONPATH"] = os.pathsep.join([str(cwd), str(cwd / "src"), str(cwd / "app"), env.get("PYTHONPATH", "")])
-        command = [sys.executable, "-c", program]
+        python_root = getattr(args, "python_root", None)
+        interpreter = str(python_root / repo / "bin" / "python") if python_root else sys.executable
+        command = [interpreter, "-c", program]
     else:
         cwd, env = None, None
         command = ["docker", "compose", "-f", "docker-compose.yml", "-f", args.compose_override,
                    "--profile", "backtest", "exec", "-T", "-e",
                    "PYTHONPATH=/app:/app/app:/tmp/decision-contract-deps",
-                   repo.lower().replace("_", "-"), "python", "-c", program]
+                   repo.lower().replace("_", "-"),
+                   "/opt/venv/bin/python" if repo == "Execution_Agent" else "python",
+                   "-c", program]
     if rpc:
         return run_rpc(command, cwd, env, payload, rpc)
     result = subprocess.run(command, input=json.dumps(payload), text=True, capture_output=True,
@@ -252,6 +256,7 @@ def run_rpc(command, cwd, env, payload, rpc):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--local-root", type=Path)
+    parser.add_argument("--python-root", type=Path, help="Isolated local environments named after each repository")
     parser.add_argument("--compose-override", default="/tmp/agent-contract-compose.yml")
     parser.add_argument("--output", type=Path, default=Path("reports/decision-contract-e2e.json"))
     args = parser.parse_args()
@@ -261,15 +266,40 @@ def main():
     portfolio = run_stage("Portfolio_Agent", PORTFOLIO, {}, args)
     manager = run_stage("Manager_Agent", MANAGER, {"scanner": scanner, "technical": technical, "fundamental": fundamental, "portfolio": portfolio}, args)
     backtest = run_stage("Backtest_Agent", paper_path_fixture.BACKTEST, {}, args)
+    execution_packets = []
     def route(packet):
         repo = packet["service"]
+        if repo == "Execution_Agent" and packet['request']['path'] == '/execute/batch':
+            execution_packets.append(packet)
         code = {"Risk_Agent": paper_path_fixture.RISK, "Execution_Agent": paper_path_fixture.EXECUTION}[repo]
         return run_stage(repo, code, packet, args)
     paper = run_stage("Manager_Agent", paper_path_fixture.MANAGER,
                       {"manager": manager, "backtest": backtest}, args, rpc=route)
+    assert len(execution_packets) == 1, execution_packets
+    scenarios = {name: run_stage('Execution_Agent', paper_path_fixture.EXECUTION,
+        {**execution_packets[0], 'scenario':name}, args)
+        for name in ('stale_session', 'malformed_clock', 'partial_fill', 'timeout')}
     report = {"schema_version": "decision-contract-e2e.v1", "data_source": "deterministic_test_fixtures",
               "scanner": scanner, "technical": technical, "fundamental": fundamental, "manager": manager, "portfolio": portfolio,
               "synthetic_backtest": backtest, "paper_adapter_integration": paper,
+              "execution_scenarios": scenarios,
+              "scenario_coverage": {
+                  "HOLD": "Manager production synthesis: HOLD votes stay HOLD",
+                  "candidate_oos_rejection": "Actual flat-price synthetic backtest and VALIDATED promotion rejected",
+                  "nested_oos_rejection": "OOS_PASSED-only promotion denied; no robustness authority inferred",
+                  "portfolio_rejection": "Actual Portfolio API rejects non-finite target weights (422)",
+                  "risk_rejection": "Actual Risk API rejects excessive portfolio exposure",
+                  "emergency_halt": "Actual Risk API mandatory veto",
+                  "valid_buy": "Fresh Scanner/Technical/Fundamental/Manager fixture integration",
+                  "execution_authorization": "Manager persisted Risk approval consumed by Execution; fixture authority denied separately",
+                  "broker_accepted": "Actual Alpaca adapter against HTTP mock only",
+                  "same_decision_replay": "Same persisted order: one mock submission",
+                  "workflow_retry": "New ExecutionService with same database: one mock submission",
+                  "stale_session": "Zero mock submissions; session_unverified",
+                  "malformed_broker_clock": "Zero mock submissions; session_unverified",
+                  "partial_fill": "Persisted partial fill identity; replay and retry submission count one",
+                  "execution_timeout": "Response lost after submission; retry blocked pending reconciliation"
+              },
               "checks": {"observed_fiscal_dates_preserved": True, "evidence_can_generate_buy": True,
                          "negative_cash_flow_blocks_fundamental_buy": True,
                          "insufficient_bars_fail_closed": True, "hold_score_cannot_create_buy": True,

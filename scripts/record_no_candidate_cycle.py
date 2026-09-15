@@ -11,6 +11,9 @@ NO_CANDIDATE_REASON = "no_preselected_backtest_symbols"
 
 def build_no_candidate_report(preflight: dict) -> dict:
     return {
+        "status": "success",
+        "outcome": "NO_TRADE",
+        "reason_code": "NO_PRODUCTION_CANDIDATE",
         "execute_requested": False,
         "market_mode": preflight.get("market_mode"),
         "reason": NO_CANDIDATE_REASON,
