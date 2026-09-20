@@ -275,6 +275,8 @@ def main():
         return run_stage(repo, code, packet, args)
     paper = run_stage("Manager_Agent", paper_path_fixture.MANAGER,
                       {"manager": manager, "backtest": backtest}, args, rpc=route)
+    fund = run_stage("Manager_Agent", paper_path_fixture.FUND,
+                    {"backtest": backtest}, args, rpc=route)
     assert len(execution_packets) == 1, execution_packets
     scenarios = {name: run_stage('Execution_Agent', paper_path_fixture.EXECUTION,
         {**execution_packets[0], 'scenario':name}, args)
@@ -282,6 +284,7 @@ def main():
     report = {"schema_version": "decision-contract-e2e.v1", "data_source": "deterministic_test_fixtures",
               "scanner": scanner, "technical": technical, "fundamental": fundamental, "manager": manager, "portfolio": portfolio,
               "synthetic_backtest": backtest, "paper_adapter_integration": paper,
+              "fund_portfolio_integration": fund,
               "execution_scenarios": scenarios,
               "scenario_coverage": {
                   "HOLD": "Manager production synthesis: HOLD votes stay HOLD",
@@ -306,6 +309,7 @@ def main():
                          "portfolio_snapshot_contract": True, "bucket_selection_from_agent_evidence": True,
                          "passing_candidate_reaches_paper_adapter_mock": True,
                          "risk_emergency_halt_blocks": True, "manager_and_execution_replay_safe": True,
+                         "five_candidate_portfolio_risk": True,
                          "real_network_forbidden": True},
               "execution_authorized": False}
     args.output.parent.mkdir(parents=True, exist_ok=True)

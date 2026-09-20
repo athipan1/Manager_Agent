@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import re
 from datetime import datetime, timezone
 from typing import Any, Dict, Iterable, List, Optional, Union
 
@@ -50,12 +51,15 @@ def _parse_timestamp(value: Any) -> Optional[datetime]:
         text = str(value).strip()
         if text.endswith("Z"):
             text = f"{text[:-1]}+00:00"
+        offset = re.search(r"([+-])(\d{2}):(\d{2})$", text)
+        if offset is None or int(offset[2]) > 23 or int(offset[3]) > 59:
+            return None
         try:
             parsed = datetime.fromisoformat(text)
         except ValueError:
             return None
-    if parsed.tzinfo is None:
-        parsed = parsed.replace(tzinfo=timezone.utc)
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        return None
     return parsed.astimezone(timezone.utc)
 
 
@@ -152,18 +156,22 @@ def _decision(
 
         if not promotion_id or not run_id:
             reasons.append("backtest_promotion_identity_missing")
-        if not isinstance(promotion.get("version"), int):
+        if type(promotion.get("version")) is not int or promotion["version"] < 1:
             reasons.append("backtest_promotion_version_invalid")
-        if not isinstance(promotion.get("evidence_version"), int):
+        if type(promotion.get("evidence_version")) is not int or promotion["evidence_version"] < 1:
             reasons.append("backtest_promotion_evidence_version_invalid")
 
         expires_at = _parse_timestamp(promotion.get("expires_at"))
-        if expires_at is not None and expires_at <= now:
+        if promotion.get("expires_at") is not None and expires_at is None:
+            reasons.append("backtest_promotion_expiration_invalid")
+        elif expires_at is not None and expires_at <= now:
             reasons.append("backtest_promotion_expired")
 
         evidence_time = _promotion_timestamp(promotion)
         if evidence_time == datetime.min.replace(tzinfo=timezone.utc):
             reasons.append("backtest_promotion_timestamp_missing")
+        elif evidence_time > now:
+            reasons.append("backtest_promotion_timestamp_future")
         elif max_age_hours > 0:
             age_hours = max(0.0, (now - evidence_time).total_seconds() / 3600.0)
             if age_hours > max_age_hours:
@@ -284,7 +292,15 @@ async def filter_candidates_with_promotion_gate(
                 correlation_id=correlation_id,
                 max_age_hours=max_age_hours,
             )
-            if promotion.get("state") == "ROBUSTNESS_PASSED" and approval_enabled:
+            preapproval = _decision(
+                promotion=promotion, lookup_error=None, account_id=resolved_account_id,
+                symbol=symbol, skill_id=skill_id, strategy_id=candidate_strategy_id,
+                timeframe=timeframe, max_age_hours=max_age_hours,
+                now=current if now is not None else datetime.now(timezone.utc),
+                auto_approve=approval_enabled,
+            )
+            if (promotion.get("state") == "ROBUSTNESS_PASSED" and approval_enabled
+                    and preapproval["rejection_codes"] == ["backtest_promotion_approval_failed"]):
                 try:
                     promotion = await adapter.approve_for_paper(
                         promotion,
@@ -325,7 +341,7 @@ async def filter_candidates_with_promotion_gate(
                 strategy_id=candidate_strategy_id,
                 timeframe=timeframe,
                 max_age_hours=max_age_hours,
-                now=current,
+                now=current if now is not None else datetime.now(timezone.utc),
                 auto_approve=approval_enabled,
             )
             for candidate_strategy_id in resolved_strategy_ids
