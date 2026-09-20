@@ -143,9 +143,9 @@ class PromotionDatabaseAdapter:
             raise PromotionAuthorityError(
                 f"paper approval requires ROBUSTNESS_PASSED, got {state or 'missing'}"
             )
-        if not isinstance(version, int) or version < 1:
+        if type(version) is not int or version < 1:
             raise PromotionAuthorityError("promotion version is invalid")
-        if not isinstance(evidence_version, int) or evidence_version < 1:
+        if type(evidence_version) is not int or evidence_version < 1:
             raise PromotionAuthorityError("promotion evidence_version is invalid")
 
         encoded_promotion_id = quote(promotion_id, safe="")

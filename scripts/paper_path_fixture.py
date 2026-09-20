@@ -5,6 +5,79 @@ Database persistence/approved promotion are in-memory fixtures; Risk, Manager
 clients, order construction, Execution service and Alpaca payload are real code.
 """
 
+FUND = r'''
+from decimal import Decimal
+from copy import deepcopy
+from app.discover_allocation import (build_discover_allocation_plan, select_candidates_by_bucket,
+                                    enrich_ranked_candidates_with_buckets)
+from app.discover_report_builder import build_selected_positions
+from app.services.pre_risk_capacity_service import apply_pre_risk_capacity_selection
+assert payload['backtest']['candidate_oos']['passed'] is True
+assert payload['backtest']['nested_oos']['passed'] is True
+# Synthetic prequalified candidates exercise the default 2/2/1 allocation.
+# This subprocess has no real network access and cannot create production BUYs.
+specs=[('TSTA','core_dividend','Healthcare'),('TSTB','core_dividend','Utilities'),
+       ('TSTC','value_rebound','Industrials'),('TSTD','value_rebound','Financials'),
+       ('TSTE','news_momentum','Technology')]
+ranked=[]
+for i,(symbol,bucket,sector) in enumerate(specs):
+    ranked.append({'symbol':symbol,'strategy_bucket_classification':{
+        'bucket':bucket,'status':'classified','confidence':.9,'evidence_gate_passed':True,
+        'classifier_version':'fixture-only','reasons':['synthetic_test_evidence']},
+        'analysis':{'ticker':symbol,'final_verdict':'buy','status':'complete',
+                    'raw_data':{'fundamental':{'data':{'sector':sector,'current_price':100}}}},
+        'scanner_candidate':{'metadata':{'sector':sector}},
+        'score_breakdown':{'final_opportunity_score':.9-i*.01}})
+ranked=enrich_ranked_candidates_with_buckets(ranked)
+plan=build_discover_allocation_plan(ranked,Decimal('100000'))
+selection=select_candidates_by_bucket(ranked)
+capacity=apply_pre_risk_capacity_selection(ranked=ranked,allocation_plan=plan,
+    bucket_selection=selection,positions=[],portfolio_value=100000)
+selection=capacity['bucket_selection']
+positions=build_selected_positions(ranked=ranked,allocation_plan=plan,bucket_selection=selection)
+assert len(positions)==5,positions
+assert sum(p['target_value'] for p in positions)==37000,positions
+assert all(p['allocation_weight']==p['target_value']/100000 for p in positions)
+risk_positions=[]
+for selected in positions:
+    source=next(x for x in ranked if x['symbol']==selected['symbol'])
+    risk_positions.append({'symbol':selected['symbol'],'side':'buy','entry_price':100,
+        'protection_price':95,'requested_quantity':selected['target_value']/100,
+        'strategy_bucket':selected['strategy_bucket'],'bucket_confidence':.9,
+        'bucket_classification_status':'classified','bucket_classifier_version':'fixture-only',
+        'portfolio_context':{'strategy_bucket':selected['strategy_bucket'],
+                            'target_weight':selected['allocation_weight']},
+        'scanner_candidate':source['scanner_candidate']})
+body={'account_id':1,'equity':100000,'positions':risk_positions,'trading_mode':'PAPER'}
+def rpc(packet):
+    print('DECISION_E2E_RPC=' + json.dumps(packet), flush=True)
+    answer=json.loads(sys.stdin.readline())
+    assert 'rpc_error' not in answer,answer
+    return answer
+def risk(data):
+    response=rpc({'service':'Risk_Agent','request':{'method':'POST',
+        'path':'/risk/portfolio-check','headers':{'X-Correlation-ID':'fund-fixture'},'body':data}})
+    assert response['status_code']==200,response
+    return response['body']['data']
+approved=risk(body)
+assert approved['approved_positions']==5,approved
+assert approved['projected_total_exposure']==37000
+reserved=risk({**body,'current_total_exposure':90000,'open_orders_exposure':10000})
+assert reserved['approved_positions']==0,reserved
+halted=risk({**body,'session_risk_context':{'emergency_halt':True}})
+assert halted['approved_positions']==0,halted
+concentrated=deepcopy(body)
+for p in concentrated['positions']:p['scanner_candidate']['metadata']['sector']='Technology'
+sector=risk(concentrated)
+assert sector['projected_sector_exposures']['Technology']<=25000,sector
+emit({'fixture_only':True,'production_authorized':False,'broker_order_count':0,
+    'selected_positions':positions,'risk':approved,'open_orders_rejection':reserved,
+    'emergency_halt_rejection':halted,'sector_capacity':sector,
+    'correlation_gate':'NOT_IMPLEMENTED','turnover_gate':'NOT_IMPLEMENTED',
+    'risk_cash_buying_power_gate':'NOT_IMPLEMENTED_IN_PORTFOLIO_RISK_CONTRACT',
+    'scope':'Manager allocation and actual Risk API; broker acceptance tested separately'})
+'''
+
 BACKTEST = r'''
 from datetime import datetime, timedelta, timezone
 from math import sin, pi
