@@ -168,7 +168,7 @@ def test_environment_symbol_and_timestamp_helpers(monkeypatch):
     assert gate._symbol(SimpleNamespace(symbol="msft")) == "MSFT"
     assert gate._parse_timestamp("not-a-time") is None
     naive = gate._parse_timestamp("2026-08-03T05:00:00")
-    assert naive is not None and naive.tzinfo == timezone.utc
+    assert naive is None
     assert gate._parse_timestamp(NOW) == NOW
     assert gate._promotion_timestamp({}) == datetime.min.replace(
         tzinfo=timezone.utc

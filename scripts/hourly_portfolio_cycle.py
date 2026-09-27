@@ -102,8 +102,23 @@ def require_safe_broker_sync(value: Any, *, stage: str) -> dict[str, Any]:
     )
     database_status_ok = status in SAFE_SYNC_STATUSES
     if not execution_reconcile_ok and not database_status_ok:
+        mismatch = as_dict(data.get("mismatch"))
+        # Persist bounded evidence in the existing failure artifact, never a raw
+        # broker account, credential, or arbitrary external response body.
+        known_fields = {
+            "cash_balance", "positions", "open_order_ids",
+            "unassigned_position_buckets", "unassigned_open_order_buckets",
+            "position_strategy_bucket_assignments", "open_order_strategy_bucket_assignments",
+        }
+        fields = sorted({
+            str(as_dict(row).get("field"))
+            for row in as_list(mismatch.get("mismatches"))
+            if as_dict(row).get("field") in known_fields
+        })
         raise RuntimeSafetyError(
-            f"{stage} broker reconciliation did not prove Database/Alpaca parity."
+            f"{stage} broker reconciliation did not prove Database/Alpaca parity. "
+            f"snapshot_present={data.get('has_snapshot') is True}; "
+            f"is_synced={mismatch.get('is_synced') is True}; mismatch_fields={fields}"
         )
     return data
 
