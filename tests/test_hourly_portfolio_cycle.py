@@ -98,6 +98,20 @@ def test_verified_database_sync_allows_progress():
     assert result["mismatch"]["summary"]["status"] == "synced"
 
 
+def test_reconciliation_failure_preserves_safe_root_cause_without_raw_response():
+    payload = {"data": {"has_snapshot": True, "private_account": "do-not-export",
+        "mismatch": {"summary": {"status": "mismatch"}, "is_synced": False,
+            "mismatches": [{"field": "cash_balance", "broker": "private-balance"},
+                           {"field": "unknown-private-field"}]}}}
+    with pytest.raises(RuntimeSafetyError) as error:
+        require_safe_broker_sync(payload, stage="pre-analysis database verification")
+    assert "snapshot_present=True" in str(error.value)
+    assert "is_synced=False" in str(error.value)
+    assert "mismatch_fields=['cash_balance']" in str(error.value)
+    assert "private" not in str(error.value)
+    assert "do-not-export" not in str(error.value)
+
+
 def test_hourly_profit_request_uses_database_lifecycle_identity():
     lifecycle = profit_lifecycle_payload(
         {
