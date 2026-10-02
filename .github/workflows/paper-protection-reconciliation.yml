@@ -42,7 +42,8 @@ jobs:
       ALPACA_API_KEY_ID: ${{ secrets.ALPACA_API_KEY_ID }}
       ALPACA_SECRET_KEY: ${{ secrets.ALPACA_SECRET_KEY }}
       ALPACA_API_URL: ${{ secrets.ALPACA_API_URL || 'https://paper-api.alpaca.markets' }}
-      EXECUTION_API_KEY: dev_execution_key
+      EXECUTION_API_KEY: ${{ secrets.EXECUTION_AGENT_API_KEY }}
+      EXECUTION_AGENT_API_KEY: ${{ secrets.EXECUTION_AGENT_API_KEY }}
       EXECUTE_PAPER_PROTECTION_RECONCILIATION: ${{ github.event_name == 'workflow_run' && 'true' || github.event_name == 'schedule' && 'true' || github.event.inputs.execute_paper || 'false' }}
       PROTECTION_REWARD_RISK_RATIO: ${{ github.event.inputs.reward_risk_ratio || '2.0' }}
 
@@ -81,6 +82,8 @@ jobs:
           set -euo pipefail
           test -n "${ALPACA_API_KEY_ID}" || { echo "Missing ALPACA_API_KEY_ID"; exit 1; }
           test -n "${ALPACA_SECRET_KEY}" || { echo "Missing ALPACA_SECRET_KEY"; exit 1; }
+          test -n "${EXECUTION_API_KEY}" || { echo "Missing EXECUTION_AGENT_API_KEY"; exit 1; }
+          test "${EXECUTION_API_KEY}" != "dev_execution_key" || { echo "Refusing placeholder Execution API key"; exit 1; }
           case "${ALPACA_API_URL}" in
             *paper-api.alpaca.markets*) echo "Alpaca Paper endpoint confirmed." ;;
             *) echo "Refusing protection mutation outside Alpaca Paper: ${ALPACA_API_URL}"; exit 1 ;;
@@ -99,7 +102,7 @@ jobs:
           set -euo pipefail
           compose="docker compose -f docker-compose.yml"
           for i in {1..60}; do
-            database=$(curl -fsS http://localhost:8004/health >/dev/null && echo ok || echo wait)
+            database=$(curl -fsS http://localhost:8004/ready >/dev/null && echo ok || echo wait)
             risk=$(curl -fsS http://localhost:8007/health >/dev/null && echo ok || echo wait)
             execution=$(curl -fsS http://localhost:8006/health >/dev/null && echo ok || echo wait)
             echo "health database=${database} risk=${risk} execution=${execution}"
