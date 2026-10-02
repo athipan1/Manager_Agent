@@ -41,6 +41,39 @@ jobs:
           repository: athipan1/Database_Agent
           path: Database_Agent
 
+
+      - name: Checkout Risk_Agent
+        uses: actions/checkout@v4
+        with:
+          repository: athipan1/Risk_Agent
+          ref: main
+          path: Risk_Agent
+          fetch-depth: 1
+
+      - name: Checkout Backtest_Agent
+        uses: actions/checkout@v4
+        with:
+          repository: athipan1/Backtest_Agent
+          ref: main
+          path: Backtest_Agent
+          fetch-depth: 1
+
+      - name: Checkout Market_Regime_Agent
+        uses: actions/checkout@v4
+        with:
+          repository: athipan1/Market_Regime_Agent
+          ref: main
+          path: Market_Regime_Agent
+          fetch-depth: 1
+
+      - name: Checkout Performance_Agent
+        uses: actions/checkout@v4
+        with:
+          repository: athipan1/Performance_Agent
+          ref: main
+          path: Performance_Agent
+          fetch-depth: 1
+
       - name: Checkout Learning_Agent
         uses: actions/checkout@v4
         with:
@@ -78,7 +111,7 @@ jobs:
             fundamental=$(curl -fsS http://localhost:8001/health >/dev/null && echo ok || echo wait)
             technical=$(curl -fsS http://localhost:8002/health >/dev/null && echo ok || echo wait)
             scanner=$(curl -fsS http://localhost:8003/health >/dev/null && echo ok || echo wait)
-            database=$(curl -fsS http://localhost:8004/health >/dev/null && echo ok || echo wait)
+            database=$(curl -fsS http://localhost:8004/ready >/dev/null && echo ok || echo wait)
             learning=$(curl -fsS http://localhost:8005/health >/dev/null && echo ok || echo wait)
             execution=$(curl -fsS http://localhost:8006/health >/dev/null && echo ok || echo wait)
 
