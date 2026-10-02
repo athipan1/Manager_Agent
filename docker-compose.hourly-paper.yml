@@ -8,6 +8,9 @@ services:
       ALLOW_LIVE_TRADING: "false"
       DATABASE_AGENT_URL: ${DATABASE_AGENT_URL:?DATABASE_AGENT_URL is required}
       DATABASE_AGENT_API_KEY: ${DATABASE_AGENT_API_KEY:?DATABASE_AGENT_API_KEY is required}
+      # Restore canonical ownership for confirmed pre-existing Alpaca Paper holdings.
+      # This is a provenance-backed migration seed, not a trade authorization.
+      STRATEGY_BUCKET_ASSIGNMENTS_JSON: ${STRATEGY_BUCKET_ASSIGNMENTS_JSON:-ACGL=value_rebound,ADBE=value_rebound,BKNG=value_rebound,CINF=value_rebound}
       EXECUTION_API_KEY: ${EXECUTION_API_KEY:?EXECUTION_API_KEY is required}
       PORTFOLIO_AGENT_API_KEY: ${PORTFOLIO_AGENT_API_KEY:?PORTFOLIO_AGENT_API_KEY is required}
       SCANNER_REQUIRE_REAL_MARKET_DATA: "true"
