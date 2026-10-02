@@ -1,4 +1,8 @@
 services:
+  database-agent:
+    environment:
+      # Canonical provenance-backed ownership for confirmed pre-existing Paper holdings.
+      STRATEGY_BUCKET_ASSIGNMENTS_JSON: ${STRATEGY_BUCKET_ASSIGNMENTS_JSON:-ACGL=value_rebound,ADBE=value_rebound,BKNG=value_rebound,CINF=value_rebound}
   manager-agent:
     environment:
       TRADING_ENABLED: "true"
