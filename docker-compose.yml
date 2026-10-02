@@ -336,13 +336,26 @@ services:
 
       DATABASE_AGENT_API_KEY: ${DATABASE_AGENT_API_KEY:-dev_database_key}
 
-      DATABASE_DEV_MODE: "true"
+      DATABASE_PROVIDER: postgres
 
-      USE_SQLITE: "true"
+      DATABASE_URL: postgresql://user:password@db:5432/trading_db
 
-      ALPACA_API_KEY: dev_alpaca_key
+      DATABASE_SSL_MODE: disable
 
-      ALPACA_SECRET_KEY: dev_alpaca_secret
+      DATABASE_CREATE_IF_MISSING: "false"
+
+      DATABASE_DEV_MODE: "false"
+
+      ALPACA_API_KEY: ${ALPACA_API_KEY_ID:-}
+
+      ALPACA_SECRET_KEY: ${ALPACA_SECRET_KEY:-}
+
+    command:
+      - /bin/sh
+      - -ec
+      - |
+        python -m scripts.apply_runtime_migrations
+        exec uvicorn main_with_skill_routes:app --host 0.0.0.0 --port 8004
 
     volumes:
 
@@ -624,9 +637,9 @@ services:
 
       PORT: 8006
 
-      EXECUTION_AGENT_API_KEY: dev_execution_key
+      EXECUTION_AGENT_API_KEY: ${EXECUTION_AGENT_API_KEY:-dev_execution_key}
 
-      API_KEY: dev_execution_key
+      API_KEY: ${EXECUTION_AGENT_API_KEY:-dev_execution_key}
 
       DB_AGENT_URL: http://database-agent:8004
 
@@ -651,6 +664,10 @@ services:
       PYTHONPATH: /home/appuser:/home/appuser/src
 
     depends_on:
+
+      db:
+
+        condition: service_healthy
 
       database-agent:
 
