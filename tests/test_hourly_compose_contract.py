@@ -53,3 +53,14 @@ def test_sqlite_is_confined_to_manual_simulator_override():
     assert "DATABASE_DEV_MODE" not in paper
     assert 'BROKER_MODE: SIMULATOR' in simulator
     assert 'USE_SQLITE: "true"' in simulator
+
+
+def test_simulator_compose_forces_execution_test_mode_without_live_trading():
+    compose = load_compose("docker-compose.hourly-simulator.yml")
+    for service_name in ("manager-agent", "execution-agent"):
+        env = compose["services"][service_name]["environment"]
+        assert env["TRADING_MODE"] == "PAPER"
+        assert env["BROKER_MODE"] == "SIMULATOR"
+        assert env["DRY_RUN"] == "true"
+        assert env["ALLOW_LIVE_TRADING"] == "false"
+        assert env["TEST_MODE"] == "true"
