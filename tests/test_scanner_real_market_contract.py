@@ -130,6 +130,7 @@ def test_hourly_simulator_keeps_execution_safe_but_scanner_fail_closed():
 
     assert 'BROKER_MODE: SIMULATOR' in compose
     assert 'DRY_RUN: "true"' in compose
+    assert 'TEST_MODE: "true"' in compose
     assert 'SCANNER_REQUIRE_REAL_MARKET_DATA: "true"' in compose
     assert "SCANNER_MIN_DATA_COVERAGE: ${SCANNER_MIN_DATA_COVERAGE:-0.80}" in compose
     assert 'SCANNER_DEV_MODE: "false"' in compose
