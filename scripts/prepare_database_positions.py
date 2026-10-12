@@ -34,14 +34,14 @@ def unwrap(value: Any) -> Any:
 def _checked_runtime_payload(response: Any, path: str, *, expect_list: bool) -> Any:
     """Fail closed on an execution error; never interpret errors as broker rows."""
     if isinstance(response, dict) and (
-        response.get("status") == "error" or response.get("error")
+        response.get("status") not in (None, "success") or response.get("error")
     ):
         raise ValueError(f"{path}: Execution_Agent returned an error; snapshot refused")
     value = unwrap(response)
     if expect_list:
         if not isinstance(value, list) or any(not isinstance(item, dict) for item in value):
             raise ValueError(f"{path}: expected a list of broker objects; snapshot refused")
-    elif not isinstance(value, dict) or value.get("cash") is None:
+    elif not isinstance(value, dict) or value.get("cash") in (None, ""):
         raise ValueError(f"{path}: missing verified account cash; snapshot refused")
     return value
 
@@ -98,15 +98,17 @@ def parse_args(argv: List[str]) -> argparse.Namespace:
 
 def main(argv: List[str] | None = None) -> int:
     args = parse_args(argv or sys.argv[1:])
+    snapshot_written = False  # None means a POST occurred but confirmation is missing.
     try:
         state = fetch_runtime_state(args.execution_url, args.execution_api_key.strip() or None)
         result = post_database_snapshot(args.database_url, str(args.account_id), state, args.database_api_key.strip() or None)
+        snapshot_written = None
         response = result.get("response") or {}
         if response.get("status") != "success":
             raise ValueError("Database_Agent snapshot was not confirmed successful")
         exit_code = 0
     except ValueError as exc:
-        result = {"status": "error", "reason": str(exc), "snapshot_written": False}
+        result = {"status": "error", "reason": str(exc), "snapshot_written": snapshot_written}
         exit_code = 1
     args.output_json.parent.mkdir(parents=True, exist_ok=True)
     args.output_json.write_text(json.dumps(result, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
