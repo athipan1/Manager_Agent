@@ -42,8 +42,8 @@ jobs:
       ALPACA_API_KEY_ID: ${{ secrets.ALPACA_API_KEY_ID }}
       ALPACA_SECRET_KEY: ${{ secrets.ALPACA_SECRET_KEY }}
       ALPACA_API_URL: ${{ secrets.ALPACA_API_URL || 'https://paper-api.alpaca.markets' }}
-      EXECUTION_API_KEY: ${{ secrets.EXECUTION_AGENT_API_KEY }}
-      EXECUTION_AGENT_API_KEY: ${{ secrets.EXECUTION_AGENT_API_KEY }}
+      EXECUTION_API_KEY: ${{ secrets.EXECUTION_AGENT_API_KEY || secrets.EXECUTION_API_KEY }}
+      EXECUTION_AGENT_API_KEY: ${{ secrets.EXECUTION_AGENT_API_KEY || secrets.EXECUTION_API_KEY }}
       EXECUTE_PAPER_PROTECTION_RECONCILIATION: ${{ github.event_name == 'workflow_run' && 'true' || github.event_name == 'schedule' && 'true' || github.event.inputs.execute_paper || 'false' }}
       PROTECTION_REWARD_RISK_RATIO: ${{ github.event.inputs.reward_risk_ratio || '2.0' }}
 
