@@ -33,6 +33,7 @@ from ..services.curator_signal_service import enrich_payloads_with_curator_signa
 from ..services.exposure_aware_trade_gate import filter_candidates_with_exposure_gate
 from ..services.exposure_service import total_position_exposure
 from ..stock_guard import StockGuardError
+from ..unmanaged_broker_holdings import approved_unmanaged_symbols
 from .analysis_workflow import analyze_single_asset
 from .discovery_workflow import (
     initial_discovery_execution_result,
@@ -142,7 +143,11 @@ async def run_gated_discover_analyze_trade_flow(
             )
 
         scan_payload = scanner_payload(scan_response)
-        candidates = scan_payload.get("candidates", [])
+        external_symbols = approved_unmanaged_symbols(account_id)
+        candidates = [
+            row for row in scan_payload.get("candidates", [])
+            if _symbol(row) not in external_symbols
+        ]
         if not candidates:
             return no_scanner_candidates_response(
                 correlation_id=correlation_id,
@@ -524,6 +529,7 @@ async def run_gated_discover_analyze_trade_flow(
             "mode": "portfolio_allocation",
             "scanner_metadata": scan_payload.get("metadata", {}),
             "scanner_count": len(candidates),
+            "unmanaged_candidate_exclusion": sorted(external_symbols),
             "deep_analysis_count": len(valid_results),
             "top_10_symbols": selected_tickers,
             "allocation_plan": allocation_report.get("allocation_plan"),

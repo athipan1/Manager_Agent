@@ -23,6 +23,11 @@ from app.market_regime_contract import (  # noqa: E402
 )
 from app.profit_market_context import compose_profit_market_context  # noqa: E402
 
+from app.unmanaged_broker_holdings import (
+    approved_unmanaged_symbols,
+    require_matching_database_scope,
+)
+
 JsonHttpClient = runtime.JsonHttpClient
 RuntimeSafetyError = runtime.RuntimeSafetyError
 
@@ -123,11 +128,13 @@ def require_safe_broker_sync(value: Any, *, stage: str) -> dict[str, Any]:
     return data
 
 
-def protection_gaps(value: Any) -> list[dict[str, Any]]:
+def protection_gaps(value: Any, *, excluded_symbols: set[str] | None = None) -> list[dict[str, Any]]:
     diagnostics = as_dict(unwrap(value))
+    excluded_symbols = excluded_symbols or set()
     return [
         row
         for row in as_list(diagnostics.get("positions"))
+        if str(row.get("symbol") or "").upper() not in excluded_symbols
         if str(row.get("protection_status") or "").lower()
         not in SAFE_PROTECTION_STATUSES
         or number(row.get("unprotected_quantity")) > 0
@@ -294,8 +301,9 @@ def _reconcile(clients: CycleClients, account_id: str, stage: str) -> dict[str, 
         clients.database,
         f"/broker-sync/status?account_id={account_id}",
     )
-    require_safe_broker_sync(db_status, stage=f"{stage} database verification")
-    return data
+    verified = require_safe_broker_sync(db_status, stage=f"{stage} database verification")
+    require_matching_database_scope(verified, account_id)
+    return verified
 
 
 def _position_payload(row: dict[str, Any]) -> dict[str, Any]:
@@ -344,10 +352,19 @@ def review_existing_positions(
     execute_safe_actions: bool,
 ) -> dict[str, Any]:
     _reconcile(clients, account_id, "pre-analysis")
+    unmanaged_symbols = approved_unmanaged_symbols(account_id)
     state = _broker_state(clients, account_id)
     account = as_dict(state.get("account"))
     positions = as_list(state.get("positions"))
     open_orders = as_list(state.get("open_orders"))
+    managed_positions = [
+        row for row in positions
+        if str(row.get("symbol") or "").upper() not in unmanaged_symbols
+    ]
+    unmanaged_positions = [
+        str(row.get("symbol") or "").upper() for row in positions
+        if str(row.get("symbol") or "").upper() in unmanaged_symbols
+    ]
     diagnostics_response = clients.get(
         clients.execution,
         "/broker/protection-diagnostics",
@@ -433,7 +450,7 @@ def review_existing_positions(
         for row in as_list(portfolio.get("position_exposure"))
     }
     decisions: list[dict[str, Any]] = []
-    for row in positions:
+    for row in managed_positions:
         symbol = str(row.get("symbol") or "").upper()
         quantity = number(row.get("quantity") or row.get("qty"))
         entry = number(row.get("average_cost") or row.get("avg_entry_price"))
@@ -532,7 +549,7 @@ def review_existing_positions(
             (
                 "/broker/cleanup/stale-open-orders?max_age_minutes="
                 f"{int(os.getenv('STALE_ORDER_MAX_AGE_MINUTES', '390'))}"
-                f"&dry_run={'false' if execute_safe_actions else 'true'}"
+                f"&dry_run={'false' if execute_safe_actions and not unmanaged_symbols else 'true'}"
                 "&include_protective=false"
             ),
             {},
@@ -572,6 +589,8 @@ def review_existing_positions(
             "status": account.get("status"),
             "equity_present": equity > 0,
             "position_count": len(positions),
+            "managed_position_count": len(managed_positions),
+            "unmanaged_position_count": len(unmanaged_positions),
             "open_order_count": len(open_orders),
         },
         "market_regime": regime,
@@ -581,9 +600,14 @@ def review_existing_positions(
         "performance_session_risk": session_risk,
         "protection_diagnostics": diagnostics,
         "position_decisions": decisions,
+        "unmanaged_positions": sorted(unmanaged_positions),
+        "unmanaged_position_policy": "read_only_no_orders",
         "stale_order_cleanup": stale_cleanup,
+        "stale_order_cleanup_dry_run_for_external_scope": bool(unmanaged_symbols),
         "manual_exit_recommendation_count": len(manual_recommendations),
-        "safe_for_candidate_analysis": not protection_gaps(diagnostics_response),
+        "safe_for_candidate_analysis": not protection_gaps(
+            diagnostics_response, excluded_symbols=unmanaged_symbols
+        ),
     }
     clients.post(
         clients.database,
@@ -617,7 +641,9 @@ def run_candidate_cycle(
             clients.execution,
             "/broker/protection-diagnostics",
         )
-        if protection_gaps(current_protection):
+        if protection_gaps(
+            current_protection, excluded_symbols=approved_unmanaged_symbols(account_id)
+        ):
             execute = False
     response = clients.post(
         clients.manager,

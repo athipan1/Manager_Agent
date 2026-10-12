@@ -15,6 +15,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from scripts.hourly_runtime_loader import runtime
+from app.unmanaged_broker_holdings import approved_unmanaged_symbols
 
 is_placeholder_secret = runtime.is_placeholder_secret
 
@@ -104,18 +105,23 @@ def _first_stop_price(row: Dict[str, Any]) -> float | None:
 
 
 def _attention_rows(diagnostics: Dict[str, Any]) -> List[Dict[str, Any]]:
+    excluded = approved_unmanaged_symbols(os.getenv("DEFAULT_ACCOUNT_ID", "1"))
     return [
         dict(row)
         for row in diagnostics.get("positions") or []
         if isinstance(row, dict)
+        and str(row.get("symbol") or "").upper() not in excluded
         and str(row.get("protection_status") or "").lower()
         in ATTENTION_STATUSES
     ]
 
 
 def _protection_summary(diagnostics: Dict[str, Any]) -> Dict[str, Any]:
-    rows = [row for row in diagnostics.get("positions") or [] if isinstance(row, dict)]
+    excluded = approved_unmanaged_symbols(os.getenv("DEFAULT_ACCOUNT_ID", "1"))
+    all_rows = [row for row in diagnostics.get("positions") or [] if isinstance(row, dict)]
+    rows = [row for row in all_rows if str(row.get("symbol") or "").upper() not in excluded]
     return {
+        "unmanaged_read_only_count": len(all_rows) - len(rows),
         "position_count": len(rows),
         "fully_protected": sorted(
             str(row.get("symbol") or "")
@@ -296,6 +302,11 @@ def main() -> int:
     report["preview"] = preview_response
     ticket = preview.get("ticket") or {}
     ready_symbols = list(ticket.get("symbols") or [])
+    expected_symbols = {str(row.get("symbol") or "").upper() for row in attention}
+    if not ready_symbols or set(ready_symbols) != expected_symbols:
+        report["status"] = "blocked_protection_ticket_scope_mismatch"
+        write_report(report)
+        return 3
 
     if not ready_symbols:
         report["status"] = "blocked_no_ready_reconciliation_plans"
