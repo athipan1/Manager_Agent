@@ -1,7 +1,7 @@
 import json
 from pathlib import Path
 
-from scripts.enrich_dashboard_snapshot import enrich_snapshot
+from scripts.enrich_dashboard_snapshot import annotate_position_ownership, enrich_snapshot
 
 
 def write_json(path: Path, payload: dict) -> None:
@@ -226,3 +226,47 @@ def test_does_not_copy_sensitive_diagnostics(tmp_path):
 
     assert "super-secret" not in serialized
     assert enriched["risk"]["emergencyHalt"]["reason"] == "redacted"
+
+
+def test_publisher_labels_manual_boxes_without_authorizing_ai(tmp_path):
+    registry = tmp_path / "registry.json"
+    registry.write_text(json.dumps({
+        "schema_version": "unmanaged-broker-holdings.v1",
+        "account_id": 1,
+        "broker": "ALPACA_PAPER",
+        "symbols": ["OXY"],
+        "safety": {"read_only": True, "broker_order_mutation_allowed": False},
+    }), encoding="utf-8")
+    snapshot = base_snapshot()
+    snapshot["runtime"]["liveTradingEnabled"] = False
+    snapshot["positions"] = [
+        {"symbol": "OXY", "bucket": "unassigned", "quantity": None},
+        {"symbol": "VRT", "bucket": "quality_growth", "quantity": None},
+    ]
+    result = annotate_position_ownership(snapshot, registry_path=registry)
+    assert [(row["symbol"], row["ownership"]) for row in result] == [
+        ("OXY", "manual"), ("VRT", "unclassified")
+    ]
+    assert all(row["quantity"] is None for row in result)
+
+    # Neither a LIVE context nor invalid registry is an ownership authority.
+    snapshot["runtime"]["mode"] = "LIVE"
+    assert all("ownership" not in x for x in annotate_position_ownership(snapshot, registry_path=registry))
+    snapshot["runtime"]["mode"] = "PAPER"
+    registry.write_text('{"symbols":["OXY"]}', encoding="utf-8")
+    assert all(row["ownership"] == "unclassified"
+               for row in annotate_position_ownership(snapshot, registry_path=registry))
+
+
+def test_publisher_enriches_paper_positions_with_real_operator_registry(tmp_path):
+    snapshot = base_snapshot()
+    snapshot["runtime"]["liveTradingEnabled"] = False
+    snapshot["positions"] = [
+        {"symbol": "OXY", "bucket": "unassigned"},
+        {"symbol": "VRT", "bucket": "quality_growth"},
+    ]
+    enriched = enrich_snapshot(snapshot, tmp_path)
+    assert {row["symbol"]: row["ownership"] for row in enriched["positions"]} == {
+        "OXY": "manual",
+        "VRT": "unclassified",
+    }
