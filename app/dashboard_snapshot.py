@@ -4,6 +4,9 @@ import datetime
 import os
 from typing import Any, Dict, Iterable, List
 
+from .unmanaged_broker_holdings import approved_unmanaged_symbols
+
+
 from .contracts.dashboard import (
     DashboardAccount,
     DashboardCuratorSignal,
@@ -81,7 +84,42 @@ def _protection_for(symbol: str, orders: Iterable[Dict[str, Any]], row: Dict[str
     )
 
 
-def _safe_position(row: Any, orders: List[Dict[str, Any]]) -> DashboardPosition | None:
+def _position_ownership_labels(data: Dict[str, Any], *, mode: str, broker_mode: str) -> Dict[str, str]:
+    """Read-only ownership categories, never an execution authorization.
+
+    A manually owned position is proven only by the operator-reviewed local
+    external registry. An AI-managed display label additionally needs
+    canonical assignment evidence and a fully reconciled Database snapshot.
+    Other holdings stay quarantined and cannot be promoted by name/bucket alone.
+    """
+    if mode != "PAPER" or broker_mode != "ALPACA":
+        return {}
+    try:
+        external = approved_unmanaged_symbols(data.get("account_id") or 1)
+    except Exception:
+        # Dashboard has no authority to repair incomplete registry evidence.
+        return {}
+    labels = {symbol: "manual" for symbol in external}
+    status = _dict(data.get("database_sync"))
+    if data.get("data_source") != "database" or _dict(status.get("mismatch")).get("is_synced") is not True:
+        return labels
+    rows = _list(_dict(status.get("database")).get("strategy_bucket_assignments"))
+    assigned = {
+        str(row.get("symbol") or "").strip().upper(): str(row.get("strategy_bucket") or "").strip().lower()
+        for value in rows if (row := _dict(value))
+    }
+    for value in _list(data.get("positions")):
+        row = _dict(value)
+        symbol = str(row.get("symbol") or "").strip().upper()
+        bucket = str(_first(row.get("strategy_bucket"), row.get("bucket"), default="unassigned")).strip().lower()
+        if symbol not in external and bucket in {
+            "core_dividend", "quality_growth", "value_rebound", "news_momentum"
+        } and assigned.get(symbol) == bucket:
+            labels[symbol] = "ai_managed"
+    return labels
+
+
+def _safe_position(row: Any, orders: List[Dict[str, Any]], *, ownership: str = "unclassified") -> DashboardPosition | None:
     item = _dict(row)
     symbol = str(item.get("symbol") or "").strip().upper()
     if not symbol:
@@ -94,6 +132,7 @@ def _safe_position(row: Any, orders: List[Dict[str, Any]]) -> DashboardPosition 
         marketValue=_number(_first(item.get("marketValue"), item.get("market_value"), item.get("value"))),
         unrealizedPnL=_number(_first(item.get("unrealizedPnL"), item.get("unrealized_pl"))),
         bucket=str(_first(item.get("bucket"), item.get("strategy_bucket"), default="unassigned")),
+        ownership=ownership if ownership in {"manual", "ai_managed"} else "unclassified",
         protection=_protection_for(symbol, orders, item),
     )
 
@@ -137,13 +176,20 @@ def build_dashboard_snapshot(payload: Dict[str, Any]) -> DashboardSnapshot:
     data = _dict(payload)
     balance = _dict(data.get("balance"))
     orders = [_dict(order) for order in _list(data.get("open_orders"))]
-    positions = [item for row in _list(data.get("positions")) if (item := _safe_position(row, orders)) is not None]
+    mode = os.getenv("TRADING_MODE", "PAPER").strip().upper() or "PAPER"
+    broker_mode = os.getenv("BROKER_MODE", "SIMULATOR").strip().upper() or "SIMULATOR"
+    ownership = _position_ownership_labels(data, mode=mode, broker_mode=broker_mode)
+    positions = [
+        item for row in _list(data.get("positions"))
+        if (item := _safe_position(
+            row, orders,
+            ownership=ownership.get(str(_dict(row).get("symbol") or "").strip().upper(), "unclassified"),
+        )) is not None
+    ]
     public_orders = [item for row in orders if (item := _safe_order(row)) is not None]
     signals = [item for row in _list(data.get("curator_signals")) if (item := _safe_signal(row)) is not None]
     raw_summary = _dict(data.get("summary"))
     generated_at = _timestamp(_first(data.get("generated_at"), data.get("generatedAt")))
-    mode = os.getenv("TRADING_MODE", "PAPER").strip().upper() or "PAPER"
-    broker_mode = os.getenv("BROKER_MODE", "SIMULATOR").strip().upper() or "SIMULATOR"
     problem_count = int(_number(_first(raw_summary.get("problem_count"), len(_list(data.get("problems"))))))
     data_source = str(data.get("data_source") or "unavailable")
     degraded = problem_count > 0 or data_source == "unavailable"
