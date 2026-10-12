@@ -764,7 +764,9 @@ def build_backtest(
     return {"latestRun": latest, "history": history}
 
 
-def annotate_position_ownership(snapshot: Mapping[str, Any]) -> list[dict[str, Any]]:
+def annotate_position_ownership(
+    snapshot: Mapping[str, Any], *, registry_path: Path | None = None
+) -> list[dict[str, Any]]:
     """Safe public projection of operator-reviewed ownership (not trade rights).
 
     Broker-verified operator registry is the only current source for personal
@@ -780,11 +782,30 @@ def annotate_position_ownership(snapshot: Mapping[str, Any]) -> list[dict[str, A
     )
     if not paper:
         return [dict(row) for row in positions if isinstance(row, Mapping)]
-    from app.unmanaged_broker_holdings import approved_unmanaged_symbols
-
+    # This script executes by path in GitHub Actions, so use a validated
+    # version-controlled document instead of importing app runtime modules.
+    # Missing, invalid, or non-read-only registry fails closed to unclassified.
+    registry_path = registry_path or (
+        Path(__file__).resolve().parents[1] / "config/unmanaged_broker_holdings.v1.json"
+    )
     try:
-        manually_owned = approved_unmanaged_symbols(1)
-    except Exception:
+        registry = json.loads(registry_path.read_text(encoding="utf-8"))
+        symbols = registry.get("symbols")
+        approved = (
+            isinstance(registry, dict)
+            and registry.get("schema_version") == "unmanaged-broker-holdings.v1"
+            and registry.get("account_id") == 1
+            and registry.get("broker") == "ALPACA_PAPER"
+            and isinstance(registry.get("safety"), dict)
+            and registry["safety"].get("read_only") is True
+            and registry["safety"].get("broker_order_mutation_allowed") is False
+            and isinstance(symbols, list)
+            and bool(symbols)
+            and len(symbols) == len(set(symbols))
+            and all(isinstance(x, str) and re.fullmatch(r"[A-Z][A-Z0-9.\\-]{0,14}", x) for x in symbols)
+        )
+        manually_owned = set(symbols) if approved else set()
+    except (ValueError, OSError, TypeError, AttributeError):
         manually_owned = set()
     result = []
     for item in positions:
