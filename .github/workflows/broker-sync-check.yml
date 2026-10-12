@@ -67,6 +67,10 @@ jobs:
           path: Fundamental_Agent
           fetch-depth: 1
 
+      - name: Export reviewed Paper external ownership scope
+        working-directory: Manager_Agent
+        run: python scripts/export_unmanaged_paper_scope.py --account-id 1
+
       - name: Checkout Database_Agent
         uses: actions/checkout@v4
         with:
