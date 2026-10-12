@@ -78,6 +78,8 @@ def test_workflow_uses_secrets_without_placeholder_fallbacks():
         assert f"{name}: ${{{{ secrets.{name} }}}}" in workflow
     assert "EXECUTION_AGENT_API_KEY: ${{ secrets.EXECUTION_AGENT_API_KEY || secrets.EXECUTION_API_KEY }}" in workflow
     assert "EXECUTION_API_KEY: ${{ secrets.EXECUTION_AGENT_API_KEY || secrets.EXECUTION_API_KEY }}" in workflow
+    assert "EXECUTION_API_KEY: ${{ secrets.EXECUTION_AGENT_API_KEY || secrets.EXECUTION_API_KEY }}" in workflow
+    assert "EXECUTION_AGENT_API_KEY: ${{ secrets.EXECUTION_AGENT_API_KEY || secrets.EXECUTION_API_KEY }}" in workflow
     assert "secrets.ALPACA_API_URL ||" not in workflow
     assert "dev_execution_key" not in workflow
     assert "dev_database_key" not in workflow
