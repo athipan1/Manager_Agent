@@ -31,14 +31,42 @@ def unwrap(value: Any) -> Any:
     return value.get("data") if isinstance(value, dict) and "data" in value else value
 
 
+def _checked_runtime_payload(response: Any, path: str, *, expect_list: bool) -> Any:
+    """Fail closed on an execution error; never interpret errors as broker rows."""
+    if isinstance(response, dict) and (
+        response.get("status") not in (None, "success") or response.get("error")
+    ):
+        raise ValueError(f"{path}: Execution_Agent returned an error; snapshot refused")
+    value = unwrap(response)
+    if expect_list:
+        if not isinstance(value, list) or any(not isinstance(item, dict) for item in value):
+            raise ValueError(f"{path}: expected a list of broker objects; snapshot refused")
+    elif not isinstance(value, dict) or value.get("cash") in (None, ""):
+        raise ValueError(f"{path}: missing verified account cash; snapshot refused")
+    return value
+
+
 def fetch_runtime_state(execution_url: str, execution_api_key: str | None) -> Dict[str, Any]:
     account = request_json(execution_url, "/account", api_key=execution_api_key)
-    positions = unwrap(request_json(execution_url, "/positions", api_key=execution_api_key)) or []
-    items = unwrap(request_json(execution_url, "/orders", api_key=execution_api_key)) or []
+    account = _checked_runtime_payload(account, "/account", expect_list=False)
+    positions = _checked_runtime_payload(
+        request_json(execution_url, "/positions", api_key=execution_api_key),
+        "/positions",
+        expect_list=True,
+    )
+    items = _checked_runtime_payload(
+        request_json(execution_url, "/orders", api_key=execution_api_key),
+        "/orders",
+        expect_list=True,
+    )
     return {"account": account, "positions": positions, "open_orders": items}
 
 
 def post_database_snapshot(database_url: str, account_id: str, state: Dict[str, Any], database_api_key: str | None) -> Dict[str, Any]:
+    # Validate again at the persistence boundary to protect direct callers.
+    _checked_runtime_payload(state.get("account"), "/account", expect_list=False)
+    _checked_runtime_payload(state.get("positions"), "/positions", expect_list=True)
+    _checked_runtime_payload(state.get("open_orders"), "/orders", expect_list=True)
     payload = {
         "account_id": int(account_id),
         "broker": "ALPACA",
@@ -70,13 +98,22 @@ def parse_args(argv: List[str]) -> argparse.Namespace:
 
 def main(argv: List[str] | None = None) -> int:
     args = parse_args(argv or sys.argv[1:])
-    state = fetch_runtime_state(args.execution_url, args.execution_api_key.strip() or None)
-    result = post_database_snapshot(args.database_url, str(args.account_id), state, args.database_api_key.strip() or None)
+    snapshot_written = False  # None means a POST occurred but confirmation is missing.
+    try:
+        state = fetch_runtime_state(args.execution_url, args.execution_api_key.strip() or None)
+        result = post_database_snapshot(args.database_url, str(args.account_id), state, args.database_api_key.strip() or None)
+        snapshot_written = None
+        response = result.get("response") or {}
+        if response.get("status") != "success":
+            raise ValueError("Database_Agent snapshot was not confirmed successful")
+        exit_code = 0
+    except ValueError as exc:
+        result = {"status": "error", "reason": str(exc), "snapshot_written": snapshot_written}
+        exit_code = 1
     args.output_json.parent.mkdir(parents=True, exist_ok=True)
     args.output_json.write_text(json.dumps(result, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
     print(json.dumps(result, ensure_ascii=False, indent=2, default=str))
-    response = result.get("response") or {}
-    return 0 if response.get("status") != "error" else 1
+    return exit_code
 
 
 if __name__ == "__main__":
