@@ -107,3 +107,27 @@ def test_main_reports_fail_closed_and_skips_snapshot(monkeypatch, tmp_path):
     data = json.loads(report.read_text())
     assert data["snapshot_written"] is False
     assert data["status"] == "error"
+
+
+def test_fetch_runtime_state_rejects_invalid_account_before_positions(monkeypatch):
+    def fake_request(base_url, path, **kwargs):
+        if path == "/account":
+            return {"status": "success", "data": {"cash": ""}}
+        raise AssertionError("Invalid account must block downstream requests")
+    monkeypatch.setattr("scripts.prepare_database_positions.request_json", fake_request)
+    with pytest.raises(ValueError, match="/account"):
+        fetch_runtime_state("http://execution", "key")
+
+
+def test_fetch_runtime_state_rejects_malformed_orders(monkeypatch):
+    def fake_request(base_url, path, **kwargs):
+        if path == "/account":
+            return {"status": "success", "data": {"cash": "1000"}}
+        if path == "/positions":
+            return {"status": "success", "data": [{"symbol": "ACGL"}]}
+        if path == "/orders":
+            return {"status": "error", "http_status": 401}
+        raise AssertionError(path)
+    monkeypatch.setattr("scripts.prepare_database_positions.request_json", fake_request)
+    with pytest.raises(ValueError, match="/orders"):
+        fetch_runtime_state("http://execution", "key")
