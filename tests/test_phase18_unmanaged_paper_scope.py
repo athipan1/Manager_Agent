@@ -10,7 +10,7 @@ from scripts.reconcile_paper_protection import _attention_rows, _protection_summ
 
 EXTERNAL = {
     "AGCO", "CEG", "DE", "FDX", "NVDA", "PFE",
-    "PSQ", "REGN", "SH", "SMCI", "VRT", "VST",
+    "PSQ", "REGN", "SH", "SMCI", "OXY", "VST",
 }
 
 
@@ -50,7 +50,7 @@ def test_unmanaged_protection_does_not_block_managed_protection():
     assert summary["unmanaged_read_only_count"] == 1
 
 
-@pytest.mark.parametrize("symbol", ["NVDA", "AGCO", "VRT"])
+@pytest.mark.parametrize("symbol", ["NVDA", "AGCO", "OXY"])
 def test_manager_never_builds_ai_execution_order_for_external_stock(symbol):
     with pytest.raises(OrderBuildError, match="unmanaged"):
         order_request_from_decision(

@@ -17,6 +17,10 @@ def test_exact_reviewed_paper_scope():
     assert set(scope) == {"1"}
     assert sorted(scope["1"]) == sorted(registry["symbols"])
     assert len(scope["1"]) == 12
+    # Operator explicitly sold VRT and replaced it with personally owned OXY.
+    assert "OXY" in scope["1"]
+    assert "VRT" not in scope["1"]
+    assert registry["safety"]["read_only"] is True
     assert registry["safety"]["broker_order_mutation_allowed"] is False
 
 
