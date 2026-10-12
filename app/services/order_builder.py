@@ -175,6 +175,14 @@ def order_request_from_decision(
     client_order_id_factory: ClientOrderIdFactory | None = None,
 ) -> CreateOrderRequest:
     """Build a fail-closed `CreateOrderRequest` from an approved risk decision."""
+    # Never let a strategy gate treat a human-owned holding as a trade candidate.
+    from app.unmanaged_broker_holdings import approved_unmanaged_symbols
+    candidate_symbol = str(
+        decision.get("symbol") or (decision.get("trade_plan") or {}).get("symbol") or ""
+    ).strip().upper()
+    if candidate_symbol and candidate_symbol in approved_unmanaged_symbols(account_id):
+        raise OrderBuildError("unmanaged broker holding is not eligible for AI order execution")
+
     trade_plan_order = order_request_from_trade_plan_decision(decision)
     if trade_plan_order is not None:
         if client_order_id_factory is not None:
