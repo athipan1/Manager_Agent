@@ -764,6 +764,39 @@ def build_backtest(
     return {"latestRun": latest, "history": history}
 
 
+def annotate_position_ownership(snapshot: Mapping[str, Any]) -> list[dict[str, Any]]:
+    """Safe public projection of operator-reviewed ownership (not trade rights).
+
+    Broker-verified operator registry is the only current source for personal
+    position labels. Unrecognized holdings remain unclassified; a strategy
+    bucket alone can never confer AI ownership.
+    """
+    positions = _list(snapshot.get("positions"))
+    runtime = _dict(snapshot.get("runtime"))
+    paper = (
+        str(runtime.get("mode") or "").upper() == "PAPER"
+        and str(runtime.get("brokerMode") or "").upper() == "ALPACA"
+        and runtime.get("liveTradingEnabled") is False
+    )
+    if not paper:
+        return [dict(row) for row in positions if isinstance(row, Mapping)]
+    from app.unmanaged_broker_holdings import approved_unmanaged_symbols
+
+    try:
+        manually_owned = approved_unmanaged_symbols(1)
+    except Exception:
+        manually_owned = set()
+    result = []
+    for item in positions:
+        if not isinstance(item, Mapping):
+            continue
+        row = dict(item)
+        symbol = str(row.get("symbol") or "").strip().upper()
+        row["ownership"] = "manual" if symbol in manually_owned else "unclassified"
+        result.append(row)
+    return result
+
+
 def enrich_snapshot(
     snapshot: Mapping[str, Any],
     artifact_dir: Path,
@@ -772,6 +805,7 @@ def enrich_snapshot(
     payload = _dict(snapshot)
     if payload.get("schemaVersion") != "dashboard-snapshot.v2":
         raise ValueError("Phase 12 telemetry enrichment requires dashboard-snapshot.v2")
+    payload["positions"] = annotate_position_ownership(payload)
     payload["agents"] = build_agents(payload, artifact_dir)
     payload["risk"] = build_risk(payload, artifact_dir)
     payload["backtest"] = build_backtest(payload, artifact_dir, _dict(previous))
