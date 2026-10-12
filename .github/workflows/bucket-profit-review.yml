@@ -43,7 +43,8 @@ jobs:
       TRADING_MODE: PAPER
       ALLOW_LIVE_TRADING: "false"
       DRY_RUN: "true"
-      EXECUTION_API_KEY: ${{ secrets.EXECUTION_API_KEY || 'dev_execution_key' }}
+      EXECUTION_AGENT_API_KEY: ${{ secrets.EXECUTION_AGENT_API_KEY || secrets.EXECUTION_API_KEY }}
+      EXECUTION_API_KEY: ${{ secrets.EXECUTION_AGENT_API_KEY || secrets.EXECUTION_API_KEY }}
       DATABASE_AGENT_URL: http://localhost:8004
       DATABASE_AGENT_API_KEY: ${{ secrets.DATABASE_AGENT_API_KEY || 'dev_database_key' }}
       DEFAULT_ACCOUNT_ID: 1
@@ -116,6 +117,10 @@ jobs:
           ref: main
           path: Fundamental_Agent
           fetch-depth: 1
+
+      - name: Export reviewed Paper external ownership scope
+        working-directory: Manager_Agent
+        run: python scripts/export_unmanaged_paper_scope.py --account-id 1
 
       - name: Checkout Database_Agent
         uses: actions/checkout@v4
@@ -198,6 +203,10 @@ jobs:
           fi
           if [ -z "${ALPACA_API_KEY_ID}" ] || [ -z "${ALPACA_SECRET_KEY}" ] || [ -z "${PROFIT_AGENT_API_KEY}" ]; then
             echo "Missing GitHub Secrets: ALPACA_API_KEY_ID, ALPACA_SECRET_KEY, or PROFIT_AGENT_API_KEY"
+            exit 1
+          fi
+          if [ -z "${EXECUTION_AGENT_API_KEY}" ] || [ "${EXECUTION_AGENT_API_KEY}" = "dev_execution_key" ]; then
+            echo "Execution_Agent credential missing or placeholder; refusing broker snapshot."
             exit 1
           fi
           echo "Paper-only safety settings validated."

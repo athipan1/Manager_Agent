@@ -145,7 +145,8 @@ jobs:
       ALPACA_API_KEY_ID: ${{ secrets.ALPACA_API_KEY_ID }}
       ALPACA_SECRET_KEY: ${{ secrets.ALPACA_SECRET_KEY }}
       ALPACA_API_URL: ${{ secrets.ALPACA_API_URL }}
-      EXECUTION_API_KEY: ${{ secrets.EXECUTION_API_KEY }}
+      EXECUTION_AGENT_API_KEY: ${{ secrets.EXECUTION_AGENT_API_KEY || secrets.EXECUTION_API_KEY }}
+      EXECUTION_API_KEY: ${{ secrets.EXECUTION_AGENT_API_KEY || secrets.EXECUTION_API_KEY }}
       DATABASE_AGENT_URL: ${{ secrets.DATABASE_AGENT_URL }}
       DATABASE_AGENT_API_KEY: ${{ secrets.DATABASE_AGENT_API_KEY }}
       RISK_ADMIN_TOKEN: ${{ secrets.RISK_ADMIN_TOKEN }}
@@ -179,6 +180,10 @@ jobs:
         uses: actions/checkout@v6
         with:
           path: Manager_Agent
+
+      - name: Export reviewed Paper external ownership scope
+        working-directory: Manager_Agent
+        run: python scripts/export_unmanaged_paper_scope.py --account-id 1
 
       - name: Check durable Alpaca Paper emergency halt
         working-directory: Manager_Agent

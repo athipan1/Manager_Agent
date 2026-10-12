@@ -34,6 +34,8 @@ jobs:
       ALPACA_API_KEY_ID: ${{ secrets.ALPACA_API_KEY_ID }}
       ALPACA_SECRET_KEY: ${{ secrets.ALPACA_SECRET_KEY }}
       ALPACA_API_URL: ${{ secrets.ALPACA_API_URL || 'https://paper-api.alpaca.markets' }}
+      EXECUTION_AGENT_API_KEY: ${{ secrets.EXECUTION_AGENT_API_KEY || secrets.EXECUTION_API_KEY }}
+      EXECUTION_API_KEY: ${{ secrets.EXECUTION_AGENT_API_KEY || secrets.EXECUTION_API_KEY }}
 
     steps:
       - name: Checkout Manager_Agent
@@ -64,6 +66,10 @@ jobs:
           ref: main
           path: Fundamental_Agent
           fetch-depth: 1
+
+      - name: Export reviewed Paper external ownership scope
+        working-directory: Manager_Agent
+        run: python scripts/export_unmanaged_paper_scope.py --account-id 1
 
       - name: Checkout Database_Agent
         uses: actions/checkout@v4
