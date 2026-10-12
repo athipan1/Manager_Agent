@@ -25,9 +25,14 @@ def approved_unmanaged_symbols(account_id: int | str, *, registry_path: Path = R
         raise RuntimeSafetyError("Unmanaged broker registry must remain Paper read-only.")
     try:
         registered_account = int(data["account_id"])
-        requested_account = int(account_id)
     except (KeyError, TypeError, ValueError) as exc:
-        raise RuntimeSafetyError("Unmanaged broker account scope is invalid.") from exc
+        raise RuntimeSafetyError("Unmanaged broker registry account ID is invalid.") from exc
+    try:
+        requested_account = int(account_id)
+    except (TypeError, ValueError):
+        # Legacy simulation account aliases do not refer to the approved
+        # numeric Alpaca Paper account. Never grant them its exemption.
+        return set()
     symbols = data.get("symbols")
     if not isinstance(symbols, list) or not symbols or any(
         not isinstance(symbol, str) or not re.fullmatch(r"[A-Z][A-Z0-9.\\-]{0,14}", symbol)
