@@ -37,6 +37,8 @@ class DashboardPosition(DashboardContractModel):
     marketValue: float = 0.0
     unrealizedPnL: float = 0.0
     bucket: str = "unassigned"
+    # Classification for read-only UI only. Execution authorization is separate.
+    ownership: Literal["manual", "ai_managed", "unclassified"] = "unclassified"
     protection: DashboardProtection = Field(default_factory=DashboardProtection)
 
 
