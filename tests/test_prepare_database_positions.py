@@ -24,7 +24,7 @@ def test_fetch_runtime_state(monkeypatch):
     monkeypatch.setattr("scripts.prepare_database_positions.request_json", fake_request)
     state = fetch_runtime_state("http://runtime", "key")
 
-    assert state["account"] == {"data": {"cash": "1000"}}
+    assert state["account"] == {"cash": "1000"}
     assert state["positions"] == [{"symbol": "ACGL"}]
     assert state["open_orders"] == [{"symbol": "ACGL"}]
     assert calls == [
