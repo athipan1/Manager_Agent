@@ -181,6 +181,10 @@ jobs:
         with:
           path: Manager_Agent
 
+      - name: Export reviewed Paper external ownership scope
+        working-directory: Manager_Agent
+        run: python scripts/export_unmanaged_paper_scope.py --account-id 1
+
       - name: Check durable Alpaca Paper emergency halt
         working-directory: Manager_Agent
         env:
