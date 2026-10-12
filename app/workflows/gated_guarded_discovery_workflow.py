@@ -221,6 +221,13 @@ async def run_gated_guarded_discover_analyze_trade_flow(
             response.data,
             previous_database_sync or database_sync,
         )
+        # Backfill never grants strategy ownership to external, human-owned holdings.
+        from app.unmanaged_broker_holdings import approved_unmanaged_symbols
+        excluded = approved_unmanaged_symbols(account_id)
+        bucket_by_symbol = {
+            symbol: bucket for symbol, bucket in bucket_by_symbol.items()
+            if str(symbol).strip().upper() not in excluded
+        }
         bucket_backfill_capture = (
             await capture_bucket_backfilled_broker_snapshot(
                 account_id,
