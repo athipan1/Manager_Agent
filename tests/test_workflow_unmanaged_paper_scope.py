@@ -39,7 +39,7 @@ def test_mismatched_ambient_registry_fails_closed(monkeypatch, tmp_path):
     monkeypatch.setenv("GITHUB_ENV", str(tmp_path / "env.txt"))
     monkeypatch.setenv("UNMANAGED_BROKER_POSITION_SYMBOLS_JSON", '{"1":["NVDA"]}')
     with pytest.raises(SystemExit, match="mismatched"):
-        main()
+        main([])
     assert not (tmp_path / "env.txt").exists()
 
 
@@ -47,7 +47,7 @@ def test_scope_written_as_single_line_for_github_env(monkeypatch, tmp_path):
     envfile = tmp_path / "env.txt"
     monkeypatch.setenv("GITHUB_ENV", str(envfile))
     monkeypatch.delenv("UNMANAGED_BROKER_POSITION_SYMBOLS_JSON", raising=False)
-    assert main() == 0
+    assert main([]) == 0
     line = envfile.read_text(encoding="utf-8").strip()
     name, raw = line.split("=", 1)
     assert name == "UNMANAGED_BROKER_POSITION_SYMBOLS_JSON"
