@@ -764,6 +764,60 @@ def build_backtest(
     return {"latestRun": latest, "history": history}
 
 
+def annotate_position_ownership(
+    snapshot: Mapping[str, Any], *, registry_path: Path | None = None
+) -> list[dict[str, Any]]:
+    """Safe public projection of operator-reviewed ownership (not trade rights).
+
+    Broker-verified operator registry is the only current source for personal
+    position labels. Unrecognized holdings remain unclassified; a strategy
+    bucket alone can never confer AI ownership.
+    """
+    positions = _list(snapshot.get("positions"))
+    runtime = _dict(snapshot.get("runtime"))
+    paper = (
+        str(runtime.get("mode") or "").upper() == "PAPER"
+        and str(runtime.get("brokerMode") or "").upper() == "ALPACA"
+        and runtime.get("liveTradingEnabled") is False
+    )
+    if not paper:
+        return [dict(row) for row in positions if isinstance(row, Mapping)]
+    # This script executes by path in GitHub Actions, so use a validated
+    # version-controlled document instead of importing app runtime modules.
+    # Missing, invalid, or non-read-only registry fails closed to unclassified.
+    registry_path = registry_path or (
+        Path(__file__).resolve().parents[1] / "config/unmanaged_broker_holdings.v1.json"
+    )
+    try:
+        registry = json.loads(registry_path.read_text(encoding="utf-8"))
+        symbols = registry.get("symbols")
+        approved = (
+            isinstance(registry, dict)
+            and registry.get("schema_version") == "unmanaged-broker-holdings.v1"
+            and registry.get("account_id") == 1
+            and registry.get("broker") == "ALPACA_PAPER"
+            and isinstance(registry.get("safety"), dict)
+            and registry["safety"].get("read_only") is True
+            and registry["safety"].get("broker_order_mutation_allowed") is False
+            and isinstance(symbols, list)
+            and bool(symbols)
+            and len(symbols) == len(set(symbols))
+            and all(isinstance(x, str) and re.fullmatch(r"[A-Z][A-Z0-9.\\-]{0,14}", x) for x in symbols)
+        )
+        manually_owned = set(symbols) if approved else set()
+    except (ValueError, OSError, TypeError, AttributeError):
+        manually_owned = set()
+    result = []
+    for item in positions:
+        if not isinstance(item, Mapping):
+            continue
+        row = dict(item)
+        symbol = str(row.get("symbol") or "").strip().upper()
+        row["ownership"] = "manual" if symbol in manually_owned else "unclassified"
+        result.append(row)
+    return result
+
+
 def enrich_snapshot(
     snapshot: Mapping[str, Any],
     artifact_dir: Path,
@@ -772,6 +826,7 @@ def enrich_snapshot(
     payload = _dict(snapshot)
     if payload.get("schemaVersion") != "dashboard-snapshot.v2":
         raise ValueError("Phase 12 telemetry enrichment requires dashboard-snapshot.v2")
+    payload["positions"] = annotate_position_ownership(payload)
     payload["agents"] = build_agents(payload, artifact_dir)
     payload["risk"] = build_risk(payload, artifact_dir)
     payload["backtest"] = build_backtest(payload, artifact_dir, _dict(previous))
