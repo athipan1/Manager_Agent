@@ -38,11 +38,11 @@ def export_scope(registry_path: Path, account_id: int = 1) -> str:
     return json.dumps({str(account_id): sorted(symbols)}, separators=(",", ":"), sort_keys=True)
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Use the versioned unmanaged Paper symbol registry")
     parser.add_argument("--account-id", type=int, default=1)
     parser.add_argument("--registry", type=Path, default=DEFAULT_REGISTRY)
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
     scope = export_scope(args.registry, account_id=args.account_id)
     current = os.getenv("UNMANAGED_BROKER_POSITION_SYMBOLS_JSON")
     if current:
