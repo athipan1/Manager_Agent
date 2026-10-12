@@ -12,6 +12,26 @@ from scripts.hourly_portfolio_cycle import (
 )
 
 
+def test_paper_broker_reconcile_timeout_exceeds_execution_database_budget():
+    clients = CycleClients("hourly-correlation-id")
+    assert clients.execution.timeout_seconds == 120
+    assert clients.database.timeout_seconds == 30
+
+
+def test_failed_reconcile_emits_only_bounded_operational_diagnostics():
+    with pytest.raises(RuntimeSafetyError) as exc:
+        require_safe_broker_sync(
+            {"data": {"ok": False, "database_sync": {
+                "status": "failed", "http_status": 504,
+                "response": {"secret": "must-not-appear"},
+            }}},
+            stage="pre-analysis",
+        )
+    assert "push_status=failed" in str(exc.value)
+    assert "push_http_status=504" in str(exc.value)
+    assert "must-not-appear" not in str(exc.value)
+
+
 def test_hourly_profit_client_uses_api_key(monkeypatch):
     monkeypatch.setenv("PROFIT_AGENT_API_KEY", "hourly-profit-key")
 

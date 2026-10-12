@@ -99,6 +99,10 @@ services:
       ALPACA_SECRET_KEY: ${ALPACA_SECRET_KEY:?ALPACA_SECRET_KEY is required}
       ALPACA_API_URL: ${ALPACA_API_URL:?ALPACA_API_URL is required}
       FAIL_RECONCILE_WHEN_DB_SYNC_FAILS: "true"
+      # Remote Railway database synchronizes all Paper holdings and can take
+      # longer than the 20s library default due to existing schema validation.
+      # Fail closed on timeout or rejected DB response; never skip parity.
+      BROKER_SYNC_TIMEOUT_SECONDS: "90"
     depends_on: !override {}
 
   risk-agent:

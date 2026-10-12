@@ -20,6 +20,13 @@ def test_exact_reviewed_paper_scope():
     assert registry["safety"]["broker_order_mutation_allowed"] is False
 
 
+def test_hourly_paper_reconcile_preserves_remote_timeout_and_fail_closed():
+    compose = (ROOT / "docker-compose.hourly-paper.yml").read_text(encoding="utf-8")
+    assert 'BROKER_SYNC_TIMEOUT_SECONDS: "90"' in compose
+    assert 'FAIL_RECONCILE_WHEN_DB_SYNC_FAILS: "true"' in compose
+    assert 'ALLOW_LIVE_TRADING: "false"' in compose
+
+
 def test_compose_db_service_receives_external_scope():
     compose = (ROOT / "docker-compose.yml").read_text(encoding="utf-8")
     assert "UNMANAGED_BROKER_POSITION_SYMBOLS_JSON: ${UNMANAGED_BROKER_POSITION_SYMBOLS_JSON:-}" in compose

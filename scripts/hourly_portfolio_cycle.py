@@ -108,6 +108,16 @@ def require_safe_broker_sync(value: Any, *, stage: str) -> dict[str, Any]:
     database_status_ok = status in SAFE_SYNC_STATUSES
     if not execution_reconcile_ok and not database_status_ok:
         mismatch = as_dict(data.get("mismatch"))
+        # Only expose allowlisted operational statuses. Never log DB response
+        # bodies, broker positions, account data, or credentials.
+        push_status = str(execution_push.get("status") or "missing").lower()
+        if push_status not in {"success", "failed", "skipped"}:
+            push_status = "other"
+        push_http_code = execution_push.get("http_status")
+        push_http_status = (
+            push_http_code if isinstance(push_http_code, int)
+            and 100 <= push_http_code <= 599 else None
+        )
         # Persist bounded evidence in the existing failure artifact, never a raw
         # broker account, credential, or arbitrary external response body.
         known_fields = {
@@ -123,7 +133,9 @@ def require_safe_broker_sync(value: Any, *, stage: str) -> dict[str, Any]:
         raise RuntimeSafetyError(
             f"{stage} broker reconciliation did not prove Database/Alpaca parity. "
             f"snapshot_present={data.get('has_snapshot') is True}; "
-            f"is_synced={mismatch.get('is_synced') is True}; mismatch_fields={fields}"
+            f"is_synced={mismatch.get('is_synced') is True}; mismatch_fields={fields}; "
+            f"execution_ok={data.get('ok') is True}; "
+            f"push_status={push_status}; push_http_status={push_http_status}"
         )
     return data
 
@@ -188,7 +200,10 @@ class CycleClients:
             os.getenv("EXECUTION_AGENT_URL", "http://localhost:8006"),
             "Execution_Agent",
             {"X-API-KEY": execution_key} if execution_key else {},
-            timeout_seconds=30,
+            # Railway broker sync performs a schema-backed snapshot commit.
+            # Give the Paper reconcile call a bounded, longer budget than the
+            # downstream Execution -> Database timeout (90 seconds).
+            timeout_seconds=120,
         )
         self.database = JsonHttpClient(
             os.getenv("DATABASE_AGENT_URL", "http://localhost:8004"),
