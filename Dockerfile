@@ -47,6 +47,7 @@ COPY --from=builder /opt/venv /opt/venv
 
 # Copy the application code and the healthcheck script.
 COPY ./app /app/app
+COPY ./config /app/config
 COPY ./healthcheck.py /app/healthcheck.py
 COPY ./patches /app/patches
 
