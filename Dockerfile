@@ -47,7 +47,7 @@ COPY --from=builder /opt/venv /opt/venv
 
 # Copy the application code and the healthcheck script.
 COPY ./app /app/app
-COPY ./config /app/config
+COPY ./config/unmanaged_broker_holdings.v1.json /app/config/unmanaged_broker_holdings.v1.json
 COPY ./healthcheck.py /app/healthcheck.py
 COPY ./patches /app/patches
 
