@@ -30,6 +30,8 @@ from ..services.database_sync_gate import (
 )
 from ..services.exposure_aware_trade_gate import filter_candidates_with_exposure_gate
 from ..services.exposure_service import total_position_exposure
+from ..services.scanner_candidate_service import scanner_candidate_symbol
+from ..unmanaged_broker_holdings import approved_unmanaged_symbols
 from ..stock_guard import StockGuardError
 from .analysis_workflow import analyze_single_asset
 from .discovery_workflow import (
@@ -230,8 +232,15 @@ async def run_scanner_preselection_flow(
             )
 
         scan_payload = scanner_payload(scan_response)
-        research_candidates = _research_shadow_candidates(scan_payload)
-        candidates = scan_payload.get("candidates", [])
+        external_symbols = approved_unmanaged_symbols(account_id)
+        research_candidates = [
+            candidate for candidate in _research_shadow_candidates(scan_payload)
+            if str(scanner_candidate_symbol(candidate) or "").upper() not in external_symbols
+        ]
+        candidates = [
+            candidate for candidate in scan_payload.get("candidates", [])
+            if str(scanner_candidate_symbol(candidate) or "").upper() not in external_symbols
+        ]
         if not candidates:
             response = no_scanner_candidates_response(
                 correlation_id=correlation_id,
@@ -317,6 +326,7 @@ async def run_scanner_preselection_flow(
             "preselection_only": True,
             "scanner_metadata": scan_payload.get("metadata", {}),
             "scanner_count": len(candidates),
+            "unmanaged_candidate_exclusion": sorted(external_symbols),
             "research_candidates": research_candidates,
             "research_candidate_count": len(research_candidates),
             "shadow_lane_eligible": bool(research_candidates),
