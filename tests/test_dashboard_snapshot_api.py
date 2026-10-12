@@ -98,6 +98,7 @@ def test_dashboard_snapshot_maps_active_positions_and_open_orders():
         "marketValue": 220.0,
         "unrealizedPnL": 20.0,
         "bucket": "quality_growth",
+        "ownership": "unclassified",
         "protection": {
             "status": "bracket_protected",
             "hasStopLoss": True,
