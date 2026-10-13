@@ -135,7 +135,9 @@ def test_broker_sync_exports_value_bearing_dashboard_snapshot():
     assert snapshot["account"]["buyingPower"] == 4000.50
     assert snapshot["positions"][0]["quantity"] == 2.0
     assert snapshot["openOrders"][0]["quantity"] == 2.0
-    assert snapshot["lastSuccessfulRun"]["runId"] == 31721071929
+    assert snapshot["workflow"]["runId"] == 31721071929
+    # Broker parity is successful but no trading strategy cycle was executed.
+    assert snapshot["lastSuccessfulRun"] is None
 
 
 def test_broker_sync_rejects_live_account():
