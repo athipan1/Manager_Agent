@@ -310,7 +310,13 @@ def build_snapshot(
         "flow": _sanitize_text(_first(runtime_source.get("flow"), report.get("flow"), default="hourly_portfolio_cycle"), limit=64),
     }
 
-    current_success = workflow["conclusion"] == "success" and cycle_status in {"success", "completed"}
+    # Broker Sync Check proves the broker snapshot, not a completed trading
+    # strategy cycle. Do not falsely mark it as the last successful Hourly run.
+    current_success = (
+        workflow["conclusion"] == "success"
+        and cycle_status in {"success", "completed"}
+        and runtime["flow"] != "broker_sync_check"
+    )
     previous_success = _dict(previous_snapshot.get("lastSuccessfulRun"))
     if current_success:
         last_successful = {
