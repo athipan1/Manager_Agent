@@ -153,11 +153,41 @@ def classify_item(item: Mapping[str, Any]) -> dict[str, Any]:
     if not challenger:
         strategy_candidates = []
 
+    # Broader RESEARCH WATCHLIST is only an explanation of rejected candidates.
+    # It must not expand the existing Shadow observation-safety requirements.
+    # In particular, missing candidate-OOS risk gates do not become a pass.
+    research_watchlist = bool(
+        status == "no_eligible_strategy"
+        and best
+        and row.get("selected_strategy_id") is None
+        and row.get("published") is False
+    )
+    candidate_oos_safety_proven = all(
+        gates.get(name) is True for name in (
+            "candidate_oos_kill_switch_safety",
+            "candidate_oos_window_count",
+            "candidate_oos_worst_max_drawdown",
+        )
+    )
+    research_focus = (
+        "nested_oos_or_statistical_stability"
+        if candidate_oos_safety_proven else "repair_risk_or_history_evidence_first"
+    )
+
     return {
         "symbol": symbol,
         "backtest_status": status,
         "classification": classification,
         "challenger_observation_enabled": challenger,
+        "adaptive_v8_research_watchlist": {
+            "listed": research_watchlist,
+            "focus": research_focus if research_watchlist else None,
+            "candidate_oos_safety_proven": candidate_oos_safety_proven if research_watchlist else False,
+            "failed_gates": sorted(name for name, passed in gates.items() if passed is False),
+            "shadow_observation_authorized_by_watchlist": False,
+            "strategy_promoted": False,
+            "broker_order_authorized": False,
+        },
         "lane": LANE if challenger else None,
         "broker_eligible": status == "eligible_strategy_found",
         "selected_strategy_id": row.get("selected_strategy_id"),
@@ -208,6 +238,11 @@ def build_report(report: Mapping[str, Any]) -> dict[str, Any]:
         "production_eligible_symbols": [item["symbol"] for item in production],
         "challenger_symbols": [item["symbol"] for item in challengers],
         "clearly_not_ready_symbols": [item["symbol"] for item in clearly_not_ready],
+        "adaptive_v8_research_watchlist_symbols": [
+            item["symbol"] for item in items
+            if item["adaptive_v8_research_watchlist"]["listed"]
+        ],
+        "adaptive_v8_watchlist_is_advisory": True,
         "shadow_strategy_observation_count": sum(
             int(item.get("shadow_strategy_candidate_count") or 0)
             for item in challengers
