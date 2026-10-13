@@ -228,6 +228,46 @@ def build_funnel(source: dict, backtest: dict | None = None, cycle: dict | None 
         unique[(r.get('symbol'), r.get('gate'), r.get('reason_code'), r.get('reason'), r.get('strategy_id'))] = r
     rejections = list(unique.values())
     code_counts = dict(Counter(r['reason_code'] for r in rejections))
+    # Independent explanatory dimensions: closed markets cannot be counted
+    # as failed strategy evidence, and research results are never approvals.
+    buy_verdict_symbols = sorted({
+        str(row.get('symbol') or '').upper() for row in ranked
+        if str(row.get('final_verdict') or '').lower() in {'buy', 'strong_buy'}
+        and row.get('symbol')
+    })
+    history_rejected = [
+        {'symbol': row.get('symbol'), 'bars_observed': row.get('bars_observed'),
+         'bars_required': row.get('bars_required')}
+        for row in rows(history.get('evaluations'))
+        if row.get('history_eligible') is False
+    ]
+    market_closed = str(reason or '').lower() == 'market_closed' or (
+        code_counts.get('SCANNER_OPPORTUNITY_MARKET_CLOSED', 0) > 0
+    )
+    diagnostic_bottlenecks = {
+        'schema_version': 'hourly-bottleneck-diagnostics.v1',
+        'market_session': {'market_closed_observed': market_closed,
+                           'is_a_strategy_failure': False},
+        'buy_verdict': {
+            'evaluated': bool(ranked), 'approved_symbols': buy_verdict_symbols,
+            'rejected_count': sum(
+                str(row.get('final_verdict') or '').lower() not in {'buy', 'strong_buy'}
+                for row in ranked
+            ),
+            'thresholds_unchanged': True,
+        },
+        'nested_oos_history': {'evaluated': bool(history.get('evaluations')),
+                               'rejected': history_rejected,
+                               'minimum_bars_unchanged': True},
+        'exact_backtest': {
+            'evaluated': bool(bt) and same_cycle,
+            'tested_symbols': bt.get('symbols', []) if same_cycle else [],
+            'eligible_symbols': sorted(eligible) if same_cycle else [],
+            'candidate_oos_and_nested_oos_still_required': True,
+        },
+        'observation_only': True,
+        'authorizes_execution': False,
+    }
     return {
         'schema_version': 'selection-funnel.v1', 'portfolio_cycle_id': data.get('report_id'), 'source_run_id': source_run_id,
         'generated_at': datetime.now(timezone.utc).isoformat(),
@@ -241,6 +281,7 @@ def build_funnel(source: dict, backtest: dict | None = None, cycle: dict | None 
         'system_failures': failures,
         'execution_outcome': cycle.get('status', 'not_observed'),
         'cycle_reason': reason, 'rejections': rejections, 'reason_counts': code_counts,
+        'diagnostic_bottlenecks': diagnostic_bottlenecks,
         'candidate_outcomes': [{'symbol': s, 'score': score_by_symbol[s], 'threshold': threshold,
             'rejected_at': [r['gate'] for r in rejections if r.get('symbol') == s],
             'reason_codes': [r['reason_code'] for r in rejections if r.get('symbol') == s]} for s in score_by_symbol],
@@ -257,6 +298,19 @@ def render(funnel: dict) -> str:
              '| Metric | Count |', '|---|---:|']
     for key, value in funnel['counts'].items():
         lines.append(f'| {key} | {value if value is not None else "not observed"} |')
+    blockers = obj(funnel.get('diagnostic_bottlenecks'))
+    if blockers:
+        session = obj(blockers.get('market_session'))
+        verdict = obj(blockers.get('buy_verdict'))
+        history = obj(blockers.get('nested_oos_history'))
+        backtest = obj(blockers.get('exact_backtest'))
+        lines += ['', '## Independent blockers (observation only)',
+                  f"Market closed observed: {session.get('market_closed_observed')}",
+                  f"BUY verdict approved: {len(rows(verdict.get('approved_symbols')))}",
+                  f"Insufficient research history: {len(rows(history.get('rejected')))}",
+                  f"Exact Backtest evaluated: {backtest.get('evaluated')}; "
+                  f"eligible symbols: {len(rows(backtest.get('eligible_symbols')))}",
+                  'Market-closed is not evidence that a strategy failed.']
     lines += ['', 'The fundamental-discovery route does not execute the market prefilter or market-ranker route. Missing measurements are not inferred as zero.',
               '', 'Research Backtest symbols do not imply production allocation or broker approval.', '',
               '| Symbol | Score | Threshold | Gate | Reason code | Reason |', '|---|---:|---|---|---|---|']
