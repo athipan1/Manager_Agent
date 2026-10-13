@@ -143,6 +143,20 @@ jobs:
               artifact_found=true
             fi
           fi
+          # Fail closed instead of publishing an empty fallback if the
+          # read-only Broker Sync Check could not provide verified evidence.
+          if [ "$artifact_name" = "broker-sync-check-reports" ] && [ "$artifact_found" != true ]; then
+            echo "Broker Sync Check has no verified artifact. Retaining prior published snapshot."
+            exit 1
+          fi
+          # On source pushes, a control-only Soak must never be selected as a
+          # surrogate for a real Paper portfolio, even when its artifact exists.
+          resolved_workflow_name=$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}" --jq '.name')
+          if [ "$resolved_workflow_name" = "Alpaca Paper Soak" ]; then
+            echo "Idle Soak is not authoritative for holdings. Retaining prior snapshot."
+            exit 1
+          fi
+
           if [ -z "$run_id" ]; then
             echo "No completed Paper workflow run was found."
             exit 1
