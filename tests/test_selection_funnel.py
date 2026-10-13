@@ -154,3 +154,37 @@ def test_controlled_zero_candidates_keeps_scanner_gate_input_and_no_trade():
     assert result['counts']['deep_analysis_failure_count']==0
     assert result['counts']['production_candidate_count']==0
     assert result['rejections'][0]['gate']=='data_quality'
+
+
+def test_distinct_market_verdict_history_and_backtest_diagnostics():
+    s = source(verdict='hold')
+    s['pre_backtest_history_gate'] = {
+        'evaluations': [{'symbol': 'AAPL', 'history_eligible': False,
+                         'bars_observed': 365, 'bars_required': 882}]
+    }
+    bt = {'correlation_id': 'cycle-1',
+          'data': {'symbols': ['MSFT'], 'eligible_symbols': [], 'items': []}}
+    cycle = {'reason': 'market_closed', 'status': 'controlled_no_trade'}
+    result = build_funnel(s, bt, cycle)
+    blockers = result['diagnostic_bottlenecks']
+    assert result['outcome'] == 'NO_TRADE'
+    assert blockers['market_session']['market_closed_observed'] is True
+    assert blockers['market_session']['is_a_strategy_failure'] is False
+    assert blockers['buy_verdict']['approved_symbols'] == []
+    assert blockers['buy_verdict']['rejected_count'] == 1
+    assert blockers['nested_oos_history']['rejected'] == [
+        {'symbol': 'AAPL', 'bars_observed': 365, 'bars_required': 882}]
+    assert blockers['exact_backtest']['evaluated'] is True
+    assert blockers['exact_backtest']['eligible_symbols'] == []
+    assert blockers['observation_only'] is True
+    assert blockers['authorizes_execution'] is False
+    assert 'Market closed observed: True' in render(result)
+
+
+def test_missing_market_and_backtest_data_stay_unverified():
+    result = build_funnel(source('hold'))
+    blockers = result['diagnostic_bottlenecks']
+    assert blockers['market_session']['market_closed_observed'] is False
+    assert blockers['exact_backtest']['evaluated'] is False
+    assert blockers['buy_verdict']['approved_symbols'] == []
+    assert blockers['buy_verdict']['thresholds_unchanged'] is True
