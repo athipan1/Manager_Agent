@@ -145,3 +145,43 @@ def test_production_eligible_stays_out_of_challenger_lane() -> None:
     assert result["challenger_symbols"] == []
     assert result["items"][0]["broker_eligible"] is True
     assert result["items"][0]["shadow_strategy_candidates"] == []
+
+
+def test_v8_research_watchlist_includes_quality_near_misses_without_shadow_permission():
+    result = build_report(report(item(
+        "QTTB",
+        failed={"candidate_oos_median_profit_factor", "candidate_oos_profitable_window_rate"},
+    )))
+    assert result["adaptive_v8_research_watchlist_symbols"] == ["QTTB"]
+    assert result["adaptive_v8_watchlist_is_advisory"] is True
+    row = result["items"][0]
+    watch = row["adaptive_v8_research_watchlist"]
+    assert watch["listed"] is True
+    assert watch["candidate_oos_safety_proven"] is True
+    assert watch["focus"] == "nested_oos_or_statistical_stability"
+    assert watch["shadow_observation_authorized_by_watchlist"] is False
+    assert watch["broker_order_authorized"] is False
+    assert row["challenger_observation_enabled"] is False
+    assert row["shadow_strategy_candidates"] == []
+    assert result["safety"]["may_submit_broker_order"] is False
+
+
+def test_v8_risk_gate_failure_requires_evidence_repair_and_no_shadow():
+    result = build_report(report(item(
+        "RISKY", failed={"candidate_oos_kill_switch_safety"}
+    )))
+    watch = result["items"][0]["adaptive_v8_research_watchlist"]
+    assert watch["listed"] is True
+    assert watch["candidate_oos_safety_proven"] is False
+    assert watch["focus"] == "repair_risk_or_history_evidence_first"
+    assert result["items"][0]["challenger_observation_enabled"] is False
+    assert watch["strategy_promoted"] is False
+
+
+def test_v8_operational_failure_and_eligible_stay_off_rejected_research_watchlist():
+    output = build_report(report(
+        item("AAA", failed=set(), status="eligible_strategy_found"),
+        item("BBB", failed=set(), status="operational_failure"),
+    ))
+    assert output["adaptive_v8_research_watchlist_symbols"] == []
+    assert all(not row["adaptive_v8_research_watchlist"]["listed"] for row in output["items"])
