@@ -160,3 +160,23 @@ def test_hourly_artifact_upload_remains_non_blocking_and_always_runs():
     assert "if: always()" in upload_section
     assert "hourly-auto-trading-report" in upload_section
     assert "if-no-files-found: warn" in upload_section
+
+
+def test_broker_sync_is_verified_public_portfolio_source_not_idle_soak():
+    workflow = (
+        ROOT / ".github/workflows/publish-dashboard-snapshot.yml"
+    ).read_text(encoding="utf-8")
+    assert "      - Broker Sync Check" in workflow
+    assert "github.event.workflow_run.name != 'Alpaca Paper Soak'" in workflow
+    assert 'artifact_name="broker-sync-check-reports"' in workflow
+    assert "has_broker_sync_artifact()" in workflow
+    assert "latest_broker_artifact" in workflow
+    assert "scripts/normalize_broker_sync_owner_report.py" in workflow
+    assert "--input reports/hourly-artifact/broker-sync-check.json" in workflow
+    assert "--output reports/hourly-artifact/hourly-auto-trading-report.json" in workflow
+    assert workflow.index("normalize_broker_sync_owner_report.py \\") < workflow.index("normalize_hourly_operator_report.py \\")
+    # Public snapshot privacy and the contract for all existing workflows
+    # must remain intact; invalid broker reports stop publication.
+    assert "PUBLIC_DASHBOARD_SNAPSHOT_PRIVACY_MODE: masked" in workflow
+    assert 'gh run download "$RUN_ID"' in workflow
+    assert "--name \"$SOURCE_ARTIFACT_NAME\"" in workflow
