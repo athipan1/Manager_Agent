@@ -736,7 +736,16 @@ def finalize_cycle(
             clients.execution,
             "/broker/protection-diagnostics",
         )
-        gaps = protection_gaps(diagnostics)
+        # Use the same operator-reviewed, account-scoped external holdings
+        # boundary as preflight and candidate execution. These positions remain
+        # in broker/DB reconciliation and whole-account risk, but the AI must
+        # neither modify nor require AI-owned TP/SL for them.
+        # Unknown or AI-managed symbols are NEVER exempted.
+        # _reconcile already verified Manager/Database ownership scope.
+        gaps = protection_gaps(
+            diagnostics,
+            excluded_symbols=approved_unmanaged_symbols(account_id),
+        )
         if gaps:
             raise RuntimeSafetyError(
                 "Post-execution protection verification found an unsafe gap."
