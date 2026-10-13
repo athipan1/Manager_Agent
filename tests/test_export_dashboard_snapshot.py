@@ -196,3 +196,31 @@ def test_public_snapshot_uses_top_level_allowlist_only():
     snapshot = build_snapshot(report(private_service_url="http://manager-agent:8000"), workflow_metadata=workflow(), privacy_mode="masked", now=NOW)
     assert set(snapshot) == TOP_LEVEL_KEYS
     assert "private_service_url" not in json.dumps(snapshot)
+
+
+def test_verified_broker_sync_does_not_claim_trading_run_success():
+    previous = build_snapshot(
+        report(),
+        workflow_metadata=workflow("success", 123, 99),
+        privacy_mode="masked",
+        now=NOW,
+    )
+    evidence = report(
+        runtime={
+            "mode": "PAPER", "brokerMode": "ALPACA",
+            "dryRun": False, "liveTradingEnabled": False,
+            "flow": "broker_sync_check",
+        },
+        generated_at="2026-07-30T00:50:00Z",
+    )
+    synced = build_snapshot(
+        evidence,
+        workflow_metadata={**workflow("success", 200, 101), "workflowName": "Broker Sync Check"},
+        previous_snapshot=previous,
+        privacy_mode="masked",
+        now=NOW,
+    )
+    assert synced["workflow"]["runId"] == 200
+    assert synced["lastSuccessfulRun"] == previous["lastSuccessfulRun"]
+    assert synced["positions"][0]["symbol"] == "ACGL"
+    assert synced["account"]["valuesMasked"] is True

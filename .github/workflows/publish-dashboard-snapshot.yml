@@ -6,6 +6,7 @@ on:
       - Hourly Auto Trading
       - Alpaca Paper Soak
       - Manual Alpaca Paper Trading
+      - Broker Sync Check
     types: [completed]
   workflow_dispatch:
     inputs:
@@ -21,6 +22,7 @@ on:
       - "scripts/build_hourly_operator_artifact.py"
       - "scripts/capture_hourly_dashboard_state.py"
       - "scripts/normalize_hourly_operator_report.py"
+      - "scripts/normalize_broker_sync_owner_report.py"
       - "scripts/export_dashboard_snapshot.py"
       - "scripts/enrich_dashboard_snapshot.py"
       - "scripts/enrich_trading_observability.py"
@@ -37,6 +39,9 @@ concurrency:
 
 jobs:
   publish-dashboard-snapshot:
+    # An inactive Soak control cycle is not a broker portfolio snapshot. Never
+    # let its empty artifact overwrite the last verified Paper positions.
+    if: ${{ github.event_name != 'workflow_run' || github.event.workflow_run.name != 'Alpaca Paper Soak' }}
     runs-on: ubuntu-latest
     env:
       # This workflow publishes to a public branch. Keep privacy fail-closed and
@@ -62,6 +67,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           REQUESTED_RUN_ID: ${{ inputs.run_id || '' }}
           EVENT_RUN_ID: ${{ github.event.workflow_run.id || '' }}
+          EVENT_WORKFLOW_NAME: ${{ github.event.workflow_run.name || '' }}
         run: |
           set -euo pipefail
 
@@ -72,9 +78,17 @@ jobs:
               --jq '[.artifacts[] | select(.name == "hourly-auto-trading-report" and (.expired | not))] | length')" -gt 0 ]
           }
 
+          has_broker_sync_artifact() {
+            local candidate="$1"
+            [ -n "$candidate" ] || return 1
+            [ "$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${candidate}/artifacts" \
+              --jq '[.artifacts[] | select(.name == "broker-sync-check-reports" and (.expired | not))] | length')" -gt 0 ]
+          }
+
           run_id=""
           artifact_found=false
           run_is_authoritative=false
+          artifact_name="hourly-auto-trading-report"
 
           # A workflow_run event must publish that exact run. Never replace a
           # skipped, failed or artifact-less current run with an older artifact,
@@ -82,20 +96,38 @@ jobs:
           if [ -n "${EVENT_RUN_ID:-}" ]; then
             run_id="$EVENT_RUN_ID"
             run_is_authoritative=true
+            if [ "${EVENT_WORKFLOW_NAME:-}" = "Broker Sync Check" ]; then
+              artifact_name="broker-sync-check-reports"
+            fi
           elif [ -n "${REQUESTED_RUN_ID:-}" ]; then
             run_id="$REQUESTED_RUN_ID"
             run_is_authoritative=true
           else
-            latest_artifact_run=$(gh api \
-              "repos/${GITHUB_REPOSITORY}/actions/artifacts?name=hourly-auto-trading-report&per_page=100" \
+            # On source commits, prefer the last VERIFIED Paper broker snapshot
+            # instead of a newer idle Soak artifact with an empty portfolio.
+            latest_broker_artifact=$(gh api \
+              "repos/${GITHUB_REPOSITORY}/actions/artifacts?name=broker-sync-check-reports&per_page=100" \
               --jq '[.artifacts[] | select(.expired | not)] | sort_by(.created_at) | reverse | .[0].workflow_run.id // empty')
-            if has_hourly_artifact "$latest_artifact_run"; then
-              run_id="$latest_artifact_run"
+            if has_broker_sync_artifact "$latest_broker_artifact"; then
+              run_id="$latest_broker_artifact"
+              artifact_name="broker-sync-check-reports"
               artifact_found=true
+            else
+              latest_artifact_run=$(gh api \
+                "repos/${GITHUB_REPOSITORY}/actions/artifacts?name=hourly-auto-trading-report&per_page=100" \
+                --jq '[.artifacts[] | select(.expired | not)] | sort_by(.created_at) | reverse | .[0].workflow_run.id // empty')
+              if has_hourly_artifact "$latest_artifact_run"; then
+                run_id="$latest_artifact_run"
+                artifact_found=true
+              fi
             fi
           fi
 
           if [ "$artifact_found" != true ] && has_hourly_artifact "$run_id"; then
+            artifact_found=true
+          fi
+          if [ "$artifact_found" != true ] && has_broker_sync_artifact "$run_id"; then
+            artifact_name="broker-sync-check-reports"
             artifact_found=true
           fi
 
@@ -111,6 +143,20 @@ jobs:
               artifact_found=true
             fi
           fi
+          # Fail closed instead of publishing an empty fallback if the
+          # read-only Broker Sync Check could not provide verified evidence.
+          if [ "$artifact_name" = "broker-sync-check-reports" ] && [ "$artifact_found" != true ]; then
+            echo "Broker Sync Check has no verified artifact. Retaining prior published snapshot."
+            exit 1
+          fi
+          # On source pushes, a control-only Soak must never be selected as a
+          # surrogate for a real Paper portfolio, even when its artifact exists.
+          resolved_workflow_name=$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}" --jq '.name')
+          if [ "$resolved_workflow_name" = "Alpaca Paper Soak" ]; then
+            echo "Idle Soak is not authoritative for holdings. Retaining prior snapshot."
+            exit 1
+          fi
+
           if [ -z "$run_id" ]; then
             echo "No completed Paper workflow run was found."
             exit 1
@@ -122,6 +168,7 @@ jobs:
             > source/reports/workflow-metadata.json
           echo "run_id=$run_id" >> "$GITHUB_OUTPUT"
           echo "artifact_found=$artifact_found" >> "$GITHUB_OUTPUT"
+          echo "artifact_name=$artifact_name" >> "$GITHUB_OUTPUT"
           echo "run_is_authoritative=$run_is_authoritative" >> "$GITHUB_OUTPUT"
 
       - name: Download verified hourly report artifact
@@ -131,12 +178,20 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           RUN_ID: ${{ steps.hourly_run.outputs.run_id }}
+          SOURCE_ARTIFACT_NAME: ${{ steps.hourly_run.outputs.artifact_name }}
         run: |
           set -euo pipefail
           mkdir -p reports/hourly-artifact
           gh run download "$RUN_ID" \
-            --name hourly-auto-trading-report \
+            --name "$SOURCE_ARTIFACT_NAME" \
             --dir reports/hourly-artifact
+          if [ "$SOURCE_ARTIFACT_NAME" = "broker-sync-check-reports" ]; then
+            # Validate Paper, database parity and broker envelopes BEFORE
+            # projecting any fields into the public masked snapshot.
+            python scripts/normalize_broker_sync_owner_report.py \
+              --input reports/hourly-artifact/broker-sync-check.json \
+              --output reports/hourly-artifact/hourly-auto-trading-report.json
+          fi
 
       - name: Build current-run fallback report when no artifact exists
         if: steps.hourly_run.outputs.artifact_found != 'true'
