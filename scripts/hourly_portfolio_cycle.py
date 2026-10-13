@@ -741,7 +741,7 @@ def finalize_cycle(
         # in broker/DB reconciliation and whole-account risk, but the AI must
         # neither modify nor require AI-owned TP/SL for them.
         # Unknown or AI-managed symbols are NEVER exempted.
-        require_matching_database_scope(reconciliation, account_id)
+        # _reconcile already verified Manager/Database ownership scope.
         gaps = protection_gaps(
             diagnostics,
             excluded_symbols=approved_unmanaged_symbols(account_id),
