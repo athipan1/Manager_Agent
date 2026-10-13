@@ -180,3 +180,12 @@ def test_broker_sync_is_verified_public_portfolio_source_not_idle_soak():
     assert "PUBLIC_DASHBOARD_SNAPSHOT_PRIVACY_MODE: masked" in workflow
     assert 'gh run download "$RUN_ID"' in workflow
     assert "--name \"$SOURCE_ARTIFACT_NAME\"" in workflow
+
+
+def test_broker_snapshot_publication_fails_closed_when_broker_artifact_missing():
+    workflow = (ROOT / ".github/workflows/publish-dashboard-snapshot.yml").read_text(encoding="utf-8")
+    assert 'if [ "$artifact_name" = "broker-sync-check-reports" ] && [ "$artifact_found" != true ]; then' in workflow
+    assert "Retaining prior published snapshot." in workflow
+    assert 'if [ "$resolved_workflow_name" = "Alpaca Paper Soak" ]; then' in workflow
+    assert "Idle Soak is not authoritative for holdings" in workflow
+    assert "gh api \"repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}\" --jq '.name'" in workflow
