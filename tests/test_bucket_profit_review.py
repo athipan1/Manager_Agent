@@ -323,3 +323,80 @@ def test_review_bucket_warns_when_database_highest_price_is_unavailable(monkeypa
     assert HIGHEST_PRICE_FALLBACK_WARNING in row["profit_plan"]["warnings"]
     assert report["warnings"] == [HIGHEST_PRICE_FALLBACK_WARNING]
     assert report["summary"]["position_peak_fallbacks"] == 1
+
+
+def test_owner_read_only_holdings_never_enter_ai_profit_advisory(monkeypatch):
+    dashboard = {"data": {"positions": []}}
+    broker_snapshot = {
+        "positions": {
+            "data": [
+                {
+                    "symbol": "NVDA",
+                    "strategy_bucket": "news_momentum",
+                    "qty": 4,
+                    "avg_entry_price": 100,
+                    "current_price": 125,
+                },
+                {
+                    "symbol": "ACGL",
+                    "strategy_bucket": "news_momentum",
+                    "qty": 3,
+                    "avg_entry_price": 100,
+                    "current_price": 105,
+                },
+            ]
+        },
+        "orders": {"data": []},
+    }
+    profit_calls = []
+
+    def fake_profit(url, payload, *_args):
+        profit_calls.append(payload["position"]["symbol"])
+        return {"primary_action": "hold", "actions": []}
+
+    monkeypatch.setattr("scripts.bucket_profit_review.call_profit_agent", fake_profit)
+    report = review_bucket(
+        "news_momentum",
+        dashboard,
+        broker_snapshot,
+        "http://profit-agent",
+        excluded_symbols={"NVDA"},
+    )
+
+    assert report["summary"]["positions_seen"] == 2
+    assert report["summary"]["owner_manual_read_only_count"] == 1
+    assert report["summary"]["ai_managed_scope_count"] == 1
+    assert report["owner_manual_read_only_symbols"] == ["NVDA"]
+    assert [r["symbol"] for r in report["reviewed_positions"]] == ["ACGL"]
+    assert profit_calls == ["ACGL"]
+    assert report["safety"]["orders_submitted"] is False
+
+
+def test_all_manual_positions_stay_read_only_even_if_bucket_tagged(monkeypatch):
+    def deny_profit(*_args, **_kwargs):
+        raise AssertionError("Owner-managed holdings must not be sent to Profit_Agent")
+
+    monkeypatch.setattr("scripts.bucket_profit_review.call_profit_agent", deny_profit)
+    result = review_bucket(
+        "quality_growth",
+        {"data": {"positions": []}},
+        {
+            "positions": {
+                "data": [
+                    {
+                        "symbol": "AGCO",
+                        "strategy_bucket": "quality_growth",
+                        "qty": 2,
+                        "avg_entry_price": 100,
+                        "current_price": 110,
+                    }
+                ]
+            },
+            "orders": {"data": []},
+        },
+        "http://profit-agent",
+        excluded_symbols={"AGCO"},
+    )
+    assert result["summary"]["reviewed_positions"] == 0
+    assert result["summary"]["owner_manual_read_only_count"] == 1
+    assert result["safety"]["execution_submitted"] is False if "execution_submitted" in result["safety"] else result["safety"]["execution_agent_submitted"] is False
