@@ -1,3 +1,5 @@
+import pytest
+
 from scripts.render_bucket_assignment_audit import build_assignment_audit, fetch_assignment_audit, render_markdown
 
 
@@ -58,3 +60,76 @@ def test_fetch_assignment_audit(monkeypatch):
     assert audit["positions_seen"] == 4
     assert audit["unassigned_positions_count"] == 1
     assert audit["unassigned_positions"][0]["symbol"] == "BKNG"
+
+
+def test_manual_read_only_holdings_do_not_require_ai_bucket_assignment():
+    positions = [
+        {"symbol": "NVDA", "qty": 4},
+        {"symbol": "AGCO", "qty": 2, "strategy_bucket": "quality_growth"},
+    ]
+    hints = {"NVDA": {"bucket": "value_rebound", "source": "database_agent"}}
+    audit = build_assignment_audit(
+        positions, hints, unmanaged_symbols={"NVDA", "AGCO"}
+    )
+
+    assert audit["positions_seen"] == 2
+    assert audit["owner_manual_read_only_count"] == 2
+    assert audit["ai_managed_scope_count"] == 0
+    assert audit["assigned_positions"] == 0
+    assert audit["unassigned_positions_count"] == 0
+    assert audit["action_required"] is False
+    assert {p["symbol"] for p in audit["owner_manual_read_only_positions"]} == {"NVDA", "AGCO"}
+    assert audit["bucket_distribution"] == {}
+    markdown = render_markdown(audit)
+    assert "Owner Manual Holdings (Read-only)" in markdown
+    assert "NVDA: owner-managed, read-only" in markdown
+
+
+def test_only_ai_scoped_positions_trigger_bucket_assignment_action():
+    audit = build_assignment_audit(
+        [{"symbol": "NVDA", "qty": 4}, {"symbol": "ACGL", "qty": 8}],
+        {},
+        unmanaged_symbols={"NVDA"},
+    )
+    assert audit["positions_seen"] == 2
+    assert audit["owner_manual_read_only_count"] == 1
+    assert audit["ai_managed_scope_count"] == 1
+    assert audit["unassigned_positions_count"] == 1
+    assert [row["symbol"] for row in audit["unassigned_positions"]] == ["ACGL"]
+    assert audit["action_required"] is True
+
+
+def test_account_scoped_owner_registry_applied_to_live_bucket_audit(monkeypatch):
+    def fake_get_json(_base_url, path, api_key=None, timeout=30):
+        if path == "/positions":
+            return {"status": "success", "data": [{"symbol": "NVDA", "qty": 1}]}
+        if path in ("/accounts/1/position-buckets", "/accounts/2/position-buckets"):
+            return {"status": "success", "data": []}
+        raise AssertionError(path)
+
+    monkeypatch.setattr("scripts.render_bucket_assignment_audit.get_json", fake_get_json)
+    account_one = fetch_assignment_audit("http://execution", "key", "http://database", "key", "1")
+    account_two = fetch_assignment_audit("http://execution", "key", "http://database", "key", "2")
+
+    assert account_one["owner_manual_read_only_count"] == 1
+    assert account_one["action_required"] is False
+    assert account_two["owner_manual_read_only_count"] == 0
+    assert account_two["unassigned_positions_count"] == 1
+
+
+@pytest.mark.parametrize("bad_source", ["positions", "buckets"])
+def test_assignment_audit_fails_closed_on_unverified_broker_or_bucket_source(monkeypatch, bad_source):
+    def fake_get_json(_base_url, path, api_key=None, timeout=30):
+        if path == "/positions":
+            return {"status": "error", "http_status": 401} if bad_source == "positions" else {
+                "status": "success", "data": [{"symbol": "NVDA", "qty": 1}]
+            }
+        if path == "/accounts/1/position-buckets":
+            return {"status": "error", "http_status": 503} if bad_source == "buckets" else {
+                "status": "success", "data": []
+            }
+        raise AssertionError(path)
+
+    monkeypatch.setattr("scripts.render_bucket_assignment_audit.get_json", fake_get_json)
+    with pytest.raises(ValueError, match="cannot verify"):
+        fetch_assignment_audit("http://execution", "key", "http://database", "key", "1")

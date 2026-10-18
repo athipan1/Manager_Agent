@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional
 
 from app.profit_market_context import compose_profit_market_context
+from app.unmanaged_broker_holdings import approved_unmanaged_symbols
 
 BUCKET_CONFIG: Dict[str, Dict[str, Any]] = {
     "core_dividend": {
@@ -332,14 +333,20 @@ def _bucket_distribution(positions: Dict[str, Dict[str, Any]]) -> Dict[str, int]
     return dict(sorted(output.items()))
 
 
-def review_bucket(bucket_name: str, dashboard: Any, broker_snapshot: Any, profit_agent_url: str | None, bucket_hints: Optional[Dict[str, str]] = None, database_bucket_hints: Optional[Dict[str, str]] = None, database_positions: Optional[Iterable[Dict[str, Any]]] = None, profit_api_key: str | None = None, correlation_id: str | None = None) -> Dict[str, Any]:
+def review_bucket(bucket_name: str, dashboard: Any, broker_snapshot: Any, profit_agent_url: str | None, bucket_hints: Optional[Dict[str, str]] = None, database_bucket_hints: Optional[Dict[str, str]] = None, database_positions: Optional[Iterable[Dict[str, Any]]] = None, profit_api_key: str | None = None, correlation_id: str | None = None, excluded_symbols: Optional[Iterable[str]] = None) -> Dict[str, Any]:
     if bucket_name not in BUCKET_CONFIG:
         raise ValueError(f"unknown bucket: {bucket_name}")
     rows_by_symbol = _merge_positions(_positions_from_dashboard(dashboard), _positions_from_broker_snapshot(broker_snapshot), bucket_hints, database_bucket_hints, database_positions)
+    # The operator-reviewed Alpaca Paper registry is account scoped. Exclusion
+    # controls profit recommendations, not reconciliation or total exposure.
+    external_read_only = {str(sym).upper() for sym in (excluded_symbols or ())}
+    managed_rows = {
+        sym: row for sym, row in rows_by_symbol.items() if sym not in external_read_only
+    }
     orders = _orders_from_broker_snapshot(broker_snapshot)
     review_correlation_id = correlation_id or str(uuid.uuid4())
     reviewed: List[Dict[str, Any]] = []
-    for position in sorted([p for p in rows_by_symbol.values() if _bucket(p) == bucket_name], key=_symbol):
+    for position in sorted([p for p in managed_rows.values() if _bucket(p) == bucket_name], key=_symbol):
         stop_row = _find_stop_order(_symbol(position), orders)
         request_payload = build_profit_request(bucket_name, position, stop_row)
         request_warnings = list(request_payload.get("warnings") or [])
@@ -362,7 +369,7 @@ def review_bucket(bucket_name: str, dashboard: Any, broker_snapshot: Any, profit
         plan["warnings"] = plan_warnings
         reviewed.append({"symbol": _symbol(position), "bucket": bucket_name, "bucket_source": position.get("strategy_bucket_source") or "position_data", "quantity": request_payload["position"]["quantity"], "entry_price": request_payload["position"]["entry_price"], "current_price": request_payload["position"]["current_price"], "stop_loss": request_payload["position"].get("stop_loss"), "highest_price_since_entry": request_payload["position"].get("highest_price_since_entry"), "highest_price_since_entry_source": request_payload.get("metadata", {}).get("highest_price_since_entry_source"), "warnings": request_warnings, "has_protective_stop": stop_row is not None, "profit_source": source, "profit_request": request_payload, "profit_plan": plan, "risk_status": "not_submitted", "execution_status": "not_submitted", "safety": "report_only_no_orders_submitted"})
     report_warnings = sorted({warning for row in reviewed for warning in row.get("warnings", []) if warning})
-    return {"generated_at": datetime.now(timezone.utc).isoformat(), "correlation_id": review_correlation_id, "bucket": bucket_name, "config": BUCKET_CONFIG[bucket_name], "mode": "BUCKET_PROFIT_REVIEW_REPORT_ONLY", "bucket_hints": bucket_hints or {}, "database_bucket_hints": database_bucket_hints or {}, "bucket_distribution": _bucket_distribution(rows_by_symbol), "warnings": report_warnings, "reviewed_positions": reviewed, "summary": {"positions_seen": len(rows_by_symbol), "reviewed_positions": len(reviewed), "positions_without_protective_stop": sum(1 for row in reviewed if not row["has_protective_stop"]), "positions_without_stop": sum(1 for row in reviewed if not row["has_protective_stop"]), "position_peak_fallbacks": sum(1 for row in reviewed if row.get("highest_price_since_entry_source") == "current_price_fallback"), "bucket_hints_applied": sum(1 for row in rows_by_symbol.values() if row.get("strategy_bucket_source") == "bucket_hint"), "database_bucket_hints_applied": sum(1 for row in rows_by_symbol.values() if row.get("strategy_bucket_source") == "database_agent"), "profit_agent_used": sum(1 for row in reviewed if row["profit_source"] == "profit_agent"), "risk_submissions": 0, "execution_submissions": 0}, "safety": {"advisory_only": True, "orders_submitted": False, "risk_agent_submitted": False, "execution_agent_submitted": False}}
+    return {"generated_at": datetime.now(timezone.utc).isoformat(), "correlation_id": review_correlation_id, "bucket": bucket_name, "config": BUCKET_CONFIG[bucket_name], "mode": "BUCKET_PROFIT_REVIEW_REPORT_ONLY", "bucket_hints": bucket_hints or {}, "database_bucket_hints": database_bucket_hints or {}, "bucket_distribution": _bucket_distribution(managed_rows), "owner_manual_read_only_symbols": sorted(set(rows_by_symbol) & external_read_only), "warnings": report_warnings, "reviewed_positions": reviewed, "summary": {"positions_seen": len(rows_by_symbol), "ai_managed_scope_count": len(managed_rows), "owner_manual_read_only_count": len(rows_by_symbol) - len(managed_rows), "reviewed_positions": len(reviewed), "positions_without_protective_stop": sum(1 for row in reviewed if not row["has_protective_stop"]), "positions_without_stop": sum(1 for row in reviewed if not row["has_protective_stop"]), "position_peak_fallbacks": sum(1 for row in reviewed if row.get("highest_price_since_entry_source") == "current_price_fallback"), "bucket_hints_applied": sum(1 for row in rows_by_symbol.values() if row.get("strategy_bucket_source") == "bucket_hint"), "database_bucket_hints_applied": sum(1 for row in rows_by_symbol.values() if row.get("strategy_bucket_source") == "database_agent"), "profit_agent_used": sum(1 for row in reviewed if row["profit_source"] == "profit_agent"), "risk_submissions": 0, "execution_submissions": 0}, "safety": {"advisory_only": True, "orders_submitted": False, "risk_agent_submitted": False, "execution_agent_submitted": False}}
 
 
 def render_markdown(report: Dict[str, Any]) -> str:
@@ -423,7 +430,7 @@ def main(argv: List[str] | None = None) -> int:
     database_api_key = args.database_api_key.strip() or None
     database_positions = fetch_database_positions(database_url, args.account_id, database_api_key)
     database_hints = fetch_database_bucket_hints(database_url, args.account_id, database_api_key)
-    report = review_bucket(args.bucket, dashboard, broker_snapshot, args.profit_url.strip() or None, bucket_hints=fallback_hints, database_bucket_hints=database_hints, database_positions=database_positions, profit_api_key=args.profit_api_key.strip() or None, correlation_id=args.correlation_id.strip() or None)
+    report = review_bucket(args.bucket, dashboard, broker_snapshot, args.profit_url.strip() or None, bucket_hints=fallback_hints, database_bucket_hints=database_hints, database_positions=database_positions, profit_api_key=args.profit_api_key.strip() or None, correlation_id=args.correlation_id.strip() or None, excluded_symbols=approved_unmanaged_symbols(args.account_id))
     args.output_json.parent.mkdir(parents=True, exist_ok=True)
     args.output_json.write_text(json.dumps(report, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
     args.output_md.write_text(render_markdown(report), encoding="utf-8")
