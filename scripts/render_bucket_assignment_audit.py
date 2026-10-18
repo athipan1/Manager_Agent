@@ -40,6 +40,17 @@ def get_json(base_url: str, path: str, api_key: Optional[str] = None, timeout: i
         return {"status": "error", "error": str(exc)}
 
 
+def require_verified_list(response: Any, endpoint: str) -> None:
+    """Do not misreport missing broker/database evidence as an empty account."""
+    if (
+        not isinstance(response, dict)
+        or response.get("status") != "success"
+        or not isinstance(response.get("data"), list)
+        or response.get("error")
+    ):
+        raise ValueError(f"{endpoint}: cannot verify account-scoped bucket audit source")
+
+
 def symbol(row: Dict[str, Any]) -> str:
     return str(row.get("symbol") or row.get("ticker") or "").upper().strip()
 
@@ -131,6 +142,8 @@ def build_assignment_audit(
 def fetch_assignment_audit(execution_url: str, execution_api_key: Optional[str], database_url: str, database_api_key: Optional[str], account_id: str | int) -> Dict[str, Any]:
     positions_response = get_json(execution_url, "/positions", api_key=execution_api_key)
     bucket_response = get_json(database_url, f"/accounts/{account_id}/position-buckets", api_key=database_api_key)
+    require_verified_list(positions_response, "/positions")
+    require_verified_list(bucket_response, "/position-buckets")
     positions = positions_from_response(positions_response)
     hints = bucket_hints_from_response(bucket_response)
     audit = build_assignment_audit(
