@@ -399,4 +399,4 @@ def test_all_manual_positions_stay_read_only_even_if_bucket_tagged(monkeypatch):
     )
     assert result["summary"]["reviewed_positions"] == 0
     assert result["summary"]["owner_manual_read_only_count"] == 1
-    assert result["safety"]["execution_submitted"] is False if "execution_submitted" in result["safety"] else result["safety"]["execution_agent_submitted"] is False
+    assert result["safety"]["execution_agent_submitted"] is False
