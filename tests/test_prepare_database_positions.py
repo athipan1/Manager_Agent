@@ -34,6 +34,45 @@ def test_fetch_runtime_state(monkeypatch):
     ]
 
 
+def test_post_database_snapshot_accepts_unwrapped_active_alpaca_account(monkeypatch):
+    posted = []
+
+    def fake_request(base_url, path, **kwargs):
+        posted.append((path, kwargs.get("payload")))
+        return {"status": "success", "data": {"positions_synced": 1}}
+
+    monkeypatch.setattr("scripts.prepare_database_positions.request_json", fake_request)
+    state = {
+        "account": {"broker": "ALPACA", "paper": True, "status": "ACTIVE", "cash": "1000"},
+        "positions": [{"symbol": "ACGL", "qty": "1"}],
+        "open_orders": [],
+    }
+    result = post_database_snapshot("http://database", "1", state, "db-key")
+    assert result["response"]["status"] == "success"
+    assert posted[0][0] == "/broker-sync/snapshot"
+    assert posted[0][1]["account"]["status"] == "ACTIVE"
+
+
+@pytest.mark.parametrize("bad_account", [
+    {"status": "error", "cash": "1000"},
+    {"status": "failure", "cash": "1000"},
+    {"status": "success", "data": {"cash": "1000"}, "http_status": 401},
+    {"status": "error", "data": {"cash": "1000"}},
+])
+def test_post_database_snapshot_rejects_error_account_without_post(monkeypatch, bad_account):
+    def should_never_post(*args, **kwargs):
+        raise AssertionError("Invalid broker account must not be persisted")
+
+    monkeypatch.setattr("scripts.prepare_database_positions.request_json", should_never_post)
+    with pytest.raises(ValueError, match="/account"):
+        post_database_snapshot(
+            "http://database",
+            "1",
+            {"account": bad_account, "positions": [], "open_orders": []},
+            "db-key",
+        )
+
+
 def test_post_database_snapshot(monkeypatch):
     captured = []
 
