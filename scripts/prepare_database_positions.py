@@ -33,10 +33,20 @@ def unwrap(value: Any) -> Any:
 
 def _checked_runtime_payload(response: Any, path: str, *, expect_list: bool) -> Any:
     """Fail closed on an execution error; never interpret errors as broker rows."""
-    if isinstance(response, dict) and (
-        response.get("status") not in (None, "success") or response.get("error")
-    ):
-        raise ValueError(f"{path}: Execution_Agent returned an error; snapshot refused")
+    if isinstance(response, dict):
+        # Execution_Agent uses status="success" in its response envelope, while
+        # an unwrapped Alpaca account legitimately contains status="ACTIVE".
+        # Distinguish those shapes so an authenticated Paper snapshot is not
+        # rejected during the second validation at the persistence boundary.
+        status = response.get("status")
+        is_envelope = "data" in response
+        if (
+            response.get("error")
+            or response.get("http_status") is not None
+            or status in ("error", "failed", "failure")
+            or (is_envelope and status not in (None, "success"))
+        ):
+            raise ValueError(f"{path}: Execution_Agent returned an error; snapshot refused")
     value = unwrap(response)
     if expect_list:
         if not isinstance(value, list) or any(not isinstance(item, dict) for item in value):
