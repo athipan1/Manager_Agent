@@ -43,6 +43,8 @@ jobs:
       TRADING_MODE: PAPER
       ALLOW_LIVE_TRADING: "false"
       DRY_RUN: "true"
+      # Host-side scripts import the Manager app package (outside scripts/).
+      PYTHONPATH: ${{ github.workspace }}/Manager_Agent
       EXECUTION_AGENT_API_KEY: ${{ secrets.EXECUTION_AGENT_API_KEY || secrets.EXECUTION_API_KEY }}
       EXECUTION_API_KEY: ${{ secrets.EXECUTION_AGENT_API_KEY || secrets.EXECUTION_API_KEY }}
       DATABASE_AGENT_URL: http://localhost:8004
@@ -210,6 +212,15 @@ jobs:
             exit 1
           fi
           echo "Paper-only safety settings validated."
+
+      - name: Set up Python for host review scripts
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install pinned host review dependencies
+        working-directory: Manager_Agent
+        run: python -m pip install --disable-pip-version-check -r requirements.prod.base.txt
 
       - name: Generate ephemeral Curator credentials
         run: |
