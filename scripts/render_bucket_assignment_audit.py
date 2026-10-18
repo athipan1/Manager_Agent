@@ -8,6 +8,8 @@ import urllib.request
 from pathlib import Path
 from typing import Any, Dict, Iterable, Optional
 
+from app.unmanaged_broker_holdings import approved_unmanaged_symbols
+
 UNASSIGNED = "unassigned"
 
 
@@ -85,7 +87,14 @@ def bucket_distribution(rows: Iterable[Dict[str, Any]]) -> dict[str, int]:
     return dict(sorted(output.items()))
 
 
-def build_assignment_audit(positions: list[Dict[str, Any]], hints: dict[str, dict[str, str]]) -> Dict[str, Any]:
+def build_assignment_audit(
+    positions: list[Dict[str, Any]],
+    hints: dict[str, dict[str, str]],
+    *,
+    unmanaged_symbols: Optional[set[str]] = None,
+) -> Dict[str, Any]:
+    """Separate reviewed owner holdings from AI bucket assignment work."""
+    unmanaged = set(unmanaged_symbols or ())
     rows = []
     for position in sorted(positions, key=symbol):
         sym = symbol(position)
@@ -97,16 +106,22 @@ def build_assignment_audit(positions: list[Dict[str, Any]], hints: dict[str, dic
             "symbol": sym,
             "bucket": bucket,
             "bucket_source": source if bucket != UNASSIGNED else "missing",
+            "ownership": "owner_manual_read_only" if sym in unmanaged else "ai_managed_scope",
             "quantity": position.get("qty") or position.get("quantity"),
             "reason": hint.get("reason") or position.get("strategy_bucket_reason") or "",
         })
-    unassigned = [row for row in rows if row.get("bucket") == UNASSIGNED]
-    assigned = [row for row in rows if row.get("bucket") != UNASSIGNED]
+    manual = [row for row in rows if row["ownership"] == "owner_manual_read_only"]
+    managed = [row for row in rows if row["ownership"] == "ai_managed_scope"]
+    unassigned = [row for row in managed if row.get("bucket") == UNASSIGNED]
+    assigned = [row for row in managed if row.get("bucket") != UNASSIGNED]
     return {
         "positions_seen": len(rows),
+        "owner_manual_read_only_count": len(manual),
+        "owner_manual_read_only_positions": manual,
+        "ai_managed_scope_count": len(managed),
         "assigned_positions": len(assigned),
         "unassigned_positions_count": len(unassigned),
-        "bucket_distribution": bucket_distribution(rows),
+        "bucket_distribution": bucket_distribution(managed),
         "unassigned_positions": unassigned,
         "positions": rows,
         "action_required": len(unassigned) > 0,
@@ -118,7 +133,9 @@ def fetch_assignment_audit(execution_url: str, execution_api_key: Optional[str],
     bucket_response = get_json(database_url, f"/accounts/{account_id}/position-buckets", api_key=database_api_key)
     positions = positions_from_response(positions_response)
     hints = bucket_hints_from_response(bucket_response)
-    audit = build_assignment_audit(positions, hints)
+    audit = build_assignment_audit(
+        positions, hints, unmanaged_symbols=approved_unmanaged_symbols(account_id)
+    )
     return {
         "request": {
             "execution_url": execution_url,
@@ -139,6 +156,8 @@ def render_markdown(audit: Dict[str, Any]) -> str:
         "",
         "## Summary",
         f"- Positions seen: `{audit.get('positions_seen', 0)}`",
+        f"- Owner manual read-only: `{audit.get('owner_manual_read_only_count', 0)}`",
+        f"- AI-managed scope: `{audit.get('ai_managed_scope_count', audit.get('positions_seen', 0))}`",
         f"- Assigned positions: `{audit.get('assigned_positions', 0)}`",
         f"- Unassigned positions: `{audit.get('unassigned_positions_count', 0)}`",
         f"- Action required: `{str(audit.get('action_required', False)).lower()}`",
@@ -148,7 +167,7 @@ def render_markdown(audit: Dict[str, Any]) -> str:
         json.dumps(audit.get("bucket_distribution") or {}, ensure_ascii=False, indent=2, default=str),
         "```",
         "",
-        "## Unassigned Positions",
+        "## Unassigned AI-managed Positions",
     ]
     unassigned = audit.get("unassigned_positions") or []
     if not unassigned:
@@ -160,13 +179,20 @@ def render_markdown(audit: Dict[str, Any]) -> str:
             lines.append(f"| {row.get('symbol', '-')} | {row.get('quantity', '-')} | {row.get('bucket', UNASSIGNED)} | {row.get('bucket_source', 'missing')} |")
     lines.extend([
         "",
+        "## Owner Manual Holdings (Read-only)",
+        "These positions are excluded from AI bucket assignment and AI trading. They remain in broker reconciliation and account-wide exposure.",
+    ])
+    for row in audit.get("owner_manual_read_only_positions") or []:
+        lines.append(f"- {row.get('symbol', '-')}: owner-managed, read-only")
+    lines.extend([
+        "",
         "## All Positions",
-        "| Symbol | Qty | Bucket | Source | Reason |",
-        "|---|---:|---|---|---|",
+        "| Symbol | Qty | Bucket | Source | Ownership | Reason |",
+        "|---|---:|---|---|---|---|",
     ])
     for row in audit.get("positions") or []:
         reason = str(row.get("reason") or "-").replace("|", "/")
-        lines.append(f"| {row.get('symbol', '-')} | {row.get('quantity', '-')} | {row.get('bucket', '-')} | {row.get('bucket_source', '-')} | {reason} |")
+        lines.append(f"| {row.get('symbol', '-')} | {row.get('quantity', '-')} | {row.get('bucket', '-')} | {row.get('bucket_source', '-')} | {row.get('ownership', '-')} | {reason} |")
     lines.extend([
         "",
         "## Compact JSON",
