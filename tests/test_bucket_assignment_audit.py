@@ -1,3 +1,5 @@
+import pytest
+
 from scripts.render_bucket_assignment_audit import build_assignment_audit, fetch_assignment_audit, render_markdown
 
 
@@ -113,3 +115,21 @@ def test_account_scoped_owner_registry_applied_to_live_bucket_audit(monkeypatch)
     assert account_one["action_required"] is False
     assert account_two["owner_manual_read_only_count"] == 0
     assert account_two["unassigned_positions_count"] == 1
+
+
+@pytest.mark.parametrize("bad_source", ["positions", "buckets"])
+def test_assignment_audit_fails_closed_on_unverified_broker_or_bucket_source(monkeypatch, bad_source):
+    def fake_get_json(_base_url, path, api_key=None, timeout=30):
+        if path == "/positions":
+            return {"status": "error", "http_status": 401} if bad_source == "positions" else {
+                "status": "success", "data": [{"symbol": "NVDA", "qty": 1}]
+            }
+        if path == "/accounts/1/position-buckets":
+            return {"status": "error", "http_status": 503} if bad_source == "buckets" else {
+                "status": "success", "data": []
+            }
+        raise AssertionError(path)
+
+    monkeypatch.setattr("scripts.render_bucket_assignment_audit.get_json", fake_get_json)
+    with pytest.raises(ValueError, match="cannot verify"):
+        fetch_assignment_audit("http://execution", "key", "http://database", "key", "1")
