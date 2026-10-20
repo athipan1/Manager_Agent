@@ -1,75 +1,50 @@
 {
   "schemaVersion": "dashboard-snapshot.v2",
-  "generatedAt": "2026-10-20T17:27:56.460157Z",
+  "generatedAt": "2026-10-20T18:43:02.523424Z",
   "workflow": {
-    "runId": 39465968733,
-    "runNumber": 1386,
-    "runUrl": "https://github.com/athipan1/Manager_Agent/actions/runs/39465968733",
+    "runId": 39476877687,
+    "runNumber": 1136,
+    "runUrl": "https://github.com/athipan1/Manager_Agent/actions/runs/39476877687",
     "eventName": "schedule",
     "status": "completed",
-    "conclusion": "failure",
-    "startedAt": "2026-10-20T17:25:39Z",
-    "completedAt": "2026-10-20T17:28:08Z",
-    "durationSeconds": 149.0
+    "conclusion": "success",
+    "startedAt": "2026-10-20T18:40:56Z",
+    "completedAt": "2026-10-20T18:43:10Z",
+    "durationSeconds": 134.0
   },
   "runtime": {
     "mode": "PAPER",
     "brokerMode": "ALPACA",
     "dryRun": false,
     "liveTradingEnabled": false,
-    "flow": "hourly_portfolio_cycle"
+    "flow": "broker_sync_check"
   },
   "cycle": {
-    "id": "hourly-paper-4fd6d3db930a-20261020T17",
-    "status": "failure",
-    "marketMode": "REVIEW_AND_TRADE",
+    "id": "broker-sync-check",
+    "status": "success",
+    "marketMode": "BROKER_SYNC",
     "candidateCount": 0,
     "selectedSymbols": [],
     "executionAttempted": false,
     "executionStatus": "not_attempted",
-    "executionReason": "no_preselected_backtest_symbols",
+    "executionReason": "read_only_broker_sync",
     "partialFillDetected": false
   },
   "phases": [
     {
       "name": "preflight",
       "status": "success",
-      "message": null
+      "message": "Alpaca Paper broker configuration verified."
     },
     {
       "name": "portfolio_review",
-      "status": "failure",
-      "message": null
-    },
-    {
-      "name": "protection_reconciliation",
-      "status": "skipped",
-      "message": null
-    },
-    {
-      "name": "scanner",
-      "status": "skipped",
-      "message": "No candidate passed the score threshold"
-    },
-    {
-      "name": "backtest",
-      "status": "skipped",
-      "message": "No scanner symbols"
-    },
-    {
-      "name": "risk",
-      "status": "not_attempted",
-      "message": "no_preselected_backtest_symbols"
-    },
-    {
-      "name": "execution",
-      "status": "not_attempted",
-      "message": "no_preselected_backtest_symbols"
+      "status": "success",
+      "message": "Latest broker account, positions, and orders loaded."
     },
     {
       "name": "final_reconciliation",
-      "status": "skipped",
-      "message": null
+      "status": "success",
+      "message": "Database_Agent matches the latest Alpaca Paper snapshot."
     }
   ],
   "account": {
@@ -77,7 +52,7 @@
     "equity": null,
     "buyingPower": null,
     "status": "ACTIVE",
-    "lastSyncedAt": "2026-10-20T17:27:56.460157Z",
+    "lastSyncedAt": "2026-10-20T18:43:02.523424Z",
     "valuesMasked": true
   },
   "summary": {
@@ -85,7 +60,7 @@
     "openOrderCount": 0,
     "candidateCount": 0,
     "executionStatus": "not_attempted",
-    "executionReason": "no_preselected_backtest_symbols"
+    "executionReason": "read_only_broker_sync"
   },
   "positions": [
     {
@@ -97,7 +72,7 @@
       "unrealizedPnL": null,
       "bucket": "unassigned",
       "protection": {
-        "status": "unprotected",
+        "status": "unknown",
         "hasStopLoss": false,
         "hasTakeProfit": false,
         "hasBracket": false
@@ -114,7 +89,7 @@
       "unrealizedPnL": null,
       "bucket": "unassigned",
       "protection": {
-        "status": "unprotected",
+        "status": "unknown",
         "hasStopLoss": false,
         "hasTakeProfit": false,
         "hasBracket": false
@@ -131,7 +106,7 @@
       "unrealizedPnL": null,
       "bucket": "unassigned",
       "protection": {
-        "status": "unprotected",
+        "status": "unknown",
         "hasStopLoss": false,
         "hasTakeProfit": false,
         "hasBracket": false
@@ -148,7 +123,7 @@
       "unrealizedPnL": null,
       "bucket": "unassigned",
       "protection": {
-        "status": "unprotected",
+        "status": "unknown",
         "hasStopLoss": false,
         "hasTakeProfit": false,
         "hasBracket": false
@@ -165,7 +140,7 @@
       "unrealizedPnL": null,
       "bucket": "unassigned",
       "protection": {
-        "status": "unprotected",
+        "status": "unknown",
         "hasStopLoss": false,
         "hasTakeProfit": false,
         "hasBracket": false
@@ -182,7 +157,7 @@
       "unrealizedPnL": null,
       "bucket": "unassigned",
       "protection": {
-        "status": "unprotected",
+        "status": "unknown",
         "hasStopLoss": false,
         "hasTakeProfit": false,
         "hasBracket": false
@@ -199,7 +174,7 @@
       "unrealizedPnL": null,
       "bucket": "unassigned",
       "protection": {
-        "status": "unprotected",
+        "status": "unknown",
         "hasStopLoss": false,
         "hasTakeProfit": false,
         "hasBracket": false
@@ -216,7 +191,7 @@
       "unrealizedPnL": null,
       "bucket": "unassigned",
       "protection": {
-        "status": "unprotected",
+        "status": "unknown",
         "hasStopLoss": false,
         "hasTakeProfit": false,
         "hasBracket": false
@@ -233,7 +208,7 @@
       "unrealizedPnL": null,
       "bucket": "unassigned",
       "protection": {
-        "status": "unprotected",
+        "status": "unknown",
         "hasStopLoss": false,
         "hasTakeProfit": false,
         "hasBracket": false
@@ -250,7 +225,7 @@
       "unrealizedPnL": null,
       "bucket": "unassigned",
       "protection": {
-        "status": "unprotected",
+        "status": "unknown",
         "hasStopLoss": false,
         "hasTakeProfit": false,
         "hasBracket": false
@@ -267,7 +242,7 @@
       "unrealizedPnL": null,
       "bucket": "unassigned",
       "protection": {
-        "status": "unprotected",
+        "status": "unknown",
         "hasStopLoss": false,
         "hasTakeProfit": false,
         "hasBracket": false
@@ -284,7 +259,7 @@
       "unrealizedPnL": null,
       "bucket": "unassigned",
       "protection": {
-        "status": "unprotected",
+        "status": "unknown",
         "hasStopLoss": false,
         "hasTakeProfit": false,
         "hasBracket": false
@@ -295,15 +270,8 @@
   ],
   "openOrders": [],
   "signals": [],
-  "warnings": [
-    "Missing phase report: hourly-portfolio-cycle.json",
-    "Missing phase report: hourly-pre-backtest-discovery.json",
-    "Missing phase report: hourly-manager-cycle.json"
-  ],
-  "error": {
-    "code": "HOURLY_WORKFLOW_FAILED",
-    "message": "Hourly Auto Trading did not complete successfully."
-  },
+  "warnings": [],
+  "error": null,
   "lastSuccessfulRun": {
     "generatedAt": "2026-08-06T14:43:27.260689Z",
     "runId": 31111687007,
@@ -312,7 +280,7 @@
   },
   "freshness": {
     "expectedIntervalMinutes": 60,
-    "ageMinutes": 0.43,
+    "ageMinutes": 0.34,
     "isStale": false,
     "staleAfterMinutes": 120
   },
@@ -324,74 +292,14 @@
     {
       "id": "manager",
       "name": "Manager",
-      "health": "unhealthy",
-      "status": "failure",
-      "latencyMs": null,
-      "version": null,
-      "cpuPercent": null,
-      "memoryPercent": null,
-      "memoryMb": null,
-      "lastRunAt": "2026-10-20T17:27:56.460157Z"
-    },
-    {
-      "id": "database",
-      "name": "Database",
       "health": "healthy",
-      "status": "connected",
-      "latencyMs": null,
-      "version": "1.1.0",
-      "cpuPercent": null,
-      "memoryPercent": null,
-      "memoryMb": null,
-      "lastRunAt": "2026-10-20T17:27:56.460157Z"
-    },
-    {
-      "id": "scanner",
-      "name": "Scanner",
-      "health": "unknown",
-      "status": "skipped",
+      "status": "success",
       "latencyMs": null,
       "version": null,
       "cpuPercent": null,
       "memoryPercent": null,
       "memoryMb": null,
-      "lastRunAt": "2026-10-20T17:27:56.460157Z"
-    },
-    {
-      "id": "portfolio",
-      "name": "Portfolio",
-      "health": "healthy",
-      "status": "prepare_failed_closed",
-      "latencyMs": null,
-      "version": null,
-      "cpuPercent": null,
-      "memoryPercent": null,
-      "memoryMb": null,
-      "lastRunAt": "2026-10-20T17:27:55.620433Z"
-    },
-    {
-      "id": "risk",
-      "name": "Risk",
-      "health": "unknown",
-      "status": "not_attempted",
-      "latencyMs": null,
-      "version": null,
-      "cpuPercent": null,
-      "memoryPercent": null,
-      "memoryMb": null,
-      "lastRunAt": "2026-10-20T17:27:56.460157Z"
-    },
-    {
-      "id": "execution",
-      "name": "Execution",
-      "health": "unknown",
-      "status": "not_attempted",
-      "latencyMs": null,
-      "version": null,
-      "cpuPercent": null,
-      "memoryPercent": null,
-      "memoryMb": null,
-      "lastRunAt": "2026-10-20T17:27:56.460157Z"
+      "lastRunAt": "2026-10-20T18:43:02.523424Z"
     }
   ],
   "risk": null,
@@ -1424,94 +1332,77 @@
   "observability": {
     "schemaVersion": "trading-observability.v1",
     "current": {
-      "source": "hourly_artifact",
+      "source": "workflow_metadata",
       "flowKind": "decision_path",
-      "correlationId": "hourly-paper-4fd6d3db930a-20261020T17",
-      "cycleId": "hourly-paper-4fd6d3db930a-20261020T17",
-      "workflowRunId": 39465968733,
-      "observedAt": "2026-10-20T17:27:56.460157Z",
-      "status": "failure",
-      "reasonCode": "no_preselected_backtest_symbols",
+      "correlationId": "broker-sync-check",
+      "cycleId": "broker-sync-check",
+      "workflowRunId": 39476877687,
+      "observedAt": "2026-10-20T18:43:02.523424Z",
+      "status": "success",
+      "reasonCode": "read_only_broker_sync",
       "stages": [
         {
           "id": "scanner",
           "status": "skipped",
           "reasonCodes": [
-            "no_candidate_passed_the_score_threshold",
-            "no_candidates"
+            "read_only_broker_sync"
           ],
-          "observedAt": "2026-10-20T17:27:56.460157Z",
-          "summary": {
-            "candidateCount": 0
-          }
+          "observedAt": "2026-10-20T18:43:02.523424Z",
+          "summary": {}
         },
         {
           "id": "backtest",
           "status": "skipped",
           "reasonCodes": [
-            "no_scanner_symbols",
-            "no_preselected_backtest_symbols"
+            "read_only_broker_sync"
           ],
-          "observedAt": "2026-10-20T17:27:56.460157Z",
-          "summary": {
-            "attemptedCount": 0,
-            "eligibleCount": 0
-          }
+          "observedAt": "2026-10-20T18:43:02.523424Z",
+          "summary": {}
         },
         {
           "id": "market_regime",
           "status": "not_attempted",
-          "reasonCodes": [],
-          "observedAt": "2026-10-20T17:27:55.620433Z",
-          "summary": {
-            "regime": null,
-            "riskLevel": null,
-            "confidence": null
-          }
+          "reasonCodes": [
+            "read_only_broker_sync"
+          ],
+          "observedAt": "2026-10-20T18:43:02.523424Z",
+          "summary": {}
         },
         {
           "id": "portfolio",
-          "status": "success",
-          "reasonCodes": [],
-          "observedAt": "2026-10-20T17:27:55.620433Z",
-          "summary": {
-            "positionDecisionCount": 0,
-            "safeForCandidateAnalysis": null
-          }
+          "status": "not_attempted",
+          "reasonCodes": [
+            "read_only_broker_sync"
+          ],
+          "observedAt": "2026-10-20T18:43:02.523424Z",
+          "summary": {}
         },
         {
           "id": "profit",
-          "status": "skipped",
-          "reasonCodes": [],
-          "observedAt": "2026-10-20T17:27:55.620433Z",
-          "summary": {
-            "reviewedPositions": 0,
-            "actionCounts": {}
-          }
+          "status": "not_attempted",
+          "reasonCodes": [
+            "read_only_broker_sync"
+          ],
+          "observedAt": "2026-10-20T18:43:02.523424Z",
+          "summary": {}
         },
         {
           "id": "risk",
           "status": "not_attempted",
           "reasonCodes": [
-            "no_preselected_backtest_symbols"
+            "read_only_broker_sync"
           ],
-          "observedAt": "2026-10-20T17:27:56.460157Z",
-          "summary": {
-            "approvalCount": 0,
-            "rejectedCount": 0
-          }
+          "observedAt": "2026-10-20T18:43:02.523424Z",
+          "summary": {}
         },
         {
           "id": "execution",
           "status": "not_attempted",
           "reasonCodes": [
-            "no_preselected_backtest_symbols"
+            "read_only_broker_sync"
           ],
-          "observedAt": "2026-10-20T17:27:56.460157Z",
-          "summary": {
-            "attempted": false,
-            "partialFill": false
-          }
+          "observedAt": "2026-10-20T18:43:02.523424Z",
+          "summary": {}
         }
       ],
       "candidates": []
@@ -1612,9 +1503,93 @@
   },
   "decisionHistory": {
     "schemaVersion": "decision-history.v1",
-    "generatedAt": "2026-10-20T17:27:56.460157Z",
+    "generatedAt": "2026-10-20T18:43:02.523424Z",
     "retentionCycles": 24,
     "cycles": [
+      {
+        "source": "workflow_metadata",
+        "flowKind": "decision_path",
+        "correlationId": "broker-sync-check",
+        "cycleId": "broker-sync-check",
+        "workflowRunId": 39476877687,
+        "observedAt": "2026-10-20T18:43:02.523424Z",
+        "status": "success",
+        "reasonCode": "read_only_broker_sync",
+        "summary": {
+          "candidateCount": 0,
+          "buyCount": 0,
+          "blockedCount": 0,
+          "executedCount": 0,
+          "riskRejectedCount": 0,
+          "executionFailureCount": 0
+        },
+        "stages": [
+          {
+            "id": "scanner",
+            "status": "skipped",
+            "reasonCodes": [
+              "read_only_broker_sync"
+            ],
+            "observedAt": "2026-10-20T18:43:02.523424Z",
+            "summary": {}
+          },
+          {
+            "id": "backtest",
+            "status": "skipped",
+            "reasonCodes": [
+              "read_only_broker_sync"
+            ],
+            "observedAt": "2026-10-20T18:43:02.523424Z",
+            "summary": {}
+          },
+          {
+            "id": "market_regime",
+            "status": "not_attempted",
+            "reasonCodes": [
+              "read_only_broker_sync"
+            ],
+            "observedAt": "2026-10-20T18:43:02.523424Z",
+            "summary": {}
+          },
+          {
+            "id": "portfolio",
+            "status": "not_attempted",
+            "reasonCodes": [
+              "read_only_broker_sync"
+            ],
+            "observedAt": "2026-10-20T18:43:02.523424Z",
+            "summary": {}
+          },
+          {
+            "id": "profit",
+            "status": "not_attempted",
+            "reasonCodes": [
+              "read_only_broker_sync"
+            ],
+            "observedAt": "2026-10-20T18:43:02.523424Z",
+            "summary": {}
+          },
+          {
+            "id": "risk",
+            "status": "not_attempted",
+            "reasonCodes": [
+              "read_only_broker_sync"
+            ],
+            "observedAt": "2026-10-20T18:43:02.523424Z",
+            "summary": {}
+          },
+          {
+            "id": "execution",
+            "status": "not_attempted",
+            "reasonCodes": [
+              "read_only_broker_sync"
+            ],
+            "observedAt": "2026-10-20T18:43:02.523424Z",
+            "summary": {}
+          }
+        ],
+        "candidates": []
+      },
       {
         "source": "hourly_artifact",
         "flowKind": "decision_path",
@@ -1812,90 +1787,6 @@
               "attempted": false,
               "partialfill": false
             }
-          }
-        ],
-        "candidates": []
-      },
-      {
-        "source": "workflow_metadata",
-        "flowKind": "decision_path",
-        "correlationId": "broker-sync-check",
-        "cycleId": "broker-sync-check",
-        "workflowRunId": 39433697631,
-        "observedAt": "2026-10-20T13:51:39.190023Z",
-        "status": "success",
-        "reasonCode": "read_only_broker_sync",
-        "summary": {
-          "candidateCount": 0,
-          "buyCount": 0,
-          "blockedCount": 0,
-          "executedCount": 0,
-          "riskRejectedCount": 0,
-          "executionFailureCount": 0
-        },
-        "stages": [
-          {
-            "id": "scanner",
-            "status": "skipped",
-            "reasonCodes": [
-              "read_only_broker_sync"
-            ],
-            "observedAt": "2026-10-20T13:51:39.190023Z",
-            "summary": {}
-          },
-          {
-            "id": "backtest",
-            "status": "skipped",
-            "reasonCodes": [
-              "read_only_broker_sync"
-            ],
-            "observedAt": "2026-10-20T13:51:39.190023Z",
-            "summary": {}
-          },
-          {
-            "id": "market_regime",
-            "status": "not_attempted",
-            "reasonCodes": [
-              "read_only_broker_sync"
-            ],
-            "observedAt": "2026-10-20T13:51:39.190023Z",
-            "summary": {}
-          },
-          {
-            "id": "portfolio",
-            "status": "not_attempted",
-            "reasonCodes": [
-              "read_only_broker_sync"
-            ],
-            "observedAt": "2026-10-20T13:51:39.190023Z",
-            "summary": {}
-          },
-          {
-            "id": "profit",
-            "status": "not_attempted",
-            "reasonCodes": [
-              "read_only_broker_sync"
-            ],
-            "observedAt": "2026-10-20T13:51:39.190023Z",
-            "summary": {}
-          },
-          {
-            "id": "risk",
-            "status": "not_attempted",
-            "reasonCodes": [
-              "read_only_broker_sync"
-            ],
-            "observedAt": "2026-10-20T13:51:39.190023Z",
-            "summary": {}
-          },
-          {
-            "id": "execution",
-            "status": "not_attempted",
-            "reasonCodes": [
-              "read_only_broker_sync"
-            ],
-            "observedAt": "2026-10-20T13:51:39.190023Z",
-            "summary": {}
           }
         ],
         "candidates": []
@@ -5816,17 +5707,17 @@
   },
   "decisionAnalytics": {
     "schemaVersion": "decision-analytics.v1",
-    "generatedAt": "2026-10-20T17:27:56.460157Z",
+    "generatedAt": "2026-10-20T18:43:02.523424Z",
     "sourceHistorySchemaVersion": "decision-history.v1",
     "overallStatus": "healthy",
     "latest": {
-      "source": "hourly_artifact",
-      "correlationId": "hourly-paper-4fd6d3db930a-20261020T17",
-      "cycleId": "hourly-paper-4fd6d3db930a-20261020T17",
-      "workflowRunId": 39465968733,
-      "observedAt": "2026-10-20T17:27:56.460157Z",
-      "status": "failure",
-      "reasonCode": "no_preselected_backtest_symbols",
+      "source": "workflow_metadata",
+      "correlationId": "broker-sync-check",
+      "cycleId": "broker-sync-check",
+      "workflowRunId": 39476877687,
+      "observedAt": "2026-10-20T18:43:02.523424Z",
+      "status": "success",
+      "reasonCode": "read_only_broker_sync",
       "summary": {
         "candidateCount": 0,
         "buyCount": 0,
@@ -6152,9 +6043,9 @@
       "metadataOnlyCycles": 1,
       "artifactBackedCycles": 23,
       "artifactCoverageRate": 0.958333,
-      "latestCycleSource": "hourly_artifact",
-      "latestCycleClass": "decision",
-      "latestReasonCode": "no_preselected_backtest_symbols",
+      "latestCycleSource": "workflow_metadata",
+      "latestCycleClass": "metadata_gap",
+      "latestReasonCode": "read_only_broker_sync",
       "latestMeaningfulObservedAt": "2026-10-20T17:27:56.460157Z",
       "sufficientFor6CycleWindow": true,
       "sufficientForTrendComparison": true
