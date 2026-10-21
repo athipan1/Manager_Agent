@@ -1,16 +1,16 @@
 {
   "schemaVersion": "dashboard-snapshot.v2",
-  "generatedAt": "2026-10-21T00:10:29.382828Z",
+  "generatedAt": "2026-10-21T00:38:57.253014Z",
   "workflow": {
-    "runId": 39518812420,
-    "runNumber": 1388,
-    "runUrl": "https://github.com/athipan1/Manager_Agent/actions/runs/39518812420",
+    "runId": 39522558213,
+    "runNumber": 805,
+    "runUrl": "https://github.com/athipan1/Manager_Agent/actions/runs/39522558213",
     "eventName": "schedule",
     "status": "completed",
     "conclusion": "success",
-    "startedAt": "2026-10-21T00:02:14Z",
-    "completedAt": "2026-10-21T00:10:44Z",
-    "durationSeconds": 510.0
+    "startedAt": "2026-10-21T00:38:43Z",
+    "completedAt": "2026-10-21T00:39:00Z",
+    "durationSeconds": 17.0
   },
   "runtime": {
     "mode": "PAPER",
@@ -20,282 +20,79 @@
     "flow": "hourly_portfolio_cycle"
   },
   "cycle": {
-    "id": "hourly-paper-4fd6d3db930a-20261021T00",
+    "id": "hourly-control-39522558213",
     "status": "controlled_no_trade",
-    "marketMode": "PORTFOLIO_REVIEW_ONLY",
-    "candidateCount": 3,
+    "marketMode": "SOAK_INACTIVE",
+    "candidateCount": 0,
     "selectedSymbols": [],
     "executionAttempted": false,
     "executionStatus": "not_attempted",
-    "executionReason": "market_closed",
+    "executionReason": "scheduled_paper_cycle_not_authorized",
     "partialFillDetected": false
   },
   "phases": [
     {
       "name": "preflight",
       "status": "success",
-      "message": null
+      "message": "scheduled_paper_cycle_not_authorized"
     },
     {
       "name": "portfolio_review",
-      "status": "success",
-      "message": null
+      "status": "skipped",
+      "message": "scheduled_paper_cycle_not_authorized"
     },
     {
       "name": "protection_reconciliation",
-      "status": "success",
-      "message": null
+      "status": "skipped",
+      "message": "scheduled_paper_cycle_not_authorized"
     },
     {
       "name": "scanner",
-      "status": "success",
-      "message": null
+      "status": "skipped",
+      "message": "scheduled_paper_cycle_not_authorized"
     },
     {
       "name": "backtest",
-      "status": "success",
-      "message": null
+      "status": "skipped",
+      "message": "scheduled_paper_cycle_not_authorized"
     },
     {
       "name": "risk",
       "status": "not_attempted",
-      "message": "market_closed"
+      "message": "scheduled_paper_cycle_not_authorized"
     },
     {
       "name": "execution",
       "status": "not_attempted",
-      "message": "market_closed"
+      "message": "scheduled_paper_cycle_not_authorized"
     },
     {
       "name": "final_reconciliation",
       "status": "success",
-      "message": null
+      "message": "scheduled_paper_cycle_not_authorized"
     }
   ],
   "account": {
     "cash": null,
     "equity": null,
     "buyingPower": null,
-    "status": "ACTIVE",
-    "lastSyncedAt": "2026-10-21T00:10:34.678732Z",
+    "status": null,
+    "lastSyncedAt": "2026-10-21T00:38:57.253014Z",
     "valuesMasked": true
   },
   "summary": {
-    "positionCount": 12,
+    "positionCount": 0,
     "openOrderCount": 0,
-    "candidateCount": 3,
+    "candidateCount": 0,
     "executionStatus": "not_attempted",
-    "executionReason": "market_closed"
+    "executionReason": "scheduled_paper_cycle_not_authorized"
   },
-  "positions": [
-    {
-      "symbol": "AGCO",
-      "quantity": null,
-      "averageCost": null,
-      "currentPrice": null,
-      "marketValue": null,
-      "unrealizedPnL": null,
-      "bucket": "unassigned",
-      "protection": {
-        "status": "unprotected",
-        "hasStopLoss": false,
-        "hasTakeProfit": false,
-        "hasBracket": false
-      },
-      "valuesMasked": true,
-      "ownership": "manual"
-    },
-    {
-      "symbol": "CEG",
-      "quantity": null,
-      "averageCost": null,
-      "currentPrice": null,
-      "marketValue": null,
-      "unrealizedPnL": null,
-      "bucket": "unassigned",
-      "protection": {
-        "status": "unprotected",
-        "hasStopLoss": false,
-        "hasTakeProfit": false,
-        "hasBracket": false
-      },
-      "valuesMasked": true,
-      "ownership": "manual"
-    },
-    {
-      "symbol": "DE",
-      "quantity": null,
-      "averageCost": null,
-      "currentPrice": null,
-      "marketValue": null,
-      "unrealizedPnL": null,
-      "bucket": "unassigned",
-      "protection": {
-        "status": "unprotected",
-        "hasStopLoss": false,
-        "hasTakeProfit": false,
-        "hasBracket": false
-      },
-      "valuesMasked": true,
-      "ownership": "manual"
-    },
-    {
-      "symbol": "FDX",
-      "quantity": null,
-      "averageCost": null,
-      "currentPrice": null,
-      "marketValue": null,
-      "unrealizedPnL": null,
-      "bucket": "unassigned",
-      "protection": {
-        "status": "unprotected",
-        "hasStopLoss": false,
-        "hasTakeProfit": false,
-        "hasBracket": false
-      },
-      "valuesMasked": true,
-      "ownership": "manual"
-    },
-    {
-      "symbol": "NVDA",
-      "quantity": null,
-      "averageCost": null,
-      "currentPrice": null,
-      "marketValue": null,
-      "unrealizedPnL": null,
-      "bucket": "unassigned",
-      "protection": {
-        "status": "unprotected",
-        "hasStopLoss": false,
-        "hasTakeProfit": false,
-        "hasBracket": false
-      },
-      "valuesMasked": true,
-      "ownership": "manual"
-    },
-    {
-      "symbol": "OXY",
-      "quantity": null,
-      "averageCost": null,
-      "currentPrice": null,
-      "marketValue": null,
-      "unrealizedPnL": null,
-      "bucket": "unassigned",
-      "protection": {
-        "status": "unprotected",
-        "hasStopLoss": false,
-        "hasTakeProfit": false,
-        "hasBracket": false
-      },
-      "valuesMasked": true,
-      "ownership": "manual"
-    },
-    {
-      "symbol": "PFE",
-      "quantity": null,
-      "averageCost": null,
-      "currentPrice": null,
-      "marketValue": null,
-      "unrealizedPnL": null,
-      "bucket": "unassigned",
-      "protection": {
-        "status": "unprotected",
-        "hasStopLoss": false,
-        "hasTakeProfit": false,
-        "hasBracket": false
-      },
-      "valuesMasked": true,
-      "ownership": "manual"
-    },
-    {
-      "symbol": "PSQ",
-      "quantity": null,
-      "averageCost": null,
-      "currentPrice": null,
-      "marketValue": null,
-      "unrealizedPnL": null,
-      "bucket": "unassigned",
-      "protection": {
-        "status": "unprotected",
-        "hasStopLoss": false,
-        "hasTakeProfit": false,
-        "hasBracket": false
-      },
-      "valuesMasked": true,
-      "ownership": "manual"
-    },
-    {
-      "symbol": "REGN",
-      "quantity": null,
-      "averageCost": null,
-      "currentPrice": null,
-      "marketValue": null,
-      "unrealizedPnL": null,
-      "bucket": "unassigned",
-      "protection": {
-        "status": "unprotected",
-        "hasStopLoss": false,
-        "hasTakeProfit": false,
-        "hasBracket": false
-      },
-      "valuesMasked": true,
-      "ownership": "manual"
-    },
-    {
-      "symbol": "SH",
-      "quantity": null,
-      "averageCost": null,
-      "currentPrice": null,
-      "marketValue": null,
-      "unrealizedPnL": null,
-      "bucket": "unassigned",
-      "protection": {
-        "status": "unprotected",
-        "hasStopLoss": false,
-        "hasTakeProfit": false,
-        "hasBracket": false
-      },
-      "valuesMasked": true,
-      "ownership": "manual"
-    },
-    {
-      "symbol": "SMCI",
-      "quantity": null,
-      "averageCost": null,
-      "currentPrice": null,
-      "marketValue": null,
-      "unrealizedPnL": null,
-      "bucket": "unassigned",
-      "protection": {
-        "status": "unprotected",
-        "hasStopLoss": false,
-        "hasTakeProfit": false,
-        "hasBracket": false
-      },
-      "valuesMasked": true,
-      "ownership": "manual"
-    },
-    {
-      "symbol": "VST",
-      "quantity": null,
-      "averageCost": null,
-      "currentPrice": null,
-      "marketValue": null,
-      "unrealizedPnL": null,
-      "bucket": "unassigned",
-      "protection": {
-        "status": "unprotected",
-        "hasStopLoss": false,
-        "hasTakeProfit": false,
-        "hasBracket": false
-      },
-      "valuesMasked": true,
-      "ownership": "manual"
-    }
-  ],
+  "positions": [],
   "openOrders": [],
   "signals": [],
-  "warnings": [],
+  "warnings": [
+    "Alpaca Paper soak is inactive; no trading agents or broker mutation were attempted."
+  ],
   "error": null,
   "lastSuccessfulRun": {
     "generatedAt": "2026-08-06T14:43:27.260689Z",
@@ -305,7 +102,7 @@
   },
   "freshness": {
     "expectedIntervalMinutes": 60,
-    "ageMinutes": 0.39,
+    "ageMinutes": 0.21,
     "isStale": false,
     "staleAfterMinutes": 120
   },
@@ -324,91 +121,19 @@
       "cpuPercent": null,
       "memoryPercent": null,
       "memoryMb": null,
-      "lastRunAt": "2026-10-21T00:10:29.382828Z"
-    },
-    {
-      "id": "database",
-      "name": "Database",
-      "health": "healthy",
-      "status": "connected",
-      "latencyMs": null,
-      "version": "1.1.0",
-      "cpuPercent": null,
-      "memoryPercent": null,
-      "memoryMb": null,
-      "lastRunAt": "2026-10-21T00:10:29.382828Z"
+      "lastRunAt": "2026-10-21T00:38:57.253014Z"
     },
     {
       "id": "scanner",
       "name": "Scanner",
-      "health": "healthy",
-      "status": "success",
+      "health": "unknown",
+      "status": "skipped",
       "latencyMs": null,
       "version": null,
       "cpuPercent": null,
       "memoryPercent": null,
       "memoryMb": null,
-      "lastRunAt": "2026-10-21T00:04:18.089743Z"
-    },
-    {
-      "id": "technical",
-      "name": "Technical",
-      "health": "healthy",
-      "status": "success",
-      "latencyMs": null,
-      "version": null,
-      "cpuPercent": null,
-      "memoryPercent": null,
-      "memoryMb": null,
-      "lastRunAt": "2026-10-21T00:04:18.089743Z"
-    },
-    {
-      "id": "fundamental",
-      "name": "Fundamental",
-      "health": "degraded",
-      "status": "partial",
-      "latencyMs": null,
-      "version": null,
-      "cpuPercent": null,
-      "memoryPercent": null,
-      "memoryMb": null,
-      "lastRunAt": "2026-10-21T00:04:18.089743Z"
-    },
-    {
-      "id": "market_regime",
-      "name": "Market Regime",
-      "health": "healthy",
-      "status": "regime:bull",
-      "latencyMs": null,
-      "version": null,
-      "cpuPercent": null,
-      "memoryPercent": null,
-      "memoryMb": null,
-      "lastRunAt": "2026-10-21T00:04:12.795984Z"
-    },
-    {
-      "id": "performance",
-      "name": "Performance",
-      "health": "healthy",
-      "status": "session_risk_ready",
-      "latencyMs": null,
-      "version": null,
-      "cpuPercent": null,
-      "memoryPercent": null,
-      "memoryMb": null,
-      "lastRunAt": "2026-10-21T00:04:11.572386Z"
-    },
-    {
-      "id": "portfolio",
-      "name": "Portfolio",
-      "health": "healthy",
-      "status": "existing_positions_reviewed_before_candidates",
-      "latencyMs": null,
-      "version": null,
-      "cpuPercent": null,
-      "memoryPercent": null,
-      "memoryMb": null,
-      "lastRunAt": "2026-10-21T00:04:12.795984Z"
+      "lastRunAt": "2026-10-21T00:38:57.253014Z"
     },
     {
       "id": "risk",
@@ -420,7 +145,7 @@
       "cpuPercent": null,
       "memoryPercent": null,
       "memoryMb": null,
-      "lastRunAt": "2026-10-21T00:04:11.572386Z"
+      "lastRunAt": "2026-10-21T00:38:57.253014Z"
     },
     {
       "id": "execution",
@@ -432,26 +157,10 @@
       "cpuPercent": null,
       "memoryPercent": null,
       "memoryMb": null,
-      "lastRunAt": "2026-10-21T00:10:29.382828Z"
+      "lastRunAt": "2026-10-21T00:38:57.253014Z"
     }
   ],
-  "risk": {
-    "riskLevel": "low",
-    "riskScore": null,
-    "grossExposurePercent": 55.8019,
-    "netExposurePercent": null,
-    "drawdownPercent": null,
-    "sectorAllocation": [],
-    "limits": {
-      "grossExposurePercent": null,
-      "drawdownPercent": null
-    },
-    "emergencyHalt": {
-      "active": false,
-      "reason": null,
-      "updatedAt": "2026-10-21T00:04:11.572386Z"
-    }
-  },
+  "risk": null,
   "backtest": {
     "latestRun": {
       "id": null,
@@ -1483,60 +1192,63 @@
     "current": {
       "source": "hourly_artifact",
       "flowKind": "decision_path",
-      "correlationId": "hourly-paper-4fd6d3db930a-20261021T00",
-      "cycleId": "hourly-paper-4fd6d3db930a-20261021T00",
-      "workflowRunId": 39518812420,
-      "observedAt": "2026-10-21T00:10:29.382828Z",
+      "correlationId": "hourly-control-39522558213",
+      "cycleId": "hourly-control-39522558213",
+      "workflowRunId": 39522558213,
+      "observedAt": "2026-10-21T00:38:57.253014Z",
       "status": "controlled_no_trade",
-      "reasonCode": "market_closed",
+      "reasonCode": "scheduled_paper_cycle_not_authorized",
       "stages": [
         {
           "id": "scanner",
-          "status": "success",
-          "reasonCodes": [],
-          "observedAt": "2026-10-21T00:04:18.089743Z",
+          "status": "skipped",
+          "reasonCodes": [
+            "scheduled_paper_cycle_not_authorized",
+            "no_candidates"
+          ],
+          "observedAt": "2026-10-21T00:38:57.253014Z",
           "summary": {
-            "candidateCount": 10
+            "candidateCount": 0
           }
         },
         {
           "id": "backtest",
-          "status": "blocked",
+          "status": "skipped",
           "reasonCodes": [
-            "no_eligible_strategy"
+            "scheduled_paper_cycle_not_authorized"
           ],
-          "observedAt": "2026-10-21T00:10:29.382828Z",
+          "observedAt": "2026-10-21T00:38:57.253014Z",
           "summary": {
-            "attemptedCount": 3,
+            "attemptedCount": 0,
             "eligibleCount": 0
           }
         },
         {
           "id": "market_regime",
-          "status": "success",
+          "status": "not_attempted",
           "reasonCodes": [],
-          "observedAt": "2026-10-21T00:04:12.795984Z",
+          "observedAt": "2026-10-21T00:38:57.253014Z",
           "summary": {
-            "regime": "bull",
-            "riskLevel": "low",
-            "confidence": 0.77
+            "regime": null,
+            "riskLevel": null,
+            "confidence": null
           }
         },
         {
           "id": "portfolio",
-          "status": "success",
+          "status": "not_attempted",
           "reasonCodes": [],
-          "observedAt": "2026-10-21T00:04:12.795984Z",
+          "observedAt": "2026-10-21T00:38:57.253014Z",
           "summary": {
             "positionDecisionCount": 0,
-            "safeForCandidateAnalysis": true
+            "safeForCandidateAnalysis": null
           }
         },
         {
           "id": "profit",
-          "status": "skipped",
+          "status": "not_attempted",
           "reasonCodes": [],
-          "observedAt": "2026-10-21T00:04:12.795984Z",
+          "observedAt": "2026-10-21T00:38:57.253014Z",
           "summary": {
             "reviewedPositions": 0,
             "actionCounts": {}
@@ -1546,9 +1258,9 @@
           "id": "risk",
           "status": "not_attempted",
           "reasonCodes": [
-            "market_closed"
+            "scheduled_paper_cycle_not_authorized"
           ],
-          "observedAt": "2026-10-21T00:10:29.382828Z",
+          "observedAt": "2026-10-21T00:38:57.253014Z",
           "summary": {
             "approvalCount": 0,
             "rejectedCount": 0
@@ -1558,201 +1270,77 @@
           "id": "execution",
           "status": "not_attempted",
           "reasonCodes": [
-            "market_closed"
+            "scheduled_paper_cycle_not_authorized"
           ],
-          "observedAt": "2026-10-21T00:10:29.382828Z",
+          "observedAt": "2026-10-21T00:38:57.253014Z",
           "summary": {
             "attempted": false,
             "partialFill": false
           }
         }
       ],
-      "candidates": [
-        {
-          "symbol": "YB",
-          "rank": 1,
-          "verdict": "hold",
-          "finalScore": 0.615,
-          "strategyBucket": "value_rebound",
-          "status": "not_selected",
-          "stageReached": "scanner",
-          "reasonCodes": [
-            "manager_verdict_hold"
-          ]
-        },
-        {
-          "symbol": "MAKO",
-          "rank": 2,
-          "verdict": "hold",
-          "finalScore": 0.6075,
-          "strategyBucket": "value_rebound",
-          "status": "not_selected",
-          "stageReached": "scanner",
-          "reasonCodes": [
-            "manager_verdict_hold"
-          ]
-        },
-        {
-          "symbol": "DCBO",
-          "rank": 3,
-          "verdict": "hold",
-          "finalScore": 0.6075,
-          "strategyBucket": "news_momentum",
-          "status": "not_selected",
-          "stageReached": "scanner",
-          "reasonCodes": [
-            "manager_verdict_hold"
-          ]
-        },
-        {
-          "symbol": "QTTB",
-          "rank": 4,
-          "verdict": "hold",
-          "finalScore": 0.5797,
-          "strategyBucket": "value_rebound",
-          "status": "not_selected",
-          "stageReached": "scanner",
-          "reasonCodes": [
-            "manager_verdict_hold"
-          ]
-        },
-        {
-          "symbol": "JFIN",
-          "rank": 5,
-          "verdict": "hold",
-          "finalScore": 0.567,
-          "strategyBucket": "value_rebound",
-          "status": "not_selected",
-          "stageReached": "scanner",
-          "reasonCodes": [
-            "manager_verdict_hold"
-          ]
-        },
-        {
-          "symbol": "ZJK",
-          "rank": 6,
-          "verdict": "hold",
-          "finalScore": 0.5453,
-          "strategyBucket": "value_rebound",
-          "status": "not_selected",
-          "stageReached": "scanner",
-          "reasonCodes": [
-            "manager_verdict_hold"
-          ]
-        },
-        {
-          "symbol": "UROY",
-          "rank": 7,
-          "verdict": "hold",
-          "finalScore": 0.5219,
-          "strategyBucket": "value_rebound",
-          "status": "not_selected",
-          "stageReached": "scanner",
-          "reasonCodes": [
-            "manager_verdict_hold"
-          ]
-        },
-        {
-          "symbol": "NAGE",
-          "rank": 8,
-          "verdict": "hold",
-          "finalScore": 0.5147,
-          "strategyBucket": "value_rebound",
-          "status": "not_selected",
-          "stageReached": "scanner",
-          "reasonCodes": [
-            "manager_verdict_hold"
-          ]
-        },
-        {
-          "symbol": "QQQX",
-          "rank": 9,
-          "verdict": "hold",
-          "finalScore": 0.4311,
-          "strategyBucket": "unassigned",
-          "status": "blocked",
-          "stageReached": "scanner",
-          "reasonCodes": [
-            "evidence_gate_failed",
-            "new_entry_not_allowed",
-            "bucket_evidence_insufficient",
-            "manager_verdict_hold"
-          ]
-        },
-        {
-          "symbol": "TBLD",
-          "rank": 10,
-          "verdict": "hold",
-          "finalScore": 0.4294,
-          "strategyBucket": "unassigned",
-          "status": "blocked",
-          "stageReached": "scanner",
-          "reasonCodes": [
-            "evidence_gate_failed",
-            "new_entry_not_allowed",
-            "bucket_evidence_insufficient",
-            "manager_verdict_hold"
-          ]
-        }
-      ]
+      "candidates": []
     },
     "lastMeaningful": {
       "source": "hourly_artifact",
       "flowKind": "decision_path",
-      "correlationId": "hourly-paper-4fd6d3db930a-20261021T00",
-      "cycleId": "hourly-paper-4fd6d3db930a-20261021T00",
-      "workflowRunId": 39518812420,
-      "observedAt": "2026-10-21T00:10:29.382828Z",
+      "correlationId": "hourly-control-39522558213",
+      "cycleId": "hourly-control-39522558213",
+      "workflowRunId": 39522558213,
+      "observedAt": "2026-10-21T00:38:57.253014Z",
       "status": "controlled_no_trade",
-      "reasonCode": "market_closed",
+      "reasonCode": "scheduled_paper_cycle_not_authorized",
       "stages": [
         {
           "id": "scanner",
-          "status": "success",
-          "reasonCodes": [],
-          "observedAt": "2026-10-21T00:04:18.089743Z",
+          "status": "skipped",
+          "reasonCodes": [
+            "scheduled_paper_cycle_not_authorized",
+            "no_candidates"
+          ],
+          "observedAt": "2026-10-21T00:38:57.253014Z",
           "summary": {
-            "candidateCount": 10
+            "candidateCount": 0
           }
         },
         {
           "id": "backtest",
-          "status": "blocked",
+          "status": "skipped",
           "reasonCodes": [
-            "no_eligible_strategy"
+            "scheduled_paper_cycle_not_authorized"
           ],
-          "observedAt": "2026-10-21T00:10:29.382828Z",
+          "observedAt": "2026-10-21T00:38:57.253014Z",
           "summary": {
-            "attemptedCount": 3,
+            "attemptedCount": 0,
             "eligibleCount": 0
           }
         },
         {
           "id": "market_regime",
-          "status": "success",
+          "status": "not_attempted",
           "reasonCodes": [],
-          "observedAt": "2026-10-21T00:04:12.795984Z",
+          "observedAt": "2026-10-21T00:38:57.253014Z",
           "summary": {
-            "regime": "bull",
-            "riskLevel": "low",
-            "confidence": 0.77
+            "regime": null,
+            "riskLevel": null,
+            "confidence": null
           }
         },
         {
           "id": "portfolio",
-          "status": "success",
+          "status": "not_attempted",
           "reasonCodes": [],
-          "observedAt": "2026-10-21T00:04:12.795984Z",
+          "observedAt": "2026-10-21T00:38:57.253014Z",
           "summary": {
             "positionDecisionCount": 0,
-            "safeForCandidateAnalysis": true
+            "safeForCandidateAnalysis": null
           }
         },
         {
           "id": "profit",
-          "status": "skipped",
+          "status": "not_attempted",
           "reasonCodes": [],
-          "observedAt": "2026-10-21T00:04:12.795984Z",
+          "observedAt": "2026-10-21T00:38:57.253014Z",
           "summary": {
             "reviewedPositions": 0,
             "actionCounts": {}
@@ -1762,9 +1350,9 @@
           "id": "risk",
           "status": "not_attempted",
           "reasonCodes": [
-            "market_closed"
+            "scheduled_paper_cycle_not_authorized"
           ],
-          "observedAt": "2026-10-21T00:10:29.382828Z",
+          "observedAt": "2026-10-21T00:38:57.253014Z",
           "summary": {
             "approvalCount": 0,
             "rejectedCount": 0
@@ -1774,150 +1362,123 @@
           "id": "execution",
           "status": "not_attempted",
           "reasonCodes": [
-            "market_closed"
+            "scheduled_paper_cycle_not_authorized"
           ],
-          "observedAt": "2026-10-21T00:10:29.382828Z",
+          "observedAt": "2026-10-21T00:38:57.253014Z",
           "summary": {
             "attempted": false,
             "partialFill": false
           }
         }
       ],
-      "candidates": [
-        {
-          "symbol": "YB",
-          "rank": 1,
-          "verdict": "hold",
-          "finalScore": 0.615,
-          "strategyBucket": "value_rebound",
-          "status": "not_selected",
-          "stageReached": "scanner",
-          "reasonCodes": [
-            "manager_verdict_hold"
-          ]
-        },
-        {
-          "symbol": "MAKO",
-          "rank": 2,
-          "verdict": "hold",
-          "finalScore": 0.6075,
-          "strategyBucket": "value_rebound",
-          "status": "not_selected",
-          "stageReached": "scanner",
-          "reasonCodes": [
-            "manager_verdict_hold"
-          ]
-        },
-        {
-          "symbol": "DCBO",
-          "rank": 3,
-          "verdict": "hold",
-          "finalScore": 0.6075,
-          "strategyBucket": "news_momentum",
-          "status": "not_selected",
-          "stageReached": "scanner",
-          "reasonCodes": [
-            "manager_verdict_hold"
-          ]
-        },
-        {
-          "symbol": "QTTB",
-          "rank": 4,
-          "verdict": "hold",
-          "finalScore": 0.5797,
-          "strategyBucket": "value_rebound",
-          "status": "not_selected",
-          "stageReached": "scanner",
-          "reasonCodes": [
-            "manager_verdict_hold"
-          ]
-        },
-        {
-          "symbol": "JFIN",
-          "rank": 5,
-          "verdict": "hold",
-          "finalScore": 0.567,
-          "strategyBucket": "value_rebound",
-          "status": "not_selected",
-          "stageReached": "scanner",
-          "reasonCodes": [
-            "manager_verdict_hold"
-          ]
-        },
-        {
-          "symbol": "ZJK",
-          "rank": 6,
-          "verdict": "hold",
-          "finalScore": 0.5453,
-          "strategyBucket": "value_rebound",
-          "status": "not_selected",
-          "stageReached": "scanner",
-          "reasonCodes": [
-            "manager_verdict_hold"
-          ]
-        },
-        {
-          "symbol": "UROY",
-          "rank": 7,
-          "verdict": "hold",
-          "finalScore": 0.5219,
-          "strategyBucket": "value_rebound",
-          "status": "not_selected",
-          "stageReached": "scanner",
-          "reasonCodes": [
-            "manager_verdict_hold"
-          ]
-        },
-        {
-          "symbol": "NAGE",
-          "rank": 8,
-          "verdict": "hold",
-          "finalScore": 0.5147,
-          "strategyBucket": "value_rebound",
-          "status": "not_selected",
-          "stageReached": "scanner",
-          "reasonCodes": [
-            "manager_verdict_hold"
-          ]
-        },
-        {
-          "symbol": "QQQX",
-          "rank": 9,
-          "verdict": "hold",
-          "finalScore": 0.4311,
-          "strategyBucket": "unassigned",
-          "status": "blocked",
-          "stageReached": "scanner",
-          "reasonCodes": [
-            "evidence_gate_failed",
-            "new_entry_not_allowed",
-            "bucket_evidence_insufficient",
-            "manager_verdict_hold"
-          ]
-        },
-        {
-          "symbol": "TBLD",
-          "rank": 10,
-          "verdict": "hold",
-          "finalScore": 0.4294,
-          "strategyBucket": "unassigned",
-          "status": "blocked",
-          "stageReached": "scanner",
-          "reasonCodes": [
-            "evidence_gate_failed",
-            "new_entry_not_allowed",
-            "bucket_evidence_insufficient",
-            "manager_verdict_hold"
-          ]
-        }
-      ]
+      "candidates": []
     }
   },
   "decisionHistory": {
     "schemaVersion": "decision-history.v1",
-    "generatedAt": "2026-10-21T00:10:29.382828Z",
+    "generatedAt": "2026-10-21T00:38:57.253014Z",
     "retentionCycles": 24,
     "cycles": [
+      {
+        "source": "hourly_artifact",
+        "flowKind": "decision_path",
+        "correlationId": "hourly-control-39522558213",
+        "cycleId": "hourly-control-39522558213",
+        "workflowRunId": 39522558213,
+        "observedAt": "2026-10-21T00:38:57.253014Z",
+        "status": "controlled_no_trade",
+        "reasonCode": "scheduled_paper_cycle_not_authorized",
+        "summary": {
+          "candidateCount": 0,
+          "buyCount": 0,
+          "blockedCount": 0,
+          "executedCount": 0,
+          "riskRejectedCount": 0,
+          "executionFailureCount": 0
+        },
+        "stages": [
+          {
+            "id": "scanner",
+            "status": "skipped",
+            "reasonCodes": [
+              "scheduled_paper_cycle_not_authorized",
+              "no_candidates"
+            ],
+            "observedAt": "2026-10-21T00:38:57.253014Z",
+            "summary": {
+              "candidatecount": 0.0
+            }
+          },
+          {
+            "id": "backtest",
+            "status": "skipped",
+            "reasonCodes": [
+              "scheduled_paper_cycle_not_authorized"
+            ],
+            "observedAt": "2026-10-21T00:38:57.253014Z",
+            "summary": {
+              "attemptedcount": 0.0,
+              "eligiblecount": 0.0
+            }
+          },
+          {
+            "id": "market_regime",
+            "status": "not_attempted",
+            "reasonCodes": [],
+            "observedAt": "2026-10-21T00:38:57.253014Z",
+            "summary": {
+              "regime": null,
+              "risklevel": null,
+              "confidence": null
+            }
+          },
+          {
+            "id": "portfolio",
+            "status": "not_attempted",
+            "reasonCodes": [],
+            "observedAt": "2026-10-21T00:38:57.253014Z",
+            "summary": {
+              "positiondecisioncount": 0.0,
+              "safeforcandidateanalysis": null
+            }
+          },
+          {
+            "id": "profit",
+            "status": "not_attempted",
+            "reasonCodes": [],
+            "observedAt": "2026-10-21T00:38:57.253014Z",
+            "summary": {
+              "reviewedpositions": 0.0,
+              "actioncounts": {}
+            }
+          },
+          {
+            "id": "risk",
+            "status": "not_attempted",
+            "reasonCodes": [
+              "scheduled_paper_cycle_not_authorized"
+            ],
+            "observedAt": "2026-10-21T00:38:57.253014Z",
+            "summary": {
+              "approvalcount": 0.0,
+              "rejectedcount": 0.0
+            }
+          },
+          {
+            "id": "execution",
+            "status": "not_attempted",
+            "reasonCodes": [
+              "scheduled_paper_cycle_not_authorized"
+            ],
+            "observedAt": "2026-10-21T00:38:57.253014Z",
+            "summary": {
+              "attempted": false,
+              "partialfill": false
+            }
+          }
+        ],
+        "candidates": []
+      },
       {
         "source": "hourly_artifact",
         "flowKind": "decision_path",
@@ -5844,291 +5405,26 @@
           }
         ],
         "candidates": []
-      },
-      {
-        "source": "hourly_artifact",
-        "flowKind": "decision_path",
-        "correlationId": "hourly-paper-4fd6d3db930a-20261018T21",
-        "cycleId": "hourly-paper-4fd6d3db930a-20261018T21",
-        "workflowRunId": 39169234463,
-        "observedAt": "2026-10-18T21:53:39.515346Z",
-        "status": "controlled_no_trade",
-        "reasonCode": "market_closed",
-        "summary": {
-          "candidateCount": 10,
-          "buyCount": 0,
-          "blockedCount": 3,
-          "executedCount": 0,
-          "riskRejectedCount": 0,
-          "executionFailureCount": 0
-        },
-        "stages": [
-          {
-            "id": "scanner",
-            "status": "success",
-            "reasonCodes": [],
-            "observedAt": "2026-10-18T21:47:33.089752Z",
-            "summary": {
-              "candidatecount": 10.0
-            }
-          },
-          {
-            "id": "backtest",
-            "status": "blocked",
-            "reasonCodes": [
-              "no_eligible_strategy"
-            ],
-            "observedAt": "2026-10-18T21:53:39.515346Z",
-            "summary": {
-              "attemptedcount": 3.0,
-              "eligiblecount": 0.0
-            }
-          },
-          {
-            "id": "market_regime",
-            "status": "success",
-            "reasonCodes": [],
-            "observedAt": "2026-10-18T21:47:27.887120Z",
-            "summary": {
-              "regime": "sideways",
-              "risklevel": "low",
-              "confidence": 0.77
-            }
-          },
-          {
-            "id": "portfolio",
-            "status": "success",
-            "reasonCodes": [],
-            "observedAt": "2026-10-18T21:47:27.887120Z",
-            "summary": {
-              "positiondecisioncount": 0.0,
-              "safeforcandidateanalysis": true
-            }
-          },
-          {
-            "id": "profit",
-            "status": "skipped",
-            "reasonCodes": [],
-            "observedAt": "2026-10-18T21:47:27.887120Z",
-            "summary": {
-              "reviewedpositions": 0.0,
-              "actioncounts": {}
-            }
-          },
-          {
-            "id": "risk",
-            "status": "not_attempted",
-            "reasonCodes": [
-              "market_closed"
-            ],
-            "observedAt": "2026-10-18T21:53:39.515346Z",
-            "summary": {
-              "approvalcount": 0.0,
-              "rejectedcount": 0.0
-            }
-          },
-          {
-            "id": "execution",
-            "status": "not_attempted",
-            "reasonCodes": [
-              "market_closed"
-            ],
-            "observedAt": "2026-10-18T21:53:39.515346Z",
-            "summary": {
-              "attempted": false,
-              "partialfill": false
-            }
-          }
-        ],
-        "candidates": [
-          {
-            "symbol": "YB",
-            "rank": 1,
-            "verdict": "hold",
-            "finalScore": 0.615,
-            "strategyBucket": "value_rebound",
-            "status": "not_selected",
-            "stageReached": "scanner",
-            "reasonCodes": [
-              "manager_verdict_hold"
-            ],
-            "refs": {
-              "decisionId": null,
-              "positionId": null
-            }
-          },
-          {
-            "symbol": "MAKO",
-            "rank": 2,
-            "verdict": "hold",
-            "finalScore": 0.6075,
-            "strategyBucket": "unassigned",
-            "status": "blocked",
-            "stageReached": "scanner",
-            "reasonCodes": [
-              "new_entry_not_allowed",
-              "bucket_review",
-              "manager_verdict_hold"
-            ],
-            "refs": {
-              "decisionId": null,
-              "positionId": null
-            }
-          },
-          {
-            "symbol": "DCBO",
-            "rank": 3,
-            "verdict": "hold",
-            "finalScore": 0.6075,
-            "strategyBucket": "news_momentum",
-            "status": "not_selected",
-            "stageReached": "scanner",
-            "reasonCodes": [
-              "manager_verdict_hold"
-            ],
-            "refs": {
-              "decisionId": null,
-              "positionId": null
-            }
-          },
-          {
-            "symbol": "IA",
-            "rank": 4,
-            "verdict": "hold",
-            "finalScore": 0.5951,
-            "strategyBucket": "unassigned",
-            "status": "blocked",
-            "stageReached": "scanner",
-            "reasonCodes": [
-              "new_entry_not_allowed",
-              "bucket_conflict",
-              "manager_verdict_hold"
-            ],
-            "refs": {
-              "decisionId": null,
-              "positionId": null
-            }
-          },
-          {
-            "symbol": "QTTB",
-            "rank": 5,
-            "verdict": "hold",
-            "finalScore": 0.5806,
-            "strategyBucket": "value_rebound",
-            "status": "not_selected",
-            "stageReached": "scanner",
-            "reasonCodes": [
-              "manager_verdict_hold"
-            ],
-            "refs": {
-              "decisionId": null,
-              "positionId": null
-            }
-          },
-          {
-            "symbol": "JFIN",
-            "rank": 6,
-            "verdict": "hold",
-            "finalScore": 0.567,
-            "strategyBucket": "value_rebound",
-            "status": "not_selected",
-            "stageReached": "scanner",
-            "reasonCodes": [
-              "manager_verdict_hold"
-            ],
-            "refs": {
-              "decisionId": null,
-              "positionId": null
-            }
-          },
-          {
-            "symbol": "ZJK",
-            "rank": 7,
-            "verdict": "hold",
-            "finalScore": 0.5445,
-            "strategyBucket": "value_rebound",
-            "status": "not_selected",
-            "stageReached": "scanner",
-            "reasonCodes": [
-              "manager_verdict_hold"
-            ],
-            "refs": {
-              "decisionId": null,
-              "positionId": null
-            }
-          },
-          {
-            "symbol": "UROY",
-            "rank": 8,
-            "verdict": "hold",
-            "finalScore": 0.5219,
-            "strategyBucket": "value_rebound",
-            "status": "not_selected",
-            "stageReached": "scanner",
-            "reasonCodes": [
-              "manager_verdict_hold"
-            ],
-            "refs": {
-              "decisionId": null,
-              "positionId": null
-            }
-          },
-          {
-            "symbol": "NAGE",
-            "rank": 9,
-            "verdict": "hold",
-            "finalScore": 0.5149,
-            "strategyBucket": "value_rebound",
-            "status": "not_selected",
-            "stageReached": "scanner",
-            "reasonCodes": [
-              "manager_verdict_hold"
-            ],
-            "refs": {
-              "decisionId": null,
-              "positionId": null
-            }
-          },
-          {
-            "symbol": "QQQX",
-            "rank": 10,
-            "verdict": "hold",
-            "finalScore": 0.4311,
-            "strategyBucket": "unassigned",
-            "status": "blocked",
-            "stageReached": "scanner",
-            "reasonCodes": [
-              "evidence_gate_failed",
-              "new_entry_not_allowed",
-              "bucket_evidence_insufficient",
-              "manager_verdict_hold"
-            ],
-            "refs": {
-              "decisionId": null,
-              "positionId": null
-            }
-          }
-        ]
       }
     ]
   },
   "decisionAnalytics": {
     "schemaVersion": "decision-analytics.v1",
-    "generatedAt": "2026-10-21T00:10:29.382828Z",
+    "generatedAt": "2026-10-21T00:38:57.253014Z",
     "sourceHistorySchemaVersion": "decision-history.v1",
     "overallStatus": "healthy",
     "latest": {
       "source": "hourly_artifact",
-      "correlationId": "hourly-paper-4fd6d3db930a-20261021T00",
-      "cycleId": "hourly-paper-4fd6d3db930a-20261021T00",
-      "workflowRunId": 39518812420,
-      "observedAt": "2026-10-21T00:10:29.382828Z",
+      "correlationId": "hourly-control-39522558213",
+      "cycleId": "hourly-control-39522558213",
+      "workflowRunId": 39522558213,
+      "observedAt": "2026-10-21T00:38:57.253014Z",
       "status": "controlled_no_trade",
-      "reasonCode": "market_closed",
+      "reasonCode": "scheduled_paper_cycle_not_authorized",
       "summary": {
-        "candidateCount": 10,
+        "candidateCount": 0,
         "buyCount": 0,
-        "blockedCount": 2,
+        "blockedCount": 0,
         "executedCount": 0,
         "riskRejectedCount": 0,
         "executionFailureCount": 0
@@ -6242,18 +5538,18 @@
       },
       {
         "size": 12,
-        "cyclesAvailable": 12,
+        "cyclesAvailable": 11,
         "metrics": {
-          "candidateCount": 109,
+          "candidateCount": 99,
           "buyCount": 0,
-          "blockedCount": 35,
+          "blockedCount": 32,
           "executedCount": 0,
           "riskRejectedCount": 0,
           "executionFailureCount": 0
         },
         "rates": {
           "buyRate": 0.0,
-          "blockedRate": 0.321101,
+          "blockedRate": 0.323232,
           "executionRate": 0.0,
           "riskRejectionRate": null,
           "executionFailureRate": null
@@ -6261,7 +5557,7 @@
         "funnel": [
           {
             "stage": "scanner",
-            "reachedCount": 109,
+            "reachedCount": 99,
             "reachRate": 1.0
           },
           {
@@ -6298,55 +5594,55 @@
         "topBlockingReasons": [
           {
             "code": "new_entry_not_allowed",
-            "count": 35,
+            "count": 32,
             "shareOfBlockedCandidates": 1.0
           },
           {
             "code": "manager_verdict_hold",
-            "count": 33,
-            "shareOfBlockedCandidates": 0.942857
+            "count": 30,
+            "shareOfBlockedCandidates": 0.9375
           },
           {
             "code": "bucket_evidence_insufficient",
-            "count": 16,
-            "shareOfBlockedCandidates": 0.457143
+            "count": 15,
+            "shareOfBlockedCandidates": 0.46875
           },
           {
             "code": "evidence_gate_failed",
-            "count": 16,
-            "shareOfBlockedCandidates": 0.457143
+            "count": 15,
+            "shareOfBlockedCandidates": 0.46875
           },
           {
             "code": "bucket_review",
-            "count": 12,
-            "shareOfBlockedCandidates": 0.342857
+            "count": 11,
+            "shareOfBlockedCandidates": 0.34375
           },
           {
             "code": "bucket_conflict",
-            "count": 6,
-            "shareOfBlockedCandidates": 0.171429
+            "count": 5,
+            "shareOfBlockedCandidates": 0.15625
           },
           {
             "code": "manager_verdict_sell",
             "count": 2,
-            "shareOfBlockedCandidates": 0.057143
+            "shareOfBlockedCandidates": 0.0625
           }
         ]
       },
       {
         "size": 24,
-        "cyclesAvailable": 12,
+        "cyclesAvailable": 11,
         "metrics": {
-          "candidateCount": 109,
+          "candidateCount": 99,
           "buyCount": 0,
-          "blockedCount": 35,
+          "blockedCount": 32,
           "executedCount": 0,
           "riskRejectedCount": 0,
           "executionFailureCount": 0
         },
         "rates": {
           "buyRate": 0.0,
-          "blockedRate": 0.321101,
+          "blockedRate": 0.323232,
           "executionRate": 0.0,
           "riskRejectionRate": null,
           "executionFailureRate": null
@@ -6354,7 +5650,7 @@
         "funnel": [
           {
             "stage": "scanner",
-            "reachedCount": 109,
+            "reachedCount": 99,
             "reachRate": 1.0
           },
           {
@@ -6391,66 +5687,66 @@
         "topBlockingReasons": [
           {
             "code": "new_entry_not_allowed",
-            "count": 35,
+            "count": 32,
             "shareOfBlockedCandidates": 1.0
           },
           {
             "code": "manager_verdict_hold",
-            "count": 33,
-            "shareOfBlockedCandidates": 0.942857
+            "count": 30,
+            "shareOfBlockedCandidates": 0.9375
           },
           {
             "code": "bucket_evidence_insufficient",
-            "count": 16,
-            "shareOfBlockedCandidates": 0.457143
+            "count": 15,
+            "shareOfBlockedCandidates": 0.46875
           },
           {
             "code": "evidence_gate_failed",
-            "count": 16,
-            "shareOfBlockedCandidates": 0.457143
+            "count": 15,
+            "shareOfBlockedCandidates": 0.46875
           },
           {
             "code": "bucket_review",
-            "count": 12,
-            "shareOfBlockedCandidates": 0.342857
+            "count": 11,
+            "shareOfBlockedCandidates": 0.34375
           },
           {
             "code": "bucket_conflict",
-            "count": 6,
-            "shareOfBlockedCandidates": 0.171429
+            "count": 5,
+            "shareOfBlockedCandidates": 0.15625
           },
           {
             "code": "manager_verdict_sell",
             "count": 2,
-            "shareOfBlockedCandidates": 0.057143
+            "shareOfBlockedCandidates": 0.0625
           }
         ]
       }
     ],
     "trend": {
       "comparison": "latest6_vs_previous6",
-      "enoughData": true,
+      "enoughData": false,
       "latestCycles": 6,
-      "previousCycles": 6,
-      "candidateCountDelta": -9,
-      "blockedRateDeltaPoints": -7.593,
-      "executionRateDeltaPoints": 0.0,
+      "previousCycles": 5,
+      "candidateCountDelta": null,
+      "blockedRateDeltaPoints": null,
+      "executionRateDeltaPoints": null,
       "riskRejectionRateDeltaPoints": null
     },
     "alerts": [],
     "dataQuality": {
       "historyCycles": 24,
-      "meaningfulCycles": 12,
-      "controlCycles": 11,
+      "meaningfulCycles": 11,
+      "controlCycles": 12,
       "metadataOnlyCycles": 1,
       "artifactBackedCycles": 23,
       "artifactCoverageRate": 0.958333,
       "latestCycleSource": "hourly_artifact",
-      "latestCycleClass": "decision",
-      "latestReasonCode": "market_closed",
+      "latestCycleClass": "control",
+      "latestReasonCode": "scheduled_paper_cycle_not_authorized",
       "latestMeaningfulObservedAt": "2026-10-21T00:10:29.382828Z",
       "sufficientFor6CycleWindow": true,
-      "sufficientForTrendComparison": true
+      "sufficientForTrendComparison": false
     }
   }
 }
