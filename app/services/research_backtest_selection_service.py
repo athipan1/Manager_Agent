@@ -27,6 +27,7 @@ BUCKET_PRIORITY = (
     EXPLORATORY_BUCKET,
 )
 DEFAULT_EXPLORATORY_MIN_CONFIDENCE = 0.60
+DEFAULT_RESEARCH_MAX_SYMBOLS = 10
 
 
 def _decimal(value: Any) -> Decimal:
@@ -282,6 +283,52 @@ def _research_eligible(
     return not reasons, reasons
 
 
+def _research_max_symbols(limits: Mapping[str, int]) -> int:
+    """Bound research capacity to what the exact Backtest runner accepts.
+
+    An unused bucket slot may be loaned to another *research-only* bucket,
+    but the overall number of hypothesis evaluations must not increase beyond
+    the previously allocated total or the Backtest API's configured limit.
+    """
+
+    try:
+        runner_limit = int(os.getenv("BACKTEST_MAX_SYMBOLS", "10"))
+    except ValueError:
+        runner_limit = DEFAULT_RESEARCH_MAX_SYMBOLS
+    total_slots = sum(max(0, int(limits.get(bucket, 0))) for bucket in BUCKET_PRIORITY)
+    return min(DEFAULT_RESEARCH_MAX_SYMBOLS, max(0, runner_limit), total_slots)
+
+
+def _research_selected_record(
+    row: Mapping[str, Any], *, bucket: str, backfill: bool
+) -> Dict[str, Any]:
+    exploratory = bucket == EXPLORATORY_BUCKET
+    return {
+        "symbol": str(row.get("symbol") or row.get("ticker") or "").strip().upper(),
+        "strategy_bucket": bucket,
+        "original_strategy_bucket": row.get("original_strategy_bucket"),
+        "bucket_confidence": row.get("bucket_confidence"),
+        "bucket_classification_status": row.get("bucket_classification_status"),
+        "original_bucket_classification_status": row.get(
+            "original_bucket_classification_status"
+        ),
+        "evidence_gate_passed": bool(row.get("evidence_gate_passed", True)),
+        "final_verdict": _verdict(row),
+        "final_opportunity_score": float(_final_score(row)),
+        "research_reranker": _reranker_evidence(row),
+        "pre_backtest_strategy_compatibility": row.get(
+            "pre_backtest_strategy_compatibility"
+        ),
+        "selection_lane": (
+            "research_strategy_discovery" if exploratory else "research_backtest"
+        ),
+        "research_strategy_discovery": exploratory,
+        "production_entry_authorized": False,
+        "risk_execution_authorized": False,
+        "research_capacity_backfill": backfill,
+    }
+
+
 def _compatibility_by_symbol(gate: Mapping[str, Any]) -> dict[str, Mapping[str, Any]]:
     return {
         str(item.get("symbol") or "").strip().upper(): item
@@ -320,6 +367,7 @@ def select_research_backtest_candidates(
 
     selected: list[Dict[str, Any]] = []
     evaluations: list[Dict[str, Any]] = []
+    max_research_symbols = _research_max_symbols(limits)
 
     for row in normalized_rows:
         eligible, reasons = _research_eligible(row, threshold=threshold)
@@ -350,41 +398,47 @@ def select_research_backtest_candidates(
             for row in rows
             if str(row.get("strategy_bucket") or row.get("bucket") or "") == bucket
             and _research_eligible(row, threshold=threshold)[0]
+            and str(row.get("symbol") or row.get("ticker") or "").strip().upper()
+            not in rejected_for_compatibility
         ]
         eligible_rows.sort(key=_research_rank_key, reverse=True)
         limit = max(0, int(limits.get(bucket, 0)))
         for row in eligible_rows[:limit]:
+            if len(selected) >= max_research_symbols:
+                break
             symbol = str(row.get("symbol") or row.get("ticker") or "").strip().upper()
             if not symbol or any(item["symbol"] == symbol for item in selected):
                 continue
-            exploratory = bucket == EXPLORATORY_BUCKET
             selected.append(
-                {
-                    "symbol": symbol,
-                    "strategy_bucket": bucket,
-                    "original_strategy_bucket": row.get("original_strategy_bucket"),
-                    "bucket_confidence": row.get("bucket_confidence"),
-                    "bucket_classification_status": row.get("bucket_classification_status"),
-                    "original_bucket_classification_status": row.get(
-                        "original_bucket_classification_status"
-                    ),
-                    "evidence_gate_passed": bool(row.get("evidence_gate_passed", True)),
-                    "final_verdict": _verdict(row),
-                    "final_opportunity_score": float(_final_score(row)),
-                    "research_reranker": _reranker_evidence(row),
-                    "pre_backtest_strategy_compatibility": row.get(
-                        "pre_backtest_strategy_compatibility"
-                    ),
-                    "selection_lane": (
-                        "research_strategy_discovery"
-                        if exploratory
-                        else "research_backtest"
-                    ),
-                    "research_strategy_discovery": exploratory,
-                    "production_entry_authorized": False,
-                    "risk_execution_authorized": False,
-                }
+                _research_selected_record(row, bucket=bucket, backfill=False)
             )
+
+    # A research bucket may be full while other buckets have unused slots.
+    # Reuse those *research* slots for other evidence-eligible candidates;
+    # never transform a HOLD into BUY or grant production/broker authority.
+    initial_selected_count = len(selected)
+    selected_symbols = {item["symbol"] for item in selected}
+    overflow_rows = [
+        row
+        for row in rows
+        if str(row.get("strategy_bucket") or row.get("bucket") or "") in RESEARCH_BUCKETS
+        and max(
+            0, int(limits.get(str(row.get("strategy_bucket") or row.get("bucket") or ""), 0))
+        ) > 0
+        and _research_eligible(row, threshold=threshold)[0]
+        and str(row.get("symbol") or row.get("ticker") or "").strip().upper()
+        not in selected_symbols | rejected_for_compatibility
+    ]
+    overflow_rows.sort(key=_research_rank_key, reverse=True)
+    for row in overflow_rows[: max(0, max_research_symbols - len(selected))]:
+        symbol = str(row.get("symbol") or row.get("ticker") or "").strip().upper()
+        if not symbol or symbol in selected_symbols:
+            continue
+        bucket = str(row.get("strategy_bucket") or row.get("bucket") or "")
+        selected.append(
+            _research_selected_record(row, bucket=bucket, backfill=True)
+        )
+        selected_symbols.add(symbol)
 
     return {
         "policy_version": RESEARCH_BACKTEST_POLICY_VERSION,
@@ -395,6 +449,18 @@ def select_research_backtest_candidates(
         "exploratory_min_confidence": _exploratory_min_confidence(),
         "selected_count": len(selected),
         "selected": selected,
+        "research_capacity": {
+            "max_symbols": max_research_symbols,
+            "initial_selected_count": initial_selected_count,
+            "backfilled_count": len(selected) - initial_selected_count,
+            "backfilled_symbols": [
+                item["symbol"]
+                for item in selected
+                if item["research_capacity_backfill"]
+            ],
+            "production_binding": False,
+            "thresholds_relaxed": False,
+        },
         "evaluations": evaluations,
         "strategy_compatibility_gate": compatibility_gate,
         "reranker_policy": {
