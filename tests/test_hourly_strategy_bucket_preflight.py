@@ -202,3 +202,141 @@ def test_unknown_bucket_in_registry_is_rejected(tmp_path):
         match="invalid assignment",
     ):
         preflight._load_strategy_bucket_registry(registry)
+
+
+def _railway_responses():
+    return {
+        "/health": {
+            "data": {
+                "database_connection": "connected",
+                "dev_mode": False,
+                "trading_mode": "PAPER",
+                "database_emergency_halt": False,
+            }
+        },
+        "/ready": {"data": {"ready": True}},
+        "/version": {"data": {"agent_type": "database", "version": "1.1.0"}},
+    }
+
+
+def _check_database():
+    return preflight._check_railway_database_compatible(
+        base_url="https://database.example",
+        api_key="database-key",
+        correlation_id="cycle-1",
+    )
+
+
+def test_transient_disconnected_health_recovers_with_fresh_verified_probe(monkeypatch):
+    responses = _railway_responses()
+    calls = []
+    sleeps = []
+
+    def request(self, path, **kwargs):
+        calls.append(path)
+        if path == "/health" and calls.count("/health") == 1:
+            return {"data": {**responses[path]["data"], "database_connection": "disconnected"}}
+        return responses[path]
+
+    monkeypatch.setattr(preflight.runtime.JsonHttpClient, "request", request)
+    monkeypatch.setattr(preflight.time, "sleep", sleeps.append)
+
+    result = _check_database()
+
+    assert result["ready"] is True
+    assert calls == ["/health", "/health", "/ready", "/version"]
+    assert sleeps == [1]
+
+
+def test_transient_ready_http_503_restarts_full_probe(monkeypatch):
+    responses = _railway_responses()
+    calls = []
+    sleeps = []
+
+    def request(self, path, **kwargs):
+        calls.append(path)
+        if path == "/ready" and calls.count("/ready") == 1:
+            raise preflight.RuntimeSafetyError(
+                "Railway Database_Agent GET /ready failed after bounded retries: HTTP 503."
+            )
+        return responses[path]
+
+    monkeypatch.setattr(preflight.runtime.JsonHttpClient, "request", request)
+    monkeypatch.setattr(preflight.time, "sleep", sleeps.append)
+
+    assert _check_database()["health"] == "connected"
+    assert calls == ["/health", "/ready", "/health", "/ready", "/version"]
+    assert sleeps == [1]
+
+
+@pytest.mark.parametrize("failure", ["disconnected", "not_ready"])
+def test_database_remains_fail_closed_after_bounded_transient_retries(
+    monkeypatch, failure
+):
+    responses = _railway_responses()
+    if failure == "disconnected":
+        responses["/health"]["data"]["database_connection"] = "disconnected"
+    else:
+        responses["/ready"]["data"]["ready"] = False
+    calls = []
+    sleeps = []
+
+    def request(self, path, **kwargs):
+        calls.append(path)
+        return responses[path]
+
+    monkeypatch.setattr(preflight.runtime.JsonHttpClient, "request", request)
+    monkeypatch.setattr(preflight.time, "sleep", sleeps.append)
+
+    with pytest.raises(preflight.RuntimeSafetyError, match="did not confirm|readiness check failed"):
+        _check_database()
+
+    assert calls.count("/health") == preflight.DATABASE_READINESS_CONSISTENCY_ATTEMPTS
+    assert "/version" not in calls
+    assert sleeps == [1, 2]
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "error"),
+    [
+        ("database_emergency_halt", True, "emergency halt"),
+        ("dev_mode", True, "DATABASE_DEV_MODE=false"),
+        ("trading_mode", "LIVE", "TRADING_MODE=PAPER"),
+    ],
+)
+def test_database_policy_failures_never_retry(monkeypatch, field, value, error):
+    responses = _railway_responses()
+    responses["/health"]["data"][field] = value
+    calls = []
+    sleeps = []
+
+    def request(self, path, **kwargs):
+        calls.append(path)
+        return responses[path]
+
+    monkeypatch.setattr(preflight.runtime.JsonHttpClient, "request", request)
+    monkeypatch.setattr(preflight.time, "sleep", sleeps.append)
+
+    with pytest.raises(preflight.RuntimeSafetyError, match=error):
+        _check_database()
+    assert calls == ["/health"]
+    assert sleeps == []
+
+
+def test_database_authentication_failure_never_retry(monkeypatch):
+    calls = []
+    sleeps = []
+
+    def request(self, path, **kwargs):
+        calls.append(path)
+        raise preflight.RuntimeSafetyError(
+            "Railway Database_Agent GET /health failed after bounded retries: HTTP 401."
+        )
+
+    monkeypatch.setattr(preflight.runtime.JsonHttpClient, "request", request)
+    monkeypatch.setattr(preflight.time, "sleep", sleeps.append)
+
+    with pytest.raises(preflight.RuntimeSafetyError, match="HTTP 401"):
+        _check_database()
+    assert calls == ["/health"]
+    assert sleeps == []
