@@ -189,3 +189,67 @@ def test_reranker_evidence_is_persisted_for_audit():
     assert evidence["reward_risk"] == 2.2
     assert evidence["ordering_only"] is True
     assert evidence["production_binding"] is False
+
+
+def test_unused_research_slots_backfill_evidence_eligible_exploratory_candidate():
+    # The exploratory bucket initially admits two symbols, but unused slots
+    # elsewhere can fund a third *research-only* Backtest, as with the
+    # 2026-10-22 production funnel where BSX otherwise went untested.
+    rows = [
+        _row("NFLX", score=0.63, bucket="unassigned", confidence=0.66),
+        _row("UBER", score=0.59, bucket="unassigned", confidence=0.64),
+        _row("BSX", score=0.60, bucket="unassigned", confidence=0.73),
+        _row("BKNG", score=0.60, bucket="value_rebound"),
+    ]
+
+    selection = select_research_backtest_candidates(
+        rows, min_final_score=0.55
+    )
+
+    assert set(item["symbol"] for item in selection["selected"]) == {
+        "NFLX", "UBER", "BSX", "BKNG"
+    }
+    assert selection["research_capacity"]["backfilled_count"] == 1
+    assert selection["research_capacity"]["backfilled_symbols"] == ["UBER"]
+    assert selection["research_capacity"]["max_symbols"] == 10
+    assert all(item["production_entry_authorized"] is False for item in selection["selected"])
+    assert all(item["risk_execution_authorized"] is False for item in selection["selected"])
+    assert selection["research_capacity"]["thresholds_relaxed"] is False
+
+
+def test_research_backfill_respects_global_budget_and_fail_closed_gates(monkeypatch):
+    monkeypatch.setenv("BACKTEST_MAX_SYMBOLS", "3")
+    rows = [
+        _row("A", bucket="value_rebound", score=0.90),
+        _row("B", bucket="value_rebound", score=0.80),
+        _row("C", bucket="value_rebound", score=0.70),
+        _row("D", bucket="value_rebound", score=0.60),
+        _row("SELL", bucket="value_rebound", score=0.95, verdict="sell"),
+        _row("BAD", bucket="value_rebound", score=0.95, evidence_gate_passed=False),
+    ]
+
+    selection = select_research_backtest_candidates(
+        rows,
+        min_final_score=0.58,
+        bucket_limits={"value_rebound": 1},
+    )
+
+    assert [item["symbol"] for item in selection["selected"]] == ["A", "B", "C"]
+    assert selection["research_capacity"]["max_symbols"] == 3
+    assert selection["research_capacity"]["backfilled_symbols"] == ["B", "C"]
+    assert "SELL" not in {item["symbol"] for item in selection["selected"]}
+    assert "BAD" not in {item["symbol"] for item in selection["selected"]}
+
+
+def test_explicitly_disabled_bucket_is_not_backfilled():
+    selection = select_research_backtest_candidates(
+        [
+            _row("VALUE", bucket="value_rebound", score=0.70),
+            _row("NEWS", bucket="news_momentum", score=0.90),
+        ],
+        min_final_score=0.55,
+        bucket_limits={"news_momentum": 0},
+    )
+
+    assert [item["symbol"] for item in selection["selected"]] == ["VALUE"]
+    assert selection["research_capacity"]["backfilled_symbols"] == []

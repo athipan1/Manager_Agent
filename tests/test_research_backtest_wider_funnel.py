@@ -82,7 +82,7 @@ def test_low_confidence_unclassified_candidate_stays_blocked(monkeypatch):
     assert "bucket_not_classified" in evaluation["reasons"]
 
 
-def test_wider_bucket_limit_can_select_three_value_rebound_candidates():
+def test_wider_bucket_limit_can_backfill_a_fourth_using_unspent_research_capacity():
     selection = select_research_backtest_candidates(
         [
             _row("AAA", score=0.69),
@@ -97,7 +97,9 @@ def test_wider_bucket_limit_can_select_three_value_rebound_candidates():
         "AAA",
         "BBB",
         "CCC",
+        "DDD",
     ]
+    assert selection["research_capacity"]["backfilled_symbols"] == ["DDD"]
     assert all(
         item["production_entry_authorized"] is False
         for item in selection["selected"]
