@@ -6,7 +6,9 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import sys
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping
@@ -33,6 +35,23 @@ VALID_STRATEGY_BUCKETS = {
     "value_rebound",
     "news_momentum",
 }
+DATABASE_READINESS_CONSISTENCY_ATTEMPTS = 3
+
+
+class _TransientDatabaseReadiness(RuntimeSafetyError):
+    """A short-lived connectivity/readiness state, never a policy waiver."""
+
+
+def _transient_database_transport_error(exc: RuntimeSafetyError) -> bool:
+    """Only retry service outages; auth and policy failures must fail closed."""
+    message = str(exc)
+    return bool(
+        re.search(r"\bHTTP 5\d{2}\b", message)
+        or any(
+            marker in message
+            for marker in ("TimeoutError", "URLError", "ConnectionError", "RemoteDisconnected")
+        )
+    )
 
 
 def _github_output(values: dict[str, Any]) -> None:
@@ -267,50 +286,73 @@ def _check_railway_database_compatible(
         service_name="Railway Database_Agent",
         headers={"X-API-KEY": api_key},
     )
-    health = _unwrap(client.request("/health", correlation_id=correlation_id)) or {}
-    ready = _unwrap(client.request("/ready", correlation_id=correlation_id)) or {}
-    version = _unwrap(client.request("/version", correlation_id=correlation_id)) or {}
+    last_error: RuntimeSafetyError | None = None
+    for attempt in range(DATABASE_READINESS_CONSISTENCY_ATTEMPTS):
+        try:
+            # A successful attempt must get fresh, mutually consistent responses.
+            # Never mix a previously healthy /health with a later /ready result.
+            health = _unwrap(client.request("/health", correlation_id=correlation_id)) or {}
+            if not isinstance(health, dict):
+                raise RuntimeSafetyError("Railway Database_Agent health contract is invalid.")
+            if health.get("dev_mode") is not False:
+                raise RuntimeSafetyError(
+                    "Railway Database_Agent must have DATABASE_DEV_MODE=false."
+                )
+            if str(health.get("trading_mode") or "").strip().upper() != "PAPER":
+                raise RuntimeSafetyError(
+                    "Railway Database_Agent did not report TRADING_MODE=PAPER."
+                )
+            if health.get("database_emergency_halt") is True:
+                raise RuntimeSafetyError("Railway Database_Agent emergency halt is active.")
+            if health.get("database_connection") != "connected":
+                if health.get("database_connection") != "disconnected":
+                    raise RuntimeSafetyError("Railway Database_Agent health contract is invalid.")
+                raise _TransientDatabaseReadiness(
+                    "Railway Database_Agent health did not confirm PostgreSQL connectivity."
+                )
 
-    if not isinstance(health, dict) or health.get("database_connection") != "connected":
-        raise RuntimeSafetyError(
-            "Railway Database_Agent health did not confirm PostgreSQL connectivity."
-        )
-    if health.get("dev_mode") is not False:
-        raise RuntimeSafetyError(
-            "Railway Database_Agent must have DATABASE_DEV_MODE=false."
-        )
-    if str(health.get("trading_mode") or "").strip().upper() != "PAPER":
-        raise RuntimeSafetyError(
-            "Railway Database_Agent did not report TRADING_MODE=PAPER."
-        )
-    if health.get("database_emergency_halt") is True:
-        raise RuntimeSafetyError("Railway Database_Agent emergency halt is active.")
+            ready = _unwrap(client.request("/ready", correlation_id=correlation_id)) or {}
+            if not isinstance(ready, dict):
+                raise RuntimeSafetyError("Railway Database_Agent readiness contract is invalid.")
+            if "dev_mode" in ready and ready.get("dev_mode") is not False:
+                raise RuntimeSafetyError("Railway Database_Agent readiness reports dev mode.")
+            if (
+                "database_agent_api_key_configured" in ready
+                and ready.get("database_agent_api_key_configured") is not True
+            ):
+                raise RuntimeSafetyError(
+                    "Railway Database_Agent does not report an API key configuration."
+                )
+            if ready.get("ready") is not True:
+                raise _TransientDatabaseReadiness(
+                    "Railway Database_Agent readiness check failed."
+                )
 
-    if not isinstance(ready, dict) or ready.get("ready") is not True:
-        raise RuntimeSafetyError("Railway Database_Agent readiness check failed.")
-    if "dev_mode" in ready and ready.get("dev_mode") is not False:
-        raise RuntimeSafetyError("Railway Database_Agent readiness reports dev mode.")
-    if (
-        "database_agent_api_key_configured" in ready
-        and ready.get("database_agent_api_key_configured") is not True
-    ):
-        raise RuntimeSafetyError(
-            "Railway Database_Agent does not report an API key configuration."
-        )
-    if (
-        not isinstance(version, dict)
-        or str(version.get("agent_type") or "").strip() != "database"
-    ):
-        raise RuntimeSafetyError("Railway Database_Agent version contract is invalid.")
+            version = _unwrap(client.request("/version", correlation_id=correlation_id)) or {}
+            if (
+                not isinstance(version, dict)
+                or str(version.get("agent_type") or "").strip() != "database"
+            ):
+                raise RuntimeSafetyError("Railway Database_Agent version contract is invalid.")
+            return {
+                "health": "connected",
+                "ready": True,
+                "dev_mode": False,
+                "trading_mode": "PAPER",
+                "version": str(version.get("version") or "").strip(),
+                "schema_version": str(version.get("schema_version") or "").strip(),
+            }
+        except _TransientDatabaseReadiness as exc:
+            last_error = exc
+        except RuntimeSafetyError as exc:
+            if not _transient_database_transport_error(exc):
+                raise
+            last_error = exc
+        if attempt + 1 < DATABASE_READINESS_CONSISTENCY_ATTEMPTS:
+            time.sleep(min(2 ** attempt, 2))
 
-    return {
-        "health": "connected",
-        "ready": True,
-        "dev_mode": False,
-        "trading_mode": "PAPER",
-        "version": str(version.get("version") or "").strip(),
-        "schema_version": str(version.get("schema_version") or "").strip(),
-    }
+    assert last_error is not None
+    raise last_error
 
 
 def _safe_database_diagnostics() -> dict[str, Any]:
