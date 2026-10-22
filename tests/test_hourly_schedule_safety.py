@@ -86,6 +86,26 @@ def test_workflow_uses_secrets_without_placeholder_fallbacks():
     assert "dev_portfolio_key" not in workflow
 
 
+def test_pr_preflight_passes_every_required_external_agent_auth_secret():
+    workflow = Path(
+        ".github/workflows/pr-hourly-preflight-diagnostic.yml"
+    ).read_text(encoding="utf-8")
+    for name in (
+        "ALPACA_API_KEY_ID",
+        "ALPACA_SECRET_KEY",
+        "ALPACA_API_URL",
+        "EXECUTION_API_KEY",
+        "DATABASE_AGENT_URL",
+        "DATABASE_AGENT_API_KEY",
+        "RISK_ADMIN_TOKEN",
+        "PORTFOLIO_AGENT_API_KEY",
+        "MARKET_REGIME_API_KEY",
+    ):
+        assert f"{name}: ${{{{ secrets.{name} }}}}" in workflow
+    assert 'ALLOW_LIVE_TRADING: "false"' in workflow
+    assert 'DRY_RUN: "false"' in workflow
+
+
 def test_paper_runtime_uses_railway_and_not_local_database_service():
     workflow = workflow_text()
     assert "docker-compose.hourly-paper.yml" in workflow
