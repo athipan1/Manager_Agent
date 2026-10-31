@@ -174,3 +174,23 @@ def test_hourly_workflow_guards_trade_and_reconciles_after_portfolio_review() ->
         in workflow
     )
     assert "python scripts/resolve_hourly_trade_gate.py" in workflow
+
+
+@pytest.mark.parametrize("marker", [
+    {"diagnostic_only": True},
+    {"production_certified": False},
+    {"execution_authorized": False},
+    {"observation_only": True},
+])
+def test_research_only_backtest_cannot_become_hourly_order(marker) -> None:
+    report = backtest(["LAUR"])
+    report["data"]["items"][0]["technical_research_replay"] = marker
+    with pytest.raises(ValueError, match="uncertified_research"):
+        resolve_trade_gate(preflight(market_open=True), report)
+
+
+def test_research_only_envelope_is_rejected_even_with_eligible_symbols() -> None:
+    report = backtest(["JFIN"])
+    report["data"]["production_certified"] = False
+    with pytest.raises(ValueError, match="uncertified_research"):
+        resolve_trade_gate(preflight(market_open=True), report)
