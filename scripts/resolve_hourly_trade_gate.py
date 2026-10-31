@@ -56,8 +56,34 @@ def unwrap_backtest_report(report: Mapping[str, Any]) -> dict[str, Any]:
     return payload
 
 
+def _reject_uncertified_research(payload: Mapping[str, Any]) -> None:
+    """Fail closed when research-only evidence is presented as trade-eligible.
+
+    Existing production reports without research fields retain their contracts.
+    An explicit experimental marker cannot be promoted by changing counts or
+    eligible_symbols in the report envelope.
+    """
+    candidates = [as_dict(payload)]
+    candidates.extend(as_dict(item) for item in as_list(payload.get("items")))
+    for candidate in list(candidates):
+        for key in ("research_observation", "technical_research_replay"):
+            nested = candidate.get(key)
+            if isinstance(nested, Mapping):
+                candidates.append(as_dict(nested))
+    for candidate in candidates:
+        if (
+            candidate.get("diagnostic_only") is True
+            or candidate.get("observation_only") is True
+            or candidate.get("production_certified") is False
+            or candidate.get("execution_authorized") is False
+            or candidate.get("strategy_promoted") is False
+        ):
+            raise ValueError("uncertified_research_cannot_authorize_trade")
+
+
 def eligible_symbols(report: Mapping[str, Any]) -> list[str]:
     data = unwrap_backtest_report(report)
+    _reject_uncertified_research(data)
     if data.get("all_succeeded") is not True:
         raise ValueError("Backtest report did not prove all symbols succeeded")
     if data.get("selection_complete") is not True:
